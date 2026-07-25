@@ -9,7 +9,9 @@
     "build": "tsc"
   },
   "dependencies": {
+    "@fastify/cookie": "^11.1.2",
     "@fastify/cors": "^11.0.0",
+    "@fastify/rate-limit": "^11.1.0",
     "dockerode": "^4.0.7",
     "fastify": "^5.0.0",
     "zod": "^4.0.0"
