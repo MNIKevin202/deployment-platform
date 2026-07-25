@@ -1,5 +1,6 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
+import { z } from "zod";
 import { docker } from "./docker.js";
 
 const app = Fastify({
@@ -13,6 +14,24 @@ await app.register(cors, {
 interface ContainerParams {
   id: string;
 }
+
+const createAppSchema = z.object({
+  name: z
+    .string()
+    .min(2)
+    .max(40)
+    .regex(
+      /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
+      "Name must contain lowercase letters, numbers, and hyphens only"
+    ),
+  image: z.string().min(1).max(200),
+  containerPort: z.number().int().min(1).max(65535)
+});
+
+const protectedContainerNames = new Set([
+  "deployment-platform-api",
+  "deployment-platform-web"
+]);
 
 function decodeDockerLogs(buffer: Buffer): string {
   const chunks: string[] = [];
@@ -38,10 +57,70 @@ function decodeDockerLogs(buffer: Buffer): string {
   return chunks.join("");
 }
 
+async function getContainerProtection(id: string) {
+  const container = docker.getContainer(id);
+  const details = await container.inspect();
+
+  const name = details.Name.replace(/^\//, "");
+  const labels = details.Config.Labels ?? {};
+
+  const isSystemContainer =
+    protectedContainerNames.has(name) ||
+    labels["com.deployment-platform.system"] === "true";
+
+  const isManagedApp =
+    labels["com.deployment-platform.managed"] === "true";
+
+  return {
+    container,
+    details,
+    name,
+    labels,
+    isSystemContainer,
+    isManagedApp
+  };
+}
+
+async function pullImage(image: string): Promise<void> {
+  const stream = await docker.pull(image);
+
+  await new Promise<void>((resolve, reject) => {
+    docker.modem.followProgress(stream, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+function sendDockerError(
+  reply: FastifyReply,
+  error: unknown,
+  fallbackMessage: string
+) {
+  app.log.error(error);
+
+  const statusCode =
+    typeof error === "object" &&
+    error !== null &&
+    "statusCode" in error &&
+    typeof error.statusCode === "number"
+      ? error.statusCode
+      : 500;
+
+  return reply.code(statusCode).send({
+    success: false,
+    message: fallbackMessage
+  });
+}
+
 app.get("/", async () => {
   return {
     name: "Deployment Platform API",
-    version: "0.1.0",
+    version: "0.2.0",
     status: "running"
   };
 });
@@ -83,16 +162,31 @@ app.get("/containers", async (_request, reply) => {
       all: true
     });
 
-    return containers.map((container) => ({
-      id: container.Id,
-      shortId: container.Id.slice(0, 12),
-      names: container.Names.map((name) => name.replace(/^\//, "")),
-      image: container.Image,
-      state: container.State,
-      status: container.Status,
-      created: container.Created,
-      ports: container.Ports
-    }));
+    return containers.map((container) => {
+      const names = container.Names.map((name) =>
+        name.replace(/^\//, "")
+      );
+
+      const labels = container.Labels ?? {};
+      const isSystemContainer =
+        names.some((name) => protectedContainerNames.has(name)) ||
+        labels["com.deployment-platform.system"] === "true";
+
+      return {
+        id: container.Id,
+        shortId: container.Id.slice(0, 12),
+        names,
+        image: container.Image,
+        state: container.State,
+        status: container.Status,
+        created: container.Created,
+        ports: container.Ports,
+        labels,
+        isSystemContainer,
+        isManagedApp:
+          labels["com.deployment-platform.managed"] === "true"
+      };
+    });
   } catch (error) {
     app.log.error(error);
 
@@ -103,12 +197,92 @@ app.get("/containers", async (_request, reply) => {
   }
 });
 
+app.post("/apps", async (request, reply) => {
+  const parsedBody = createAppSchema.safeParse(request.body);
+
+  if (!parsedBody.success) {
+    return reply.code(400).send({
+      success: false,
+      message: "Invalid app configuration",
+      errors: parsedBody.error.flatten()
+    });
+  }
+
+  const { name, image, containerPort } = parsedBody.data;
+  const containerName = `app-${name}`;
+  const exposedPort = `${containerPort}/tcp`;
+
+  try {
+    const existingContainers = await docker.listContainers({
+      all: true
+    });
+
+    const nameAlreadyExists = existingContainers.some((container) =>
+      container.Names.includes(`/${containerName}`)
+    );
+
+    if (nameAlreadyExists) {
+      return reply.code(409).send({
+        success: false,
+        message: `An app named "${name}" already exists`
+      });
+    }
+
+    await pullImage(image);
+
+    const container = await docker.createContainer({
+      name: containerName,
+      Image: image,
+      Labels: {
+        "com.deployment-platform.managed": "true",
+        "com.deployment-platform.app-name": name
+      },
+      ExposedPorts: {
+        [exposedPort]: {}
+      },
+      HostConfig: {
+        NetworkMode: "deployment-apps",
+        RestartPolicy: {
+          Name: "unless-stopped"
+        }
+      }
+    });
+
+    await container.start();
+
+    const details = await container.inspect();
+
+    return reply.code(201).send({
+      success: true,
+      message: "App deployed successfully",
+      app: {
+        id: details.Id,
+        shortId: details.Id.slice(0, 12),
+        name,
+        containerName,
+        image,
+        containerPort,
+        state: details.State.Status
+      }
+    });
+  } catch (error) {
+    return sendDockerError(
+      reply,
+      error,
+      "Unable to deploy app"
+    );
+  }
+});
+
 app.post<{ Params: ContainerParams }>(
   "/containers/:id/start",
   async (request, reply) => {
     try {
-      const container = docker.getContainer(request.params.id);
-      await container.start();
+      const protection = await getContainerProtection(
+        request.params.id
+      );
+
+      await protection.container.start();
 
       return {
         success: true,
@@ -116,12 +290,11 @@ app.post<{ Params: ContainerParams }>(
         containerId: request.params.id
       };
     } catch (error) {
-      app.log.error(error);
-
-      return reply.code(500).send({
-        success: false,
-        message: "Unable to start container"
-      });
+      return sendDockerError(
+        reply,
+        error,
+        "Unable to start container"
+      );
     }
   }
 );
@@ -130,9 +303,18 @@ app.post<{ Params: ContainerParams }>(
   "/containers/:id/stop",
   async (request, reply) => {
     try {
-      const container = docker.getContainer(request.params.id);
+      const protection = await getContainerProtection(
+        request.params.id
+      );
 
-      await container.stop({
+      if (protection.isSystemContainer) {
+        return reply.code(403).send({
+          success: false,
+          message: "System containers cannot be stopped from the dashboard"
+        });
+      }
+
+      await protection.container.stop({
         t: 10
       });
 
@@ -142,12 +324,11 @@ app.post<{ Params: ContainerParams }>(
         containerId: request.params.id
       };
     } catch (error) {
-      app.log.error(error);
-
-      return reply.code(500).send({
-        success: false,
-        message: "Unable to stop container"
-      });
+      return sendDockerError(
+        reply,
+        error,
+        "Unable to stop container"
+      );
     }
   }
 );
@@ -156,9 +337,18 @@ app.post<{ Params: ContainerParams }>(
   "/containers/:id/restart",
   async (request, reply) => {
     try {
-      const container = docker.getContainer(request.params.id);
+      const protection = await getContainerProtection(
+        request.params.id
+      );
 
-      await container.restart({
+      if (protection.isSystemContainer) {
+        return reply.code(403).send({
+          success: false,
+          message: "System containers cannot be restarted from the dashboard"
+        });
+      }
+
+      await protection.container.restart({
         t: 10
       });
 
@@ -168,12 +358,11 @@ app.post<{ Params: ContainerParams }>(
         containerId: request.params.id
       };
     } catch (error) {
-      app.log.error(error);
-
-      return reply.code(500).send({
-        success: false,
-        message: "Unable to restart container"
-      });
+      return sendDockerError(
+        reply,
+        error,
+        "Unable to restart container"
+      );
     }
   }
 );
@@ -196,12 +385,55 @@ app.get<{ Params: ContainerParams }>(
         logs: decodeDockerLogs(logs)
       };
     } catch (error) {
-      app.log.error(error);
+      return sendDockerError(
+        reply,
+        error,
+        "Unable to read container logs"
+      );
+    }
+  }
+);
 
-      return reply.code(500).send({
-        success: false,
-        message: "Unable to read container logs"
+app.delete<{ Params: ContainerParams }>(
+  "/apps/:id",
+  async (request, reply) => {
+    try {
+      const protection = await getContainerProtection(
+        request.params.id
+      );
+
+      if (protection.isSystemContainer) {
+        return reply.code(403).send({
+          success: false,
+          message: "System containers cannot be deleted"
+        });
+      }
+
+      if (!protection.isManagedApp) {
+        return reply.code(403).send({
+          success: false,
+          message:
+            "Only apps created by Deployment Platform can be deleted here"
+        });
+      }
+
+      await protection.container.remove({
+        force: true,
+        v: true
       });
+
+      return {
+        success: true,
+        action: "deleted",
+        containerId: request.params.id,
+        name: protection.name
+      };
+    } catch (error) {
+      return sendDockerError(
+        reply,
+        error,
+        "Unable to delete app"
+      );
     }
   }
 );
