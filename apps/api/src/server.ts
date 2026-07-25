@@ -2,6 +2,7 @@ import Fastify, { type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
 import { docker } from "./docker.js";
+import { registerAuthentication } from "./auth.js";
 
 const app = Fastify({
   logger: true
@@ -10,6 +11,8 @@ const app = Fastify({
 await app.register(cors, {
   origin: true
 });
+
+await registerAuthentication(app);
 
 interface ContainerParams {
   id: string;
