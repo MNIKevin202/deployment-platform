@@ -14,6 +14,30 @@ interface ContainerParams {
   id: string;
 }
 
+function decodeDockerLogs(buffer: Buffer): string {
+  const chunks: string[] = [];
+  let offset = 0;
+
+  while (offset + 8 <= buffer.length) {
+    const payloadLength = buffer.readUInt32BE(offset + 4);
+    const payloadStart = offset + 8;
+    const payloadEnd = payloadStart + payloadLength;
+
+    if (payloadEnd > buffer.length) {
+      break;
+    }
+
+    chunks.push(buffer.subarray(payloadStart, payloadEnd).toString("utf8"));
+    offset = payloadEnd;
+  }
+
+  if (chunks.length === 0) {
+    return buffer.toString("utf8");
+  }
+
+  return chunks.join("");
+}
+
 app.get("/", async () => {
   return {
     name: "Deployment Platform API",
@@ -107,6 +131,7 @@ app.post<{ Params: ContainerParams }>(
   async (request, reply) => {
     try {
       const container = docker.getContainer(request.params.id);
+
       await container.stop({
         t: 10
       });
@@ -132,6 +157,7 @@ app.post<{ Params: ContainerParams }>(
   async (request, reply) => {
     try {
       const container = docker.getContainer(request.params.id);
+
       await container.restart({
         t: 10
       });
@@ -167,7 +193,7 @@ app.get<{ Params: ContainerParams }>(
 
       return {
         containerId: request.params.id,
-        logs: logs.toString("utf8")
+        logs: decodeDockerLogs(logs)
       };
     } catch (error) {
       app.log.error(error);
