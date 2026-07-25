@@ -10,6 +10,10 @@ await app.register(cors, {
   origin: true
 });
 
+interface ContainerParams {
+  id: string;
+}
+
 app.get("/", async () => {
   return {
     name: "Deployment Platform API",
@@ -74,6 +78,107 @@ app.get("/containers", async (_request, reply) => {
     });
   }
 });
+
+app.post<{ Params: ContainerParams }>(
+  "/containers/:id/start",
+  async (request, reply) => {
+    try {
+      const container = docker.getContainer(request.params.id);
+      await container.start();
+
+      return {
+        success: true,
+        action: "started",
+        containerId: request.params.id
+      };
+    } catch (error) {
+      app.log.error(error);
+
+      return reply.code(500).send({
+        success: false,
+        message: "Unable to start container"
+      });
+    }
+  }
+);
+
+app.post<{ Params: ContainerParams }>(
+  "/containers/:id/stop",
+  async (request, reply) => {
+    try {
+      const container = docker.getContainer(request.params.id);
+      await container.stop({
+        t: 10
+      });
+
+      return {
+        success: true,
+        action: "stopped",
+        containerId: request.params.id
+      };
+    } catch (error) {
+      app.log.error(error);
+
+      return reply.code(500).send({
+        success: false,
+        message: "Unable to stop container"
+      });
+    }
+  }
+);
+
+app.post<{ Params: ContainerParams }>(
+  "/containers/:id/restart",
+  async (request, reply) => {
+    try {
+      const container = docker.getContainer(request.params.id);
+      await container.restart({
+        t: 10
+      });
+
+      return {
+        success: true,
+        action: "restarted",
+        containerId: request.params.id
+      };
+    } catch (error) {
+      app.log.error(error);
+
+      return reply.code(500).send({
+        success: false,
+        message: "Unable to restart container"
+      });
+    }
+  }
+);
+
+app.get<{ Params: ContainerParams }>(
+  "/containers/:id/logs",
+  async (request, reply) => {
+    try {
+      const container = docker.getContainer(request.params.id);
+
+      const logs = await container.logs({
+        stdout: true,
+        stderr: true,
+        timestamps: true,
+        tail: 200
+      });
+
+      return {
+        containerId: request.params.id,
+        logs: logs.toString("utf8")
+      };
+    } catch (error) {
+      app.log.error(error);
+
+      return reply.code(500).send({
+        success: false,
+        message: "Unable to read container logs"
+      });
+    }
+  }
+);
 
 const start = async (): Promise<void> => {
   try {
