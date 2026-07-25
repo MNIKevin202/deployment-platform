@@ -3,6 +3,10 @@ import cors from "@fastify/cors";
 import { z } from "zod";
 import { docker } from "./docker.js";
 import { registerAuthentication } from "./auth.js";
+import {
+  database,
+  listStoredApps
+} from "./database.js";
 
 const app = Fastify({
   logger: true
@@ -49,7 +53,10 @@ function decodeDockerLogs(buffer: Buffer): string {
       break;
     }
 
-    chunks.push(buffer.subarray(payloadStart, payloadEnd).toString("utf8"));
+    chunks.push(
+      buffer.subarray(payloadStart, payloadEnd).toString("utf8")
+    );
+
     offset = payloadEnd;
   }
 
@@ -123,7 +130,7 @@ function sendDockerError(
 app.get("/", async () => {
   return {
     name: "Deployment Platform API",
-    version: "0.2.0",
+    version: "0.3.0",
     status: "running"
   };
 });
@@ -132,6 +139,17 @@ app.get("/health", async () => {
   return {
     status: "ok",
     timestamp: new Date().toISOString()
+  };
+});
+
+app.get("/database/health", async () => {
+  const result = database
+    .prepare("SELECT 1 AS healthy")
+    .get() as { healthy: number };
+
+  return {
+    healthy: result.healthy === 1,
+    storedApps: listStoredApps().length
   };
 });
 
@@ -171,8 +189,11 @@ app.get("/containers", async (_request, reply) => {
       );
 
       const labels = container.Labels ?? {};
+
       const isSystemContainer =
-        names.some((name) => protectedContainerNames.has(name)) ||
+        names.some((name) =>
+          protectedContainerNames.has(name)
+        ) ||
         labels["com.deployment-platform.system"] === "true";
 
       return {
@@ -220,8 +241,9 @@ app.post("/apps", async (request, reply) => {
       all: true
     });
 
-    const nameAlreadyExists = existingContainers.some((container) =>
-      container.Names.includes(`/${containerName}`)
+    const nameAlreadyExists = existingContainers.some(
+      (container) =>
+        container.Names.includes(`/${containerName}`)
     );
 
     if (nameAlreadyExists) {
@@ -313,7 +335,8 @@ app.post<{ Params: ContainerParams }>(
       if (protection.isSystemContainer) {
         return reply.code(403).send({
           success: false,
-          message: "System containers cannot be stopped from the dashboard"
+          message:
+            "System containers cannot be stopped from the dashboard"
         });
       }
 
@@ -347,7 +370,8 @@ app.post<{ Params: ContainerParams }>(
       if (protection.isSystemContainer) {
         return reply.code(403).send({
           success: false,
-          message: "System containers cannot be restarted from the dashboard"
+          message:
+            "System containers cannot be restarted from the dashboard"
         });
       }
 
@@ -374,7 +398,9 @@ app.get<{ Params: ContainerParams }>(
   "/containers/:id/logs",
   async (request, reply) => {
     try {
-      const container = docker.getContainer(request.params.id);
+      const container = docker.getContainer(
+        request.params.id
+      );
 
       const logs = await container.logs({
         stdout: true,
