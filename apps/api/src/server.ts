@@ -4,8 +4,12 @@ import { z } from "zod";
 import { docker } from "./docker.js";
 import { registerAuthentication } from "./auth.js";
 import {
+  createStoredApp,
   database,
-  listStoredApps
+  deleteStoredApp,
+  getStoredAppByName,
+  listStoredApps,
+  updateStoredAppContainer
 } from "./database.js";
 
 const app = Fastify({
@@ -130,7 +134,7 @@ function sendDockerError(
 app.get("/", async () => {
   return {
     name: "Deployment Platform API",
-    version: "0.3.0",
+    version: "0.4.0",
     status: "running"
   };
 });
@@ -150,6 +154,12 @@ app.get("/database/health", async () => {
   return {
     healthy: result.healthy === 1,
     storedApps: listStoredApps().length
+  };
+});
+
+app.get("/apps", async () => {
+  return {
+    apps: listStoredApps()
   };
 });
 
@@ -237,6 +247,15 @@ app.post("/apps", async (request, reply) => {
   const exposedPort = `${containerPort}/tcp`;
 
   try {
+    const storedApp = getStoredAppByName(name);
+
+    if (storedApp) {
+      return reply.code(409).send({
+        success: false,
+        message: `An app named "${name}" already exists`
+      });
+    }
+
     const existingContainers = await docker.listContainers({
       all: true
     });
@@ -249,47 +268,64 @@ app.post("/apps", async (request, reply) => {
     if (nameAlreadyExists) {
       return reply.code(409).send({
         success: false,
-        message: `An app named "${name}" already exists`
+        message: `A container named "${containerName}" already exists`
       });
     }
 
-    await pullImage(image);
+    createStoredApp({
+      name,
+      image,
+      containerPort
+    });
 
-    const container = await docker.createContainer({
-      name: containerName,
-      Image: image,
-      Labels: {
-        "com.deployment-platform.managed": "true",
-        "com.deployment-platform.app-name": name
-      },
-      ExposedPorts: {
-        [exposedPort]: {}
-      },
-      HostConfig: {
-        NetworkMode: "deployment-apps",
-        RestartPolicy: {
-          Name: "unless-stopped"
+    try {
+      await pullImage(image);
+
+      const container = await docker.createContainer({
+        name: containerName,
+        Image: image,
+        Labels: {
+          "com.deployment-platform.managed": "true",
+          "com.deployment-platform.app-name": name
+        },
+        ExposedPorts: {
+          [exposedPort]: {}
+        },
+        HostConfig: {
+          NetworkMode: "deployment-apps",
+          RestartPolicy: {
+            Name: "unless-stopped"
+          }
         }
-      }
-    });
+      });
 
-    await container.start();
+      await container.start();
 
-    const details = await container.inspect();
+      const details = await container.inspect();
 
-    return reply.code(201).send({
-      success: true,
-      message: "App deployed successfully",
-      app: {
-        id: details.Id,
-        shortId: details.Id.slice(0, 12),
+      updateStoredAppContainer({
         name,
-        containerName,
-        image,
-        containerPort,
-        state: details.State.Status
-      }
-    });
+        containerId: details.Id,
+        status: details.State.Status
+      });
+
+      return reply.code(201).send({
+        success: true,
+        message: "App deployed successfully",
+        app: {
+          id: details.Id,
+          shortId: details.Id.slice(0, 12),
+          name,
+          containerName,
+          image,
+          containerPort,
+          state: details.State.Status
+        }
+      });
+    } catch (deploymentError) {
+      deleteStoredApp(name);
+      throw deploymentError;
+    }
   } catch (error) {
     return sendDockerError(
       reply,
@@ -446,16 +482,26 @@ app.delete<{ Params: ContainerParams }>(
         });
       }
 
+      const appName =
+        protection.labels[
+          "com.deployment-platform.app-name"
+        ];
+
       await protection.container.remove({
         force: true,
         v: true
       });
 
+      if (appName) {
+        deleteStoredApp(appName);
+      }
+
       return {
         success: true,
         action: "deleted",
         containerId: request.params.id,
-        name: protection.name
+        name: protection.name,
+        appName: appName ?? null
       };
     } catch (error) {
       return sendDockerError(
