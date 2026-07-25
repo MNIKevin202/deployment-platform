@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
+import { useAuth } from "./AuthGate";
 
 interface DockerInfo {
   status: string;
@@ -59,6 +60,8 @@ interface CreateAppResponse {
 type ContainerAction = "start" | "stop" | "restart";
 
 function App() {
+  const { username, logout } = useAuth();
+
   const [dockerInfo, setDockerInfo] = useState<DockerInfo | null>(null);
   const [containers, setContainers] = useState<ContainerSummary[]>([]);
   const [selectedContainer, setSelectedContainer] =
@@ -466,6 +469,10 @@ function App() {
         </div>
 
         <div className="header-actions">
+          <span className="signed-in-user">
+            Signed in as <strong>{username}</strong>
+          </span>
+
           <button
             className="secondary-button"
             onClick={() => void loadDashboard()}
@@ -482,6 +489,13 @@ function App() {
             }}
           >
             Create App
+          </button>
+
+          <button
+            className="secondary-button"
+            onClick={() => void logout()}
+          >
+            Log Out
           </button>
         </div>
       </header>

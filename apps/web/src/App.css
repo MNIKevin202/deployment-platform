@@ -446,3 +446,147 @@ h3 {
     align-items: flex-start;
   }
 }
+
+.signed-in-user {
+  color: #929bb5;
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+
+.signed-in-user strong {
+  color: #eef2ff;
+}
+
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(
+      circle at top left,
+      rgba(83, 93, 255, 0.24),
+      transparent 34rem
+    ),
+    radial-gradient(
+      circle at bottom right,
+      rgba(31, 184, 144, 0.12),
+      transparent 30rem
+    ),
+    #080b14;
+}
+
+.auth-card {
+  width: min(480px, 100%);
+  border: 1px solid #2b3451;
+  border-radius: 22px;
+  padding: 32px;
+  background: rgba(13, 18, 32, 0.96);
+  box-shadow: 0 35px 120px rgba(0, 0, 0, 0.55);
+}
+
+.auth-loading {
+  text-align: center;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.auth-brand h1 {
+  margin-bottom: 10px;
+  font-size: 2.2rem;
+}
+
+.auth-brand p:last-child {
+  margin-bottom: 0;
+  color: #929bb5;
+  line-height: 1.6;
+}
+
+.auth-mark {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border: 1px solid #6b75ff;
+  border-radius: 15px;
+  color: #ffffff;
+  background:
+    linear-gradient(
+      145deg,
+      rgba(107, 117, 255, 0.95),
+      rgba(74, 84, 215, 0.82)
+    );
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  box-shadow: 0 16px 38px rgba(83, 93, 255, 0.28);
+}
+
+.auth-form {
+  display: grid;
+  gap: 18px;
+  margin-top: 28px;
+}
+
+.auth-form label {
+  display: grid;
+  gap: 8px;
+}
+
+.auth-form label > span {
+  color: #d7dbeb;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.auth-form input {
+  width: 100%;
+  border: 1px solid #343d60;
+  border-radius: 11px;
+  outline: none;
+  padding: 13px 14px;
+  color: #f4f6ff;
+  background: #080c16;
+}
+
+.auth-form input:focus {
+  border-color: #6872ff;
+  box-shadow: 0 0 0 3px rgba(104, 114, 255, 0.15);
+}
+
+.auth-submit {
+  width: 100%;
+  margin-top: 4px;
+  padding: 13px 16px;
+}
+
+.auth-note {
+  margin: 22px 0 0;
+  color: #727c99;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+@media (max-width: 800px) {
+  .header-actions {
+    flex-wrap: wrap;
+  }
+
+  .signed-in-user {
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .auth-card {
+    padding: 24px;
+  }
+
+  .auth-brand {
+    flex-direction: column;
+  }
+}
