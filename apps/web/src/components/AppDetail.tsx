@@ -7,7 +7,9 @@ import type {
   EnvVarFormValues,
   MaskedAppEnvVar,
   MaskedGlobalEnvVar,
-  RedeployResponse
+  RedeployResponse,
+  StorageFormValues,
+  StoredAppVolume
 } from "../types/api";
 import StatusBadge from "./StatusBadge";
 import ConfirmationDialog from "./ConfirmationDialog";
@@ -15,6 +17,8 @@ import LogViewer from "./LogViewer";
 import Tabs from "./Tabs";
 import EnvVarTable from "./EnvVarTable";
 import EnvVarDialog from "./EnvVarDialog";
+import StorageTable from "./StorageTable";
+import StorageDialog from "./StorageDialog";
 
 interface AppDetailProps {
   appId: number;
@@ -24,7 +28,7 @@ interface AppDetailProps {
   onGoToGlobalEnvironment: () => void;
 }
 
-type DetailTab = "overview" | "environment" | "logs";
+type DetailTab = "overview" | "environment" | "storage" | "logs";
 
 async function readApiError(
   response: Response,
@@ -88,6 +92,21 @@ export default function AppDetail({
     null
   );
   const [envDeleting, setEnvDeleting] = useState(false);
+
+  const [storageVolumes, setStorageVolumes] = useState<StoredAppVolume[]>([]);
+  const [storageLoaded, setStorageLoaded] = useState(false);
+  const [storageLoading, setStorageLoading] = useState(false);
+  const [storageError, setStorageError] = useState("");
+
+  const [showStorageDialog, setShowStorageDialog] = useState(false);
+  const [editingVolume, setEditingVolume] = useState<StoredAppVolume | null>(
+    null
+  );
+  const [storageSubmitting, setStorageSubmitting] = useState(false);
+  const [storageDialogError, setStorageDialogError] = useState("");
+  const [storageDeleteTarget, setStorageDeleteTarget] =
+    useState<StoredAppVolume | null>(null);
+  const [storageDeleting, setStorageDeleting] = useState(false);
 
   const loadDetail = useCallback(async () => {
     try {
@@ -169,6 +188,42 @@ export default function AppDetail({
       void loadEnvironment();
     }
   }, [activeTab, envLoaded, loadEnvironment]);
+
+  const loadStorage = useCallback(async () => {
+    try {
+      setStorageLoading(true);
+      setStorageError("");
+
+      const response = await fetch(`/api/apps/${appId}/storage`);
+
+      if (!response.ok) {
+        throw new Error(
+          await readApiError(response, "Unable to load storage mounts")
+        );
+      }
+
+      const result = (await response.json()) as {
+        volumes: StoredAppVolume[];
+      };
+
+      setStorageVolumes(result.volumes);
+      setStorageLoaded(true);
+    } catch (error) {
+      setStorageError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load storage mounts"
+      );
+    } finally {
+      setStorageLoading(false);
+    }
+  }, [appId]);
+
+  useEffect(() => {
+    if (activeTab === "storage" && !storageLoaded) {
+      void loadStorage();
+    }
+  }, [activeTab, storageLoaded, loadStorage]);
 
   const runAction = async (action: ContainerAction) => {
     if (!detail?.containerId || actionLoading) {
@@ -381,6 +436,114 @@ export default function AppDetail({
     }
   };
 
+  const openCreateStorageDialog = () => {
+    setEditingVolume(null);
+    setStorageDialogError("");
+    setShowStorageDialog(true);
+  };
+
+  const openEditStorageDialog = (volume: StoredAppVolume) => {
+    setEditingVolume(volume);
+    setStorageDialogError("");
+    setShowStorageDialog(true);
+  };
+
+  const submitStorageDialog = async (values: StorageFormValues) => {
+    try {
+      setStorageSubmitting(true);
+      setStorageDialogError("");
+
+      if (editingVolume) {
+        const response = await fetch(
+          `/api/apps/${appId}/storage/${editingVolume.id}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              containerPath: values.containerPath,
+              readOnly: values.readOnly
+            })
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            await readApiError(response, "Unable to update storage mount")
+          );
+        }
+
+        setNotice(`${values.containerPath} was updated.`);
+      } else {
+        const response = await fetch(`/api/apps/${appId}/storage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            containerPath: values.containerPath,
+            volumeName: values.volumeName || undefined,
+            readOnly: values.readOnly
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            await readApiError(response, "Unable to add storage mount")
+          );
+        }
+
+        setNotice(`Storage mount at ${values.containerPath} was added.`);
+      }
+
+      setShowStorageDialog(false);
+      await loadStorage();
+      await loadDetail();
+      onAppChanged();
+    } catch (error) {
+      setStorageDialogError(
+        error instanceof Error ? error.message : "Unable to save storage mount"
+      );
+    } finally {
+      setStorageSubmitting(false);
+    }
+  };
+
+  const confirmStorageDelete = async () => {
+    if (!storageDeleteTarget) {
+      return;
+    }
+
+    try {
+      setStorageDeleting(true);
+
+      const response = await fetch(
+        `/api/apps/${appId}/storage/${storageDeleteTarget.id}`,
+        { method: "DELETE" }
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          await readApiError(response, "Unable to remove storage mount")
+        );
+      }
+
+      setNotice(
+        `The storage mount at ${storageDeleteTarget.containerPath} was removed. Its Docker volume was not deleted.`
+      );
+      setStorageDeleteTarget(null);
+      await loadStorage();
+      await loadDetail();
+      onAppChanged();
+    } catch (error) {
+      setStorageError(
+        error instanceof Error
+          ? error.message
+          : "Unable to remove storage mount"
+      );
+      setStorageDeleteTarget(null);
+    } finally {
+      setStorageDeleting(false);
+    }
+  };
+
   if (loading && !detail) {
     return (
       <section className="app-detail">
@@ -421,7 +584,9 @@ export default function AppDetail({
 
   const isRunning = detail.dockerState === "running";
   const canOpenApp = Boolean(detail.domain) && detail.routingReady;
-  const isEnvPending = detail.environmentStatus === "pending";
+  // Reflects environment AND storage changes — Docker can't apply either
+  // kind to a running container, so both are "pending" until redeploy.
+  const isConfigPending = detail.environmentStatus === "pending";
   const inheritedGlobals = effectiveVars.filter((v) => v.source === "global");
 
   return (
@@ -448,8 +613,8 @@ export default function AppDetail({
             tone={canOpenApp ? "positive" : "warning"}
           />
           <StatusBadge
-            label={isEnvPending ? "Changes Pending" : "Env Applied"}
-            tone={isEnvPending ? "warning" : "positive"}
+            label={isConfigPending ? "Changes Pending" : "Config Applied"}
+            tone={isConfigPending ? "warning" : "positive"}
           />
         </div>
 
@@ -466,7 +631,7 @@ export default function AppDetail({
           )}
 
           <button
-            className={isEnvPending ? "primary-button" : "secondary-button"}
+            className={isConfigPending ? "primary-button" : "secondary-button"}
             type="button"
             onClick={() => setShowRedeployConfirm(true)}
             disabled={actionLoading !== null}
@@ -532,6 +697,7 @@ export default function AppDetail({
         items={[
           { key: "overview", label: "Overview" },
           { key: "environment", label: "Environment" },
+          { key: "storage", label: "Storage" },
           { key: "logs", label: "Logs" }
         ]}
         active={activeTab}
@@ -609,12 +775,12 @@ export default function AppDetail({
             <div className="env-scope-heading">
               <h3>Effective Environment</h3>
               <StatusBadge
-                label={isEnvPending ? "Changes Pending" : "Applied"}
-                tone={isEnvPending ? "warning" : "positive"}
+                label={isConfigPending ? "Changes Pending" : "Applied"}
+                tone={isConfigPending ? "warning" : "positive"}
               />
             </div>
             <p className="section-description">
-              {isEnvPending
+              {isConfigPending
                 ? "Saved, but not active in the running container yet. Restarting will not apply these changes — use the Redeploy button above to recreate the container with the current variables."
                 : "The running container reflects the variables below."}
             </p>
@@ -732,6 +898,44 @@ export default function AppDetail({
         </div>
       )}
 
+      {activeTab === "storage" && (
+        <div className="app-detail-tab-panel">
+          {storageError && <div className="error-banner">{storageError}</div>}
+
+          <div className="env-scope-block">
+            <div className="env-scope-heading">
+              <h3>Persistent Storage</h3>
+              <button
+                className="primary-button compact"
+                type="button"
+                onClick={openCreateStorageDialog}
+              >
+                Add Storage
+              </button>
+            </div>
+            <p className="section-description">
+              Docker named volumes mounted into the container. Adding,
+              editing, or removing a mount marks configuration as pending —
+              use Redeploy above to apply it to the running container.
+            </p>
+          </div>
+
+          {storageLoading && !storageLoaded ? (
+            <div className="empty-state">Loading storage mounts...</div>
+          ) : (
+            <StorageTable
+              volumes={storageVolumes}
+              emptyMessage="No storage mounts yet. Add one to persist data across redeployments."
+              onEdit={openEditStorageDialog}
+              onDelete={(volume) => setStorageDeleteTarget(volume)}
+              busyId={
+                storageDeleting ? storageDeleteTarget?.id ?? null : null
+              }
+            />
+          )}
+        </div>
+      )}
+
       {activeTab === "logs" && (
         <div className="app-detail-tab-panel">
           {detail.containerId ? (
@@ -803,6 +1007,45 @@ export default function AppDetail({
         onCancel={() => setEnvDeleteTarget(null)}
       />
 
+      <StorageDialog
+        open={showStorageDialog}
+        title={editingVolume ? `Edit ${editingVolume.containerPath}` : "Add Storage Mount"}
+        volumeNameLocked={editingVolume !== null}
+        initialValues={
+          editingVolume
+            ? {
+                containerPath: editingVolume.containerPath,
+                volumeName: editingVolume.volumeName,
+                readOnly: editingVolume.readOnly
+              }
+            : undefined
+        }
+        submitting={storageSubmitting}
+        error={storageDialogError}
+        onSubmit={(values) => void submitStorageDialog(values)}
+        onCancel={() => setShowStorageDialog(false)}
+      />
+
+      <ConfirmationDialog
+        open={storageDeleteTarget !== null}
+        title={`Remove ${storageDeleteTarget?.containerPath}?`}
+        message={
+          <p>
+            This removes the storage mount at{" "}
+            <strong>{storageDeleteTarget?.containerPath}</strong> from this
+            app. The underlying Docker volume{" "}
+            <strong>{storageDeleteTarget?.volumeName}</strong> and its data
+            are <strong>not</strong> deleted — only the platform's tracking
+            record is removed.
+          </p>
+        }
+        confirmLabel="Remove mount"
+        danger
+        confirming={storageDeleting}
+        onConfirm={() => void confirmStorageDelete()}
+        onCancel={() => setStorageDeleteTarget(null)}
+      />
+
       <ConfirmationDialog
         open={showRedeployConfirm}
         title={`Redeploy ${detail.name}?`}
@@ -810,9 +1053,9 @@ export default function AppDetail({
           <p>
             This pulls <strong>{detail.image}</strong> and replaces the
             running container with a new one using the current environment
-            variables. The new container is started and verified before the
-            old one is removed, but the app will briefly restart. This
-            cannot be undone.
+            variables and storage mounts. The new container is started and
+            verified before the old one is removed, but the app will
+            briefly restart. This cannot be undone.
           </p>
         }
         confirmLabel="Redeploy app"

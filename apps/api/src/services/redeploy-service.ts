@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type Docker from "dockerode";
 import type { AppDatabase } from "../database.js";
 import { buildContainerEnvArray } from "./environment-service.js";
+import { buildVolumeMounts } from "./storage-service.js";
 import { getErrorStatusCode } from "../docker-errors.js";
 
 const PROTECTED_CONTAINER_NAMES = new Set([
@@ -37,6 +38,13 @@ export interface RedeployDockerOps {
   /** Resolves even if the container is already gone (idempotent). */
   removeContainer(nameOrId: string): Promise<void>;
   renameContainer(id: string, newName: string): Promise<void>;
+  /**
+   * Creates the named volume, labeled for this app, if it doesn't exist
+   * yet. If it already exists, throws unless it's already labeled as owned
+   * by this same app — never silently reuses an unmanaged or
+   * differently-owned volume.
+   */
+  ensureVolume(name: string, ownerAppName: string): Promise<void>;
 }
 
 export function createDockerOps(docker: Docker): RedeployDockerOps {
@@ -87,6 +95,38 @@ export function createDockerOps(docker: Docker): RedeployDockerOps {
 
     async renameContainer(id, newName) {
       await docker.getContainer(id).rename({ name: newName });
+    },
+
+    async ensureVolume(name, ownerAppName) {
+      let existing: { Labels?: Record<string, string> | null } | null = null;
+
+      try {
+        existing = await docker.getVolume(name).inspect();
+      } catch (error) {
+        if (getErrorStatusCode(error) !== 404) {
+          throw error;
+        }
+      }
+
+      if (existing) {
+        const owner = existing.Labels?.["com.deployment-platform.app-name"];
+
+        if (owner !== ownerAppName) {
+          throw new Error(
+            `Docker volume "${name}" already exists and is not owned by this app`
+          );
+        }
+
+        return;
+      }
+
+      await docker.createVolume({
+        Name: name,
+        Labels: {
+          "com.deployment-platform.managed": "true",
+          "com.deployment-platform.app-name": ownerAppName
+        }
+      });
     }
   };
 }
@@ -153,6 +193,19 @@ export async function redeployApp(
     };
   }
 
+  const volumes = appDatabase.listAppVolumes(app.id);
+
+  try {
+    for (const volume of volumes) {
+      await dockerOps.ensureVolume(volume.volumeName, app.name);
+    }
+  } catch (error) {
+    return {
+      success: false,
+      message: `Unable to prepare storage for this app: ${errorMessage(error)}. The existing app was not affected.`
+    };
+  }
+
   const envArray = buildContainerEnvArray(
     appDatabase.listGlobalEnvVars(),
     appDatabase.listAppEnvVars(app.id)
@@ -177,7 +230,8 @@ export async function redeployApp(
         NetworkMode: "deployment-apps",
         RestartPolicy: {
           Name: app.restartPolicy || "unless-stopped"
-        }
+        },
+        Mounts: buildVolumeMounts(volumes)
       }
     });
 

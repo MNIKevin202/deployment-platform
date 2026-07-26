@@ -22,6 +22,7 @@ interface FakeDockerOpsOptions {
   renameFails?: boolean;
   /** Fails only the second inspectContainer call (the post-rename check). */
   finalInspectFails?: boolean;
+  ensureVolumeFails?: boolean;
 }
 
 interface FakeDockerOpsCalls {
@@ -30,6 +31,7 @@ interface FakeDockerOpsCalls {
   removedNames: string[];
   renamedTo: string[];
   inspectCallCount: number;
+  ensuredVolumes: Array<{ name: string; ownerAppName: string }>;
 }
 
 function createFakeDockerOps(
@@ -40,7 +42,8 @@ function createFakeDockerOps(
     createContainerOptions: [],
     removedNames: [],
     renamedTo: [],
-    inspectCallCount: 0
+    inspectCallCount: 0,
+    ensuredVolumes: []
   };
 
   let nextContainerId = 1;
@@ -98,6 +101,14 @@ function createFakeDockerOps(
 
       if (settings.renameFails) {
         throw new Error(`simulated rename failure to ${newName}`);
+      }
+    },
+
+    async ensureVolume(name, ownerAppName) {
+      calls.ensuredVolumes.push({ name, ownerAppName });
+
+      if (settings.ensureVolumeFails) {
+        throw new Error(`simulated ensureVolume failure for ${name}`);
       }
     }
   };
@@ -273,6 +284,139 @@ describe("redeployApp", () => {
     // created the container despite the SDK call failing.
     assert.equal(calls.removedNames.length, 1);
     assert.match(calls.removedNames[0], /^app-app-two-redeploy-/);
+  });
+
+  describe("storage volumes", () => {
+    test("ensures and mounts configured volumes on the replacement container", async () => {
+      const app = appDatabase.createApp({
+        name: "app-storage",
+        image: "nginx:alpine",
+        containerPort: 80,
+        containerName: "app-app-storage"
+      });
+
+      appDatabase.createAppVolume({
+        appId: app.id,
+        volumeName: "app-storage-data",
+        containerPath: "/data",
+        readOnly: false
+      });
+
+      appDatabase.createAppVolume({
+        appId: app.id,
+        volumeName: "app-storage-config",
+        containerPath: "/config",
+        readOnly: true
+      });
+
+      const { ops, calls } = createFakeDockerOps();
+
+      const result = await redeployApp(
+        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile },
+        app.id
+      );
+
+      assert.equal(result.success, true);
+
+      assert.deepEqual(
+        calls.ensuredVolumes.map((v) => v.name).sort(),
+        ["app-storage-config", "app-storage-data"]
+      );
+      assert.ok(
+        calls.ensuredVolumes.every((v) => v.ownerAppName === "app-storage")
+      );
+
+      const createOptions = calls.createContainerOptions[0] as {
+        HostConfig: {
+          Mounts: Array<{
+            Type: string;
+            Source: string;
+            Target: string;
+            ReadOnly: boolean;
+          }>;
+        };
+      };
+
+      assert.deepEqual(
+        [...createOptions.HostConfig.Mounts].sort((a, b) =>
+          a.Source.localeCompare(b.Source)
+        ),
+        [
+          {
+            Type: "volume",
+            Source: "app-storage-config",
+            Target: "/config",
+            ReadOnly: true
+          },
+          {
+            Type: "volume",
+            Source: "app-storage-data",
+            Target: "/data",
+            ReadOnly: false
+          }
+        ]
+      );
+    });
+
+    test("a storage preparation failure aborts before touching the old container", async () => {
+      const app = appDatabase.createApp({
+        name: "app-storage-fail",
+        image: "nginx:alpine",
+        containerPort: 80,
+        containerName: "app-app-storage-fail"
+      });
+
+      appDatabase.createAppVolume({
+        appId: app.id,
+        volumeName: "app-storage-fail-data",
+        containerPath: "/data",
+        readOnly: false
+      });
+
+      const before = appDatabase.getAppById(app.id);
+      const { ops, calls } = createFakeDockerOps({ ensureVolumeFails: true });
+
+      const result = await redeployApp(
+        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile },
+        app.id
+      );
+
+      assert.equal(result.success, false);
+      assert.match(result.message, /prepare storage/);
+      assert.match(result.message, /not affected/);
+
+      // Never got as far as creating a replacement or touching the old
+      // container.
+      assert.deepEqual(calls.createContainerOptions, []);
+      assert.deepEqual(calls.removedNames, []);
+
+      const after = appDatabase.getAppById(app.id);
+      assert.deepEqual(after, before);
+    });
+
+    test("an app with no configured volumes gets an empty Mounts array, not an error", async () => {
+      const app = appDatabase.createApp({
+        name: "app-no-storage",
+        image: "nginx:alpine",
+        containerPort: 80,
+        containerName: "app-app-no-storage"
+      });
+
+      const { ops, calls } = createFakeDockerOps();
+
+      const result = await redeployApp(
+        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile },
+        app.id
+      );
+
+      assert.equal(result.success, true);
+      assert.deepEqual(calls.ensuredVolumes, []);
+
+      const createOptions = calls.createContainerOptions[0] as {
+        HostConfig: { Mounts: unknown[] };
+      };
+      assert.deepEqual(createOptions.HostConfig.Mounts, []);
+    });
   });
 
   describe("failures after the replacement container is confirmed running", () => {

@@ -15,10 +15,12 @@ import {
   computeEnvironmentStatus
 } from "./services/environment-service.js";
 import { registerEnvironmentRoutes } from "./routes/environment.js";
+import { registerStorageRoutes } from "./routes/storage.js";
 import {
   createDockerOps,
   redeployApp
 } from "./services/redeploy-service.js";
+import { buildVolumeMounts } from "./services/storage-service.js";
 import { getErrorStatusCode } from "./docker-errors.js";
 
 const dockerOps = createDockerOps(docker);
@@ -77,6 +79,7 @@ await app.register(cors, {
 
 await registerAuthentication(app);
 await registerEnvironmentRoutes(app, { appDatabase });
+await registerStorageRoutes(app, { appDatabase });
 
 interface ContainerParams {
   id: string;
@@ -510,9 +513,17 @@ app.post("/apps", async (request, reply) => {
     try {
       await pullImage(image);
 
-      // A brand-new app has no app-specific variables yet (its row didn't
-      // exist until createApp() above), so only global variables apply at
-      // creation time. Anything added afterward is "pending" until redeploy.
+      // A brand-new app has no app-specific variables or storage mounts
+      // yet (its row didn't exist until createApp() above), so only global
+      // variables apply at creation time. Anything added afterward is
+      // "pending" until redeploy — this call is here for correctness and
+      // consistency with the redeploy path rather than doing anything today.
+      const volumes = appDatabase.listAppVolumes(createdApp.id);
+
+      for (const volume of volumes) {
+        await dockerOps.ensureVolume(volume.volumeName, name);
+      }
+
       const envArray = buildContainerEnvArray(
         appDatabase.listGlobalEnvVars(),
         []
@@ -533,7 +544,8 @@ app.post("/apps", async (request, reply) => {
           NetworkMode: "deployment-apps",
           RestartPolicy: {
             Name: "unless-stopped"
-          }
+          },
+          Mounts: buildVolumeMounts(volumes)
         }
       });
 

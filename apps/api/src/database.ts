@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { runMigrations } from "./migrations/index.js";
 import { createEnvironmentRepository } from "./environment-database.js";
+import { createVolumeRepository } from "./volume-database.js";
 
 export type {
   StoredGlobalEnvVar,
@@ -12,6 +13,12 @@ export type {
   CreateAppEnvVarInput,
   UpdateAppEnvVarInput
 } from "./environment-database.js";
+
+export type {
+  StoredAppVolume,
+  CreateAppVolumeInput,
+  UpdateAppVolumeInput
+} from "./volume-database.js";
 
 export interface StoredApp {
   id: number;
@@ -244,6 +251,14 @@ export function createAppDatabase(databasePath: string) {
     db.prepare(`DELETE FROM apps WHERE id = ?`).run(id);
   }
 
+  /**
+   * Despite the column/function name, this now marks "something about this
+   * app's deployable configuration changed" broadly — both environment
+   * variables (Phase 5) and storage mounts (Phase 7) call this. Docker
+   * can't apply either kind of change to a running container, so both are
+   * "pending" until the next redeploy. Not renamed to avoid a wider,
+   * harder-to-verify rename across already-shipped call sites.
+   */
   function touchAppEnvironment(id: number): void {
     db.prepare(
       `UPDATE apps SET environment_touched_at = CURRENT_TIMESTAMP WHERE id = ?`
@@ -269,6 +284,7 @@ export function createAppDatabase(databasePath: string) {
   }
 
   const environmentRepository = createEnvironmentRepository(db);
+  const volumeRepository = createVolumeRepository(db);
 
   return {
     db,
@@ -287,7 +303,8 @@ export function createAppDatabase(databasePath: string) {
     touchAllAppsEnvironment,
     healthCheck,
     close,
-    ...environmentRepository
+    ...environmentRepository,
+    ...volumeRepository
   };
 }
 

@@ -152,4 +152,21 @@ export interface RedeployResponse {
   containerId?: string;
 }
 
+export interface StoredAppVolume {
+  id: number;
+  appId: number;
+  volumeName: string;
+  containerPath: string;
+  readOnly: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StorageFormValues {
+  containerPath: string;
+  /** Empty string means "let the platform generate one". */
+  volumeName: string;
+  readOnly: boolean;
+}
+
 export type ContainerAction = "start" | "stop" | "restart";
