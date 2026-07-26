@@ -233,60 +233,62 @@ export default function GitHubSettingsPanel({ onConnectionChanged }: GitHubSetti
         </dl>
       )}
 
-      <label>
-        <span>{connection.connected ? "Replace token" : "GitHub token"}</span>
-        <input
-          type="password"
-          value={token}
-          onChange={(event) => {
-            setToken(event.target.value);
-            setTestedAccount(null);
-            setTestError("");
-          }}
-          placeholder="github_pat_..."
-          autoComplete="off"
-          disabled={connection.setupRequired}
-        />
-        <small>
-          Never shown again after saving. Stored encrypted — this field always starts empty, even
-          when a token is already connected.
-        </small>
-      </label>
+      <div className="github-token-section">
+        <label>
+          <span>{connection.connected ? "Replace token" : "GitHub token"}</span>
+          <input
+            type="password"
+            value={token}
+            onChange={(event) => {
+              setToken(event.target.value);
+              setTestedAccount(null);
+              setTestError("");
+            }}
+            placeholder="github_pat_..."
+            autoComplete="off"
+            disabled={connection.setupRequired}
+          />
+          <small>
+            Never shown again after saving. Stored encrypted — this field always starts empty, even
+            when a token is already connected.
+          </small>
+        </label>
 
-      {testError && <div className="error-banner">{testError}</div>}
-      {testedAccount && (
-        <div className="notice-banner">
-          Token is valid for GitHub user <strong>{testedAccount.username}</strong>.
-        </div>
-      )}
-
-      <div className="form-actions">
-        <button
-          className="secondary-button"
-          type="button"
-          onClick={() => void testConnection()}
-          disabled={!token || testing || saving || connection.setupRequired}
-        >
-          {testing ? "Testing..." : connection.connected ? "Test Again" : "Test Connection"}
-        </button>
-        <button
-          className="primary-button"
-          type="button"
-          onClick={() => void saveConnection()}
-          disabled={!token || saving || testing || connection.setupRequired}
-        >
-          {saving ? "Saving..." : connection.connected ? "Replace Token" : "Save Connection"}
-        </button>
-        {connection.connected && (
-          <button
-            className="danger-button"
-            type="button"
-            onClick={() => setShowDisconnectConfirm(true)}
-            disabled={saving}
-          >
-            Disconnect
-          </button>
+        {testError && <div className="error-banner">{testError}</div>}
+        {testedAccount && (
+          <div className="notice-banner">
+            Token is valid for GitHub user <strong>{testedAccount.username}</strong>.
+          </div>
         )}
+
+        <div className="form-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => void testConnection()}
+            disabled={!token || testing || saving || connection.setupRequired}
+          >
+            {testing ? "Testing..." : connection.connected ? "Test Again" : "Test Connection"}
+          </button>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => void saveConnection()}
+            disabled={!token || saving || testing || connection.setupRequired}
+          >
+            {saving ? "Saving..." : connection.connected ? "Replace Token" : "Save Connection"}
+          </button>
+          {connection.connected && (
+            <button
+              className="danger-button"
+              type="button"
+              onClick={() => setShowDisconnectConfirm(true)}
+              disabled={saving}
+            >
+              Disconnect
+            </button>
+          )}
+        </div>
       </div>
 
       <ConfirmationDialog
