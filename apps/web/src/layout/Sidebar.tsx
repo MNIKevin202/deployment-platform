@@ -1,0 +1,44 @@
+export type Section = "overview" | "apps" | "environment" | "system";
+
+interface SidebarProps {
+  active: Section | null;
+  onSelect: (section: Section) => void;
+}
+
+const NAV_ITEMS: { key: Section; label: string; glyph: string }[] = [
+  { key: "overview", label: "Overview", glyph: "◈" },
+  { key: "apps", label: "Apps", glyph: "▣" },
+  { key: "environment", label: "Environment", glyph: "⚙" },
+  { key: "system", label: "System", glyph: "◫" }
+];
+
+export default function Sidebar({ active, onSelect }: SidebarProps) {
+  return (
+    <div className="sidebar-inner">
+      <div className="sidebar-brand">
+        <span className="sidebar-mark">DP</span>
+        <div>
+          <p className="sidebar-brand-name">Deployment</p>
+          <p className="sidebar-brand-sub">Platform</p>
+        </div>
+      </div>
+
+      <nav className="sidebar-nav" aria-label="Main navigation">
+        {NAV_ITEMS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            className={`sidebar-nav-item ${active === item.key ? "active" : ""}`}
+            aria-current={active === item.key ? "page" : undefined}
+            onClick={() => onSelect(item.key)}
+          >
+            <span className="sidebar-nav-glyph" aria-hidden="true">
+              {item.glyph}
+            </span>
+            {item.label}
+          </button>
+        ))}
+      </nav>
+    </div>
+  );
+}

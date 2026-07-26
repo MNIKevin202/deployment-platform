@@ -7,6 +7,16 @@ export interface DockerInfo {
   dockerVersion: string;
   operatingSystem: string;
   architecture: string;
+  cpuCount: number;
+  memoryTotalBytes: number;
+}
+
+export interface RoutingStatus {
+  enabled: boolean;
+  lastReconciledAt: string | null;
+  lastReconcileSucceeded: boolean | null;
+  lastError: string | null;
+  routedAppCount: number;
 }
 
 export interface ContainerPort {
@@ -75,6 +85,45 @@ export interface AppDetail {
   containerExists: boolean;
   dockerState: string | null;
   dockerStatusText: string | null;
+  environmentStatus: EnvironmentStatus;
+}
+
+export type EnvironmentVariableSource = "global" | "app" | "app-override";
+export type EnvironmentStatus = "applied" | "pending";
+
+export interface MaskedGlobalEnvVar {
+  id: number;
+  key: string;
+  isSecret: boolean;
+  enabled: boolean;
+  hasValue: boolean;
+  value: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MaskedAppEnvVar extends MaskedGlobalEnvVar {
+  appId: number;
+}
+
+export interface EffectiveEnvVar {
+  key: string;
+  value: string | null;
+  hasValue: boolean;
+  isSecret: boolean;
+  source: EnvironmentVariableSource;
+}
+
+export interface EffectiveEnvironmentResponse {
+  variables: EffectiveEnvVar[];
+  status: EnvironmentStatus;
+}
+
+export interface EnvVarFormValues {
+  key: string;
+  value: string;
+  isSecret: boolean;
+  enabled: boolean;
 }
 
 export interface ApiError {

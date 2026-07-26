@@ -6,8 +6,8 @@ interface AppCardProps {
   actionLoading: string | null;
   onAction: (container: ContainerSummary, action: ContainerAction) => void;
   onOpenLogs: (container: ContainerSummary) => void;
-  onDeleteApp: (container: ContainerSummary) => void;
-  onViewApp: (storedApp: StoredApp) => void;
+  onDeleteApp?: (container: ContainerSummary) => void;
+  onViewApp?: (storedApp: StoredApp) => void;
 }
 
 function formatPorts(ports: ContainerPort[]): string {
@@ -92,7 +92,7 @@ export default function AppCard({
       </dl>
 
       <div className="container-actions">
-        {container.isManagedApp && storedApp && (
+        {container.isManagedApp && storedApp && onViewApp && (
           <button
             className="secondary-button"
             type="button"
@@ -146,7 +146,7 @@ export default function AppCard({
 
         <button onClick={() => onOpenLogs(container)}>Logs</button>
 
-        {container.isManagedApp && (
+        {container.isManagedApp && onDeleteApp && (
           <button
             className="danger-button"
             onClick={() => onDeleteApp(container)}

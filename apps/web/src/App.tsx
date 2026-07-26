@@ -1,28 +1,53 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 import { useAuth } from "./AuthGate";
-import AppCard from "./components/AppCard";
-import AppDetail from "./components/AppDetail";
+import AppShell from "./layout/AppShell";
+import Sidebar, { type Section } from "./layout/Sidebar";
+import Header from "./layout/Header";
+import Notice from "./components/Notice";
 import LogViewer from "./components/LogViewer";
+import AppDetail from "./components/AppDetail";
+import OverviewPage from "./pages/OverviewPage";
+import AppsPage from "./pages/AppsPage";
+import EnvironmentPage from "./pages/EnvironmentPage";
+import SystemPage from "./pages/SystemPage";
 import type {
   ApiError,
   ContainerAction,
   ContainerSummary,
   CreateAppResponse,
   DockerInfo,
+  RoutingStatus,
   StoredApp,
   StoredAppsResponse
 } from "./types/api";
 
+const SECTION_TITLES: Record<Section, string> = {
+  overview: "Overview",
+  apps: "Apps",
+  environment: "Environment",
+  system: "System"
+};
+
+const SECTION_SUBTITLES: Record<Section, string> = {
+  overview: "A snapshot of your platform and its managed applications.",
+  apps: "Deploy and manage applications running on your server.",
+  environment: "Variables inherited by every managed app, unless overridden.",
+  system: "Protected platform services and host information."
+};
+
 function App() {
   const { username, logout } = useAuth();
 
+  const [section, setSection] = useState<Section>("overview");
+  const [selectedAppId, setSelectedAppId] = useState<number | null>(null);
+
   const [dockerInfo, setDockerInfo] = useState<DockerInfo | null>(null);
+  const [routingStatus, setRoutingStatus] = useState<RoutingStatus | null>(null);
   const [containers, setContainers] = useState<ContainerSummary[]>([]);
   const [storedApps, setStoredApps] = useState<StoredApp[]>([]);
   const [selectedContainer, setSelectedContainer] =
     useState<ContainerSummary | null>(null);
-  const [selectedAppId, setSelectedAppId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -44,15 +69,6 @@ function App() {
     [containers]
   );
 
-  const otherContainers = useMemo(
-    () =>
-      containers.filter(
-        (container) =>
-          !container.isSystemContainer && !container.isManagedApp
-      ),
-    [containers]
-  );
-
   const storedAppsByName = useMemo(() => {
     const map = new Map<string, StoredApp>();
 
@@ -65,11 +81,12 @@ function App() {
 
   const loadDashboard = useCallback(async () => {
     try {
-      const [infoResponse, containersResponse, appsResponse] =
+      const [infoResponse, containersResponse, appsResponse, routingResponse] =
         await Promise.all([
           fetch("/api/docker/info"),
           fetch("/api/containers"),
-          fetch("/api/apps")
+          fetch("/api/apps"),
+          fetch("/api/routing/status")
         ]);
 
       if (!infoResponse.ok || !containersResponse.ok || !appsResponse.ok) {
@@ -85,6 +102,10 @@ function App() {
       setDockerInfo(info);
       setContainers(containerList);
       setStoredApps(appsResult.apps ?? []);
+
+      if (routingResponse.ok) {
+        setRoutingStatus((await routingResponse.json()) as RoutingStatus);
+      }
 
       setSelectedContainer((currentSelection) => {
         if (!currentSelection) {
@@ -266,54 +287,37 @@ function App() {
     }
   };
 
-  const renderContainerCard = (container: ContainerSummary) => {
-    const appName =
-      container.labels["com.deployment-platform.app-name"];
-    const storedApp = container.isManagedApp && appName
-      ? storedAppsByName.get(appName)
-      : undefined;
+  const openCreateApp = () => {
+    setError("");
+    setNotice("");
+    setShowCreateApp(true);
+  };
 
-    return (
-      <AppCard
-        key={container.id}
-        container={container}
-        storedApp={storedApp}
-        actionLoading={actionLoading}
-        onAction={(targetContainer, action) =>
-          void runAction(targetContainer, action)
-        }
-        onOpenLogs={(targetContainer) =>
-          setSelectedContainer(targetContainer)
-        }
-        onDeleteApp={(targetContainer) => void deleteApp(targetContainer)}
-        onViewApp={(targetStoredApp) => {
-          setError("");
-          setNotice("");
-          setSelectedAppId(targetStoredApp.id);
-        }}
-      />
-    );
+  const viewApp = (storedApp: StoredApp) => {
+    setError("");
+    setNotice("");
+    setSelectedAppId(storedApp.id);
+  };
+
+  const goToSection = (nextSection: Section) => {
+    setSelectedAppId(null);
+    setSection(nextSection);
   };
 
   if (selectedAppId !== null) {
     return (
-      <main className="dashboard">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Deployment Platform</p>
-            <h1>App Detail</h1>
-          </div>
-
-          <div className="header-actions">
-            <span className="signed-in-user">
-              Signed in as <strong>{username}</strong>
-            </span>
-
-            <button className="secondary-button" onClick={() => void logout()}>
-              Log Out
-            </button>
-          </div>
-        </header>
+      <AppShell
+        sidebar={<Sidebar active={null} onSelect={goToSection} />}
+        header={
+          <Header
+            title="App Detail"
+            username={username}
+            onLogout={() => void logout()}
+          />
+        }
+      >
+        {error && <Notice kind="error">{error}</Notice>}
+        {notice && <Notice kind="success">{notice}</Notice>}
 
         <AppDetail
           appId={selectedAppId}
@@ -324,178 +328,75 @@ function App() {
             void loadDashboard();
           }}
           onAppChanged={() => void loadDashboard()}
+          onGoToGlobalEnvironment={() => goToSection("environment")}
         />
-      </main>
+      </AppShell>
     );
   }
 
+  const headerActions =
+    section === "overview" || section === "apps" ? (
+      <button
+        className="secondary-button"
+        type="button"
+        onClick={() => void loadDashboard()}
+      >
+        Refresh
+      </button>
+    ) : undefined;
+
   return (
-    <main className="dashboard">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Deployment Platform</p>
-          <h1>Docker Dashboard</h1>
-          <p className="subtitle">
-            Deploy and manage applications running on your server.
-          </p>
-        </div>
+    <AppShell
+      sidebar={<Sidebar active={section} onSelect={goToSection} />}
+      header={
+        <Header
+          title={SECTION_TITLES[section]}
+          subtitle={SECTION_SUBTITLES[section]}
+          username={username}
+          onLogout={() => void logout()}
+          actions={headerActions}
+        />
+      }
+    >
+      {error && <Notice kind="error">{error}</Notice>}
+      {notice && <Notice kind="success">{notice}</Notice>}
 
-        <div className="header-actions">
-          <span className="signed-in-user">
-            Signed in as <strong>{username}</strong>
-          </span>
-
-          <button
-            className="secondary-button"
-            onClick={() => void loadDashboard()}
-          >
-            Refresh
-          </button>
-
-          <button
-            className="primary-button"
-            onClick={() => {
-              setError("");
-              setNotice("");
-              setShowCreateApp(true);
-            }}
-          >
-            Create App
-          </button>
-
-          <button
-            className="secondary-button"
-            onClick={() => void logout()}
-          >
-            Log Out
-          </button>
-        </div>
-      </header>
-
-      {error && <div className="error-banner">{error}</div>}
-      {notice && <div className="notice-banner">{notice}</div>}
-
-      {loading ? (
-        <section className="empty-state">
-          Loading Docker information...
-        </section>
+      {section === "environment" ? (
+        <EnvironmentPage />
+      ) : loading ? (
+        <div className="empty-state">Loading Docker information...</div>
+      ) : section === "overview" ? (
+        <OverviewPage
+          dockerInfo={dockerInfo}
+          routingStatus={routingStatus}
+          managedApps={managedApps}
+          storedAppsByName={storedAppsByName}
+          actionLoading={actionLoading}
+          onAction={(container, action) => void runAction(container, action)}
+          onOpenLogs={(container) => setSelectedContainer(container)}
+          onDeleteApp={(container) => void deleteApp(container)}
+          onViewApp={viewApp}
+          onCreateApp={openCreateApp}
+        />
+      ) : section === "apps" ? (
+        <AppsPage
+          managedApps={managedApps}
+          storedAppsByName={storedAppsByName}
+          actionLoading={actionLoading}
+          onAction={(container, action) => void runAction(container, action)}
+          onOpenLogs={(container) => setSelectedContainer(container)}
+          onDeleteApp={(container) => void deleteApp(container)}
+          onViewApp={viewApp}
+          onCreateApp={openCreateApp}
+        />
       ) : (
-        <>
-          <section className="stats-grid">
-            <article className="stat-card">
-              <span>Status</span>
-              <strong>{dockerInfo?.status ?? "Unknown"}</strong>
-            </article>
-
-            <article className="stat-card">
-              <span>Running</span>
-              <strong>{dockerInfo?.containersRunning ?? 0}</strong>
-            </article>
-
-            <article className="stat-card">
-              <span>Stopped</span>
-              <strong>{dockerInfo?.containersStopped ?? 0}</strong>
-            </article>
-
-            <article className="stat-card">
-              <span>Images</span>
-              <strong>{dockerInfo?.images ?? 0}</strong>
-            </article>
-          </section>
-
-          <section className="server-card">
-            <div>
-              <span>Docker</span>
-              <strong>{dockerInfo?.dockerVersion ?? "Unknown"}</strong>
-            </div>
-
-            <div>
-              <span>Operating system</span>
-              <strong>{dockerInfo?.operatingSystem ?? "Unknown"}</strong>
-            </div>
-
-            <div>
-              <span>Architecture</span>
-              <strong>{dockerInfo?.architecture ?? "Unknown"}</strong>
-            </div>
-          </section>
-
-          <section className="containers-section">
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">Core Infrastructure</p>
-                <h2>Platform Services</h2>
-              </div>
-
-              <span className="container-count">
-                {systemContainers.length} protected
-              </span>
-            </div>
-
-            <div className="container-grid">
-              {systemContainers.map(renderContainerCard)}
-            </div>
-          </section>
-
-          <section className="containers-section">
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">Applications</p>
-                <h2>Managed Apps</h2>
-              </div>
-
-              <button
-                className="primary-button compact"
-                onClick={() => {
-                  setError("");
-                  setNotice("");
-                  setShowCreateApp(true);
-                }}
-              >
-                Create App
-              </button>
-            </div>
-
-            {managedApps.length === 0 ? (
-              <div className="empty-state app-empty-state">
-                <h3>No managed apps yet</h3>
-                <p>
-                  Deploy your first application from a Docker image.
-                </p>
-
-                <button
-                  className="primary-button"
-                  onClick={() => setShowCreateApp(true)}
-                >
-                  Deploy First App
-                </button>
-              </div>
-            ) : (
-              <div className="container-grid">
-                {managedApps.map(renderContainerCard)}
-              </div>
-            )}
-          </section>
-
-          {otherContainers.length > 0 && (
-            <section className="containers-section">
-              <div className="section-heading">
-                <div>
-                  <p className="eyebrow">External</p>
-                  <h2>Other Containers</h2>
-                </div>
-
-                <span className="container-count">
-                  {otherContainers.length} unmanaged
-                </span>
-              </div>
-
-              <div className="container-grid">
-                {otherContainers.map(renderContainerCard)}
-              </div>
-            </section>
-          )}
-        </>
+        <SystemPage
+          systemContainers={systemContainers}
+          dockerInfo={dockerInfo}
+          actionLoading={actionLoading}
+          onAction={(container, action) => void runAction(container, action)}
+          onOpenLogs={(container) => setSelectedContainer(container)}
+        />
       )}
 
       {showCreateApp && (
@@ -605,7 +506,7 @@ function App() {
           onClose={() => setSelectedContainer(null)}
         />
       )}
-    </main>
+    </AppShell>
   );
 }
 

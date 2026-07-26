@@ -26,6 +26,7 @@ function makeApp(overrides: Partial<StoredApp> = {}): StoredApp {
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-02T00:00:00.000Z",
     lastDeployedAt: "2026-01-02T00:00:00.000Z",
+    environmentTouchedAt: null,
     ...overrides
   };
 }
@@ -86,7 +87,12 @@ describe("formatDockerStatusText", () => {
 
 describe("buildAppDetail", () => {
   test("maps a stored app with a live container", () => {
-    const detail = buildAppDetail(makeApp(), makeInspection(), true);
+    const detail = buildAppDetail(
+      makeApp(),
+      makeInspection(),
+      true,
+      "applied"
+    );
 
     assert.equal(detail.id, 1);
     assert.equal(detail.name, "sqlite-test");
@@ -101,10 +107,11 @@ describe("buildAppDetail", () => {
     assert.equal(detail.domain, "sqlite-test.apps.hookstats.com");
     assert.equal(detail.routingReady, true);
     assert.equal(detail.restartPolicy, "unless-stopped");
+    assert.equal(detail.environmentStatus, "applied");
   });
 
   test("marks containerExists false and nulls Docker fields when the container is missing", () => {
-    const detail = buildAppDetail(makeApp(), null, false);
+    const detail = buildAppDetail(makeApp(), null, false, "pending");
 
     assert.equal(detail.containerExists, false);
     assert.equal(detail.dockerState, null);
@@ -115,13 +122,15 @@ describe("buildAppDetail", () => {
     assert.equal(detail.containerId, "stored-old-id");
     assert.equal(detail.shortContainerId, "stored-old-i");
     assert.equal(detail.routingReady, false);
+    assert.equal(detail.environmentStatus, "pending");
   });
 
   test("prefers the live container ID over the stored one when both are present", () => {
     const detail = buildAppDetail(
       makeApp({ containerId: "stale-id" }),
       makeInspection({ running: false, status: "exited" }),
-      true
+      true,
+      "applied"
     );
 
     assert.equal(detail.containerId, "live-container-id-1234567890");

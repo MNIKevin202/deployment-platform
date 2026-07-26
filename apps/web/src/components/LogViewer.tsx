@@ -4,13 +4,15 @@ import type { ApiError, LogsResponse } from "../types/api";
 interface LogViewerProps {
   containerId: string;
   title: string;
-  onClose: () => void;
+  onClose?: () => void;
+  variant?: "modal" | "inline";
 }
 
 export default function LogViewer({
   containerId,
   title,
-  onClose
+  onClose,
+  variant = "modal"
 }: LogViewerProps) {
   const [logs, setLogs] = useState("");
   const [loading, setLoading] = useState(true);
@@ -48,44 +50,56 @@ export default function LogViewer({
     void loadLogs();
   }, [loadLogs]);
 
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <section
-        className="logs-modal"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header>
-          <div>
-            <p className="eyebrow">Container Logs</p>
-            <h2>{title}</h2>
-          </div>
+  const body = (
+    <section
+      className={variant === "modal" ? "logs-modal" : "logs-modal logs-inline"}
+      onClick={
+        variant === "modal" ? (event) => event.stopPropagation() : undefined
+      }
+    >
+      <header>
+        <div>
+          <p className="eyebrow">Container Logs</p>
+          <h2>{title}</h2>
+        </div>
 
-          <div className="header-actions">
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => void loadLogs()}
-              disabled={loading}
-            >
-              {loading ? "Refreshing..." : "Refresh"}
-            </button>
+        <div className="header-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => void loadLogs()}
+            disabled={loading}
+          >
+            {loading ? "Refreshing..." : "Refresh"}
+          </button>
 
+          {variant === "modal" && onClose && (
             <button className="close-button" type="button" onClick={onClose}>
               Close
             </button>
-          </div>
-        </header>
+          )}
+        </div>
+      </header>
 
-        {loading && logs === "" && !error ? (
-          <p className="logs-state">Loading logs...</p>
-        ) : error ? (
-          <p className="logs-state logs-error">{error}</p>
-        ) : logs === "" ? (
-          <p className="logs-state">No logs available yet.</p>
-        ) : (
-          <pre>{logs}</pre>
-        )}
-      </section>
+      {loading && logs === "" && !error ? (
+        <p className="logs-state">Loading logs...</p>
+      ) : error ? (
+        <p className="logs-state logs-error">{error}</p>
+      ) : logs === "" ? (
+        <p className="logs-state">No logs available yet.</p>
+      ) : (
+        <pre>{logs}</pre>
+      )}
+    </section>
+  );
+
+  if (variant === "inline") {
+    return body;
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      {body}
     </div>
   );
 }

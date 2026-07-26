@@ -31,11 +31,13 @@ describe("appDatabase", () => {
       .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
       .all() as { version: number; name: string }[];
 
-    assert.equal(rows.length, 2);
+    assert.equal(rows.length, 3);
     assert.equal(rows[0].version, 1);
     assert.equal(rows[0].name, "initial_schema");
     assert.equal(rows[1].version, 2);
     assert.equal(rows[1].name, "expand_apps_columns");
+    assert.equal(rows[2].version, 3);
+    assert.equal(rows[2].name, "environment_variables");
 
     cleanup();
   });
@@ -49,7 +51,7 @@ describe("appDatabase", () => {
       .prepare("SELECT version FROM schema_migrations ORDER BY version")
       .all() as { version: number }[];
 
-    assert.equal(rows.length, 2);
+    assert.equal(rows.length, 3);
 
     reopened.close();
     rmSync(tempDir, { recursive: true, force: true });

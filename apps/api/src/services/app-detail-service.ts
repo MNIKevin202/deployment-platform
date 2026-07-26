@@ -1,4 +1,5 @@
 import type { StoredApp } from "../database.js";
+import type { EnvironmentStatus } from "./environment-service.js";
 
 export interface ContainerInspection {
   id: string;
@@ -30,6 +31,7 @@ export interface AppDetail {
   containerExists: boolean;
   dockerState: string | null;
   dockerStatusText: string | null;
+  environmentStatus: EnvironmentStatus;
 }
 
 /**
@@ -59,7 +61,8 @@ export function formatDockerStatusText(
 export function buildAppDetail(
   storedApp: StoredApp,
   inspection: ContainerInspection | null,
-  routingReady: boolean
+  routingReady: boolean,
+  environmentStatus: EnvironmentStatus
 ): AppDetail {
   return {
     id: storedApp.id,
@@ -82,6 +85,7 @@ export function buildAppDetail(
     dockerState: inspection ? inspection.state.status : null,
     dockerStatusText: inspection
       ? formatDockerStatusText(inspection.state)
-      : null
+      : null,
+    environmentStatus
   };
 }

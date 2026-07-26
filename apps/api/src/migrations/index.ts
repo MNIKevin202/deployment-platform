@@ -1,13 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 import { migration001InitialSchema } from "./001_initial_schema.js";
 import { migration002ExpandAppsColumns } from "./002_expand_apps_columns.js";
+import { migration003EnvironmentVariables } from "./003_environment_variables.js";
 import type { Migration } from "./types.js";
 
 export type { Migration } from "./types.js";
 
 const migrations: Migration[] = [
   migration001InitialSchema,
-  migration002ExpandAppsColumns
+  migration002ExpandAppsColumns,
+  migration003EnvironmentVariables
 ];
 
 interface SchemaMigrationRow {

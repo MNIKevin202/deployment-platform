@@ -10,6 +10,11 @@ import {
   buildAppDetail,
   type ContainerInspection
 } from "./services/app-detail-service.js";
+import {
+  buildContainerEnvArray,
+  computeEnvironmentStatus
+} from "./services/environment-service.js";
+import { registerEnvironmentRoutes } from "./routes/environment.js";
 
 const appDatabase = createAppDatabase(
   process.env.DATABASE_PATH ?? "/data/deployment-platform.sqlite"
@@ -64,6 +69,7 @@ await app.register(cors, {
 });
 
 await registerAuthentication(app);
+await registerEnvironmentRoutes(app, { appDatabase });
 
 interface ContainerParams {
   id: string;
@@ -277,7 +283,11 @@ app.get<{ Params: AppIdParams }>("/apps/:id", async (request, reply) => {
     return buildAppDetail(
       storedApp,
       inspection,
-      isRoutingReady(storedApp.domain !== null)
+      isRoutingReady(storedApp.domain !== null),
+      computeEnvironmentStatus(
+        storedApp.lastDeployedAt,
+        storedApp.environmentTouchedAt
+      )
     );
   } catch (error) {
     return sendDockerError(
@@ -324,7 +334,9 @@ app.get("/docker/info", async (_request, reply) => {
       images: info.Images,
       dockerVersion: info.ServerVersion,
       operatingSystem: info.OperatingSystem,
-      architecture: info.Architecture
+      architecture: info.Architecture,
+      cpuCount: info.NCPU,
+      memoryTotalBytes: info.MemTotal
     };
   } catch (error) {
     app.log.error(error);
@@ -442,9 +454,18 @@ app.post("/apps", async (request, reply) => {
     try {
       await pullImage(image);
 
+      // A brand-new app has no app-specific variables yet (its row didn't
+      // exist until createApp() above), so only global variables apply at
+      // creation time. Anything added afterward is "pending" until redeploy.
+      const envArray = buildContainerEnvArray(
+        appDatabase.listGlobalEnvVars(),
+        []
+      );
+
       const container = await docker.createContainer({
         name: containerName,
         Image: image,
+        Env: envArray,
         Labels: {
           "com.deployment-platform.managed": "true",
           "com.deployment-platform.app-name": name

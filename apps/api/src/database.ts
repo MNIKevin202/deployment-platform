@@ -2,6 +2,16 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { runMigrations } from "./migrations/index.js";
+import { createEnvironmentRepository } from "./environment-database.js";
+
+export type {
+  StoredGlobalEnvVar,
+  StoredAppEnvVar,
+  CreateGlobalEnvVarInput,
+  UpdateGlobalEnvVarInput,
+  CreateAppEnvVarInput,
+  UpdateAppEnvVarInput
+} from "./environment-database.js";
 
 export interface StoredApp {
   id: number;
@@ -17,6 +27,7 @@ export interface StoredApp {
   createdAt: string;
   updatedAt: string;
   lastDeployedAt: string | null;
+  environmentTouchedAt: string | null;
 }
 
 interface AppRow {
@@ -33,6 +44,7 @@ interface AppRow {
   created_at: string;
   updated_at: string;
   last_deployed_at: string | null;
+  environment_touched_at: string | null;
 }
 
 const APP_COLUMNS = `
@@ -48,7 +60,8 @@ const APP_COLUMNS = `
   restart_policy,
   created_at,
   updated_at,
-  last_deployed_at
+  last_deployed_at,
+  environment_touched_at
 `;
 
 function mapApp(row: AppRow): StoredApp {
@@ -65,7 +78,8 @@ function mapApp(row: AppRow): StoredApp {
     restartPolicy: row.restart_policy,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    lastDeployedAt: row.last_deployed_at
+    lastDeployedAt: row.last_deployed_at,
+    environmentTouchedAt: row.environment_touched_at
   };
 }
 
@@ -230,6 +244,18 @@ export function createAppDatabase(databasePath: string) {
     db.prepare(`DELETE FROM apps WHERE id = ?`).run(id);
   }
 
+  function touchAppEnvironment(id: number): void {
+    db.prepare(
+      `UPDATE apps SET environment_touched_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(id);
+  }
+
+  function touchAllAppsEnvironment(): void {
+    db.exec(
+      `UPDATE apps SET environment_touched_at = CURRENT_TIMESTAMP`
+    );
+  }
+
   function healthCheck(): boolean {
     const result = db.prepare("SELECT 1 AS healthy").get() as {
       healthy: number;
@@ -241,6 +267,8 @@ export function createAppDatabase(databasePath: string) {
   function close(): void {
     db.close();
   }
+
+  const environmentRepository = createEnvironmentRepository(db);
 
   return {
     db,
@@ -255,8 +283,11 @@ export function createAppDatabase(databasePath: string) {
     updateAppDomain,
     updateAppImage,
     deleteApp,
+    touchAppEnvironment,
+    touchAllAppsEnvironment,
     healthCheck,
-    close
+    close,
+    ...environmentRepository
   };
 }
 
