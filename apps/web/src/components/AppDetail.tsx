@@ -725,7 +725,15 @@ export default function AppDetail({
           <dl className="app-detail-grid">
             <div>
               <dt>Public domain</dt>
-              <dd>{detail.domain ?? "Not assigned"}</dd>
+              <dd>
+                {detail.domain ? (
+                  <a className="public-domain-link" href={`https://${detail.domain}`} target="_blank" rel="noopener noreferrer">
+                    {detail.domain}
+                  </a>
+                ) : (
+                  "Not assigned"
+                )}
+              </dd>
             </div>
 
             <div>

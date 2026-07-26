@@ -1,20 +1,93 @@
 import { mkdtempSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildMinimalEnv, runProcess, sanitizeProcessOutput } from "./process-runner.js";
+import { buildMinimalEnv, runProcess, sanitizeProcessOutput, type ProcessRunResult } from "./process-runner.js";
+
+/**
+ * Safe, structured facts about why a clone-related process failed —
+ * everything a caller needs to persist a useful deployment event without
+ * ever needing the raw stderr/stdout (which may still contain repository
+ * path fragments or other noise even after sanitization, so it is
+ * deliberately never included here — only short, capped summaries are).
+ * Never carries a token, header, credential-helper output, or temp
+ * directory path.
+ */
+export interface CloneDiagnostics {
+  stage: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  aborted: boolean;
+  /** False only when the process never actually started (e.g. git is not installed). */
+  processStarted: boolean;
+  spawnErrorCode?: string;
+  sanitizedStderrSummary?: string;
+  sanitizedStdoutSummary?: string;
+}
 
 export class CloneError extends Error {
   readonly stage: string;
+  readonly diagnostics: CloneDiagnostics;
 
-  constructor(message: string, stage: string) {
+  constructor(message: string, stage: string, diagnostics: CloneDiagnostics) {
     super(message);
     this.name = "CloneError";
     this.stage = stage;
+    this.diagnostics = diagnostics;
   }
+}
+
+const MAX_SUMMARY_LENGTH = 300;
+
+/** Collapses to a single line and caps length — for event metadata, never for display of full logs. */
+function summarize(text: string): string | undefined {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (!collapsed) {
+    return undefined;
+  }
+  return collapsed.length > MAX_SUMMARY_LENGTH ? `${collapsed.slice(0, MAX_SUMMARY_LENGTH)}…` : collapsed;
+}
+
+/** For failures that happen before any process is ever spawned (validation errors). */
+function noProcessDiagnostics(stage: string): CloneDiagnostics {
+  return {
+    stage,
+    exitCode: null,
+    signal: null,
+    timedOut: false,
+    aborted: false,
+    processStarted: false
+  };
+}
+
+function buildDiagnostics(stage: string, result: ProcessRunResult): CloneDiagnostics {
+  return {
+    stage,
+    exitCode: result.exitCode,
+    signal: result.signal,
+    timedOut: result.timedOut,
+    aborted: result.aborted,
+    processStarted: result.processStarted,
+    spawnErrorCode: result.spawnError?.code,
+    sanitizedStderrSummary: summarize(sanitizeProcessOutput(result.stderr)),
+    sanitizedStdoutSummary: result.exitCode !== 0 ? summarize(sanitizeProcessOutput(result.stdout)) : undefined
+  };
 }
 
 export const DEFAULT_CLONE_TIMEOUT_MS = 2 * 60 * 1000;
 export const DEFAULT_CLONE_MAX_OUTPUT_BYTES = 256 * 1024;
+
+/**
+ * The `git` executable to invoke — always "git" in production (resolved
+ * via PATH, same as every other call in this file). This exists purely
+ * so tests can inject a guaranteed-nonexistent absolute path to force a
+ * deterministic ENOENT, instead of relying on clearing PATH — which
+ * does not reliably work on every platform (macOS in particular falls
+ * back to a default system PATH containing a real `git` when the
+ * child's PATH is empty). Never exposed through any HTTP route/schema
+ * and never user-configurable — it is an internal/test-only override.
+ */
+export const DEFAULT_GIT_EXECUTABLE = "git";
 
 export interface CloneOptions {
   repositoryOwner: string;
@@ -25,6 +98,8 @@ export interface CloneOptions {
   timeoutMs?: number;
   maxOutputBytes?: number;
   signal?: AbortSignal;
+  /** Test-only override — see DEFAULT_GIT_EXECUTABLE. */
+  gitExecutable?: string;
 }
 
 export interface CloneResult {
@@ -42,12 +117,24 @@ export interface CloneResult {
 // a shell script we then execute.
 const SAFE_TOKEN_PATTERN = /^[A-Za-z0-9_]+$/;
 
+// Implements Git's credential-helper protocol correctly: git invokes the
+// helper as `<helper> get|store|erase`. Only `get` should ever emit
+// credentials — `store`/`erase` are git's normal post-clone caching
+// calls, and since this helper caches nothing itself, they are safely
+// ignored (git does not require a helper to act on them). Responding to
+// every operation with the same username/password lines (the previous
+// version's bug) is harmless in practice but not a correct
+// implementation of the protocol, so it is fixed here.
 function buildCredentialHelperScript(token: string): string {
   if (!SAFE_TOKEN_PATTERN.test(token)) {
-    throw new CloneError("Stored GitHub token has an unexpected shape", "preparing-checkout");
+    throw new CloneError(
+      "Stored GitHub token has an unexpected shape",
+      "preparing-checkout",
+      noProcessDiagnostics("preparing-checkout")
+    );
   }
 
-  return `#!/bin/sh\necho "username=x-access-token"\necho "password=${token}"\n`;
+  return `#!/bin/sh\nif [ "$1" = "get" ]; then\n  echo "username=x-access-token"\n  echo "password=${token}"\nfi\nexit 0\n`;
 }
 
 /**
@@ -68,9 +155,14 @@ function buildCredentialHelperScript(token: string): string {
  */
 export async function cloneRepositoryBranch(options: CloneOptions): Promise<CloneResult> {
   if (options.branch.startsWith("-")) {
-    throw new CloneError("Branch name is not safe to pass to git", "preparing-checkout");
+    throw new CloneError(
+      "Branch name is not safe to pass to git",
+      "preparing-checkout",
+      noProcessDiagnostics("preparing-checkout")
+    );
   }
 
+  const gitExecutable = options.gitExecutable ?? DEFAULT_GIT_EXECUTABLE;
   const workDir = mkdtempSync(join(tmpdir(), "github-deploy-"));
   const checkoutDir = join(workDir, "repo");
   const isolatedHome = join(workDir, "home");
@@ -93,7 +185,7 @@ export async function cloneRepositoryBranch(options: CloneOptions): Promise<Clon
     });
 
     const cloneResult = await runProcess({
-      command: "git",
+      command: gitExecutable,
       args: [
         "-c",
         `credential.helper=${credentialHelperPath}`,
@@ -114,21 +206,37 @@ export async function cloneRepositoryBranch(options: CloneOptions): Promise<Clon
       signal: options.signal
     });
 
+    if (!cloneResult.processStarted) {
+      throw new CloneError(
+        describeSpawnFailure(cloneResult.spawnError?.code),
+        "cloning-repository",
+        buildDiagnostics("cloning-repository", cloneResult)
+      );
+    }
     if (cloneResult.timedOut) {
-      throw new CloneError("Cloning the repository timed out", "cloning-repository");
+      throw new CloneError(
+        "Cloning the repository timed out",
+        "cloning-repository",
+        buildDiagnostics("cloning-repository", cloneResult)
+      );
     }
     if (cloneResult.aborted) {
-      throw new CloneError("Cloning the repository was cancelled", "cloning-repository");
+      throw new CloneError(
+        "Cloning the repository was cancelled",
+        "cloning-repository",
+        buildDiagnostics("cloning-repository", cloneResult)
+      );
     }
     if (cloneResult.exitCode !== 0) {
       throw new CloneError(
-        describeCloneFailure(cloneResult.exitCode, sanitizeProcessOutput(cloneResult.stderr)),
-        "cloning-repository"
+        describeCloneFailure(options.branch, cloneResult.exitCode, sanitizeProcessOutput(cloneResult.stderr)),
+        "cloning-repository",
+        buildDiagnostics("cloning-repository", cloneResult)
       );
     }
 
     const revParseResult = await runProcess({
-      command: "git",
+      command: gitExecutable,
       args: ["-C", checkoutDir, "rev-parse", "HEAD"],
       cwd: checkoutDir,
       env,
@@ -136,8 +244,19 @@ export async function cloneRepositoryBranch(options: CloneOptions): Promise<Clon
       maxOutputBytes: 4096
     });
 
+    if (!revParseResult.processStarted) {
+      throw new CloneError(
+        describeSpawnFailure(revParseResult.spawnError?.code),
+        "cloning-repository",
+        buildDiagnostics("cloning-repository", revParseResult)
+      );
+    }
     if (revParseResult.exitCode !== 0 || !revParseResult.stdout.trim()) {
-      throw new CloneError("Unable to determine the cloned commit", "cloning-repository");
+      throw new CloneError(
+        "Unable to determine the cloned commit",
+        "cloning-repository",
+        buildDiagnostics("cloning-repository", revParseResult)
+      );
     }
 
     return { workDir, checkoutDir, commitSha: revParseResult.stdout.trim() };
@@ -147,20 +266,81 @@ export async function cloneRepositoryBranch(options: CloneOptions): Promise<Clon
   }
 }
 
-function describeCloneFailure(exitCode: number | null, sanitizedStderr: string): string {
+/** The process could not even be started — git itself, not the clone, is the problem. */
+export function describeSpawnFailure(spawnErrorCode: string | undefined): string {
+  if (spawnErrorCode === "ENOENT") {
+    return "Git executable was not found";
+  }
+  if (spawnErrorCode) {
+    return `Git could not be started (${spawnErrorCode})`;
+  }
+  return "Git could not be started";
+}
+
+export function describeCloneFailure(branch: string, exitCode: number | null, sanitizedStderr: string): string {
   if (/could not find remote branch|couldn't find remote ref/i.test(sanitizedStderr)) {
-    return "Branch does not exist on the remote repository";
+    return `Branch "${branch}" was not found`;
   }
   if (/repository not found/i.test(sanitizedStderr)) {
-    return "Repository is inaccessible with the connected GitHub account";
+    return "Repository was not found or access was denied";
   }
   if (/authentication failed|invalid username or password/i.test(sanitizedStderr)) {
-    return "GitHub rejected the stored credential while cloning";
+    return "GitHub authentication failed";
   }
-  return `git clone failed (exit code ${exitCode ?? "unknown"})`;
+  if (
+    /could not resolve host|network is unreachable|connection timed out|ssl certificate problem|unable to access|failed to connect/i.test(
+      sanitizedStderr
+    )
+  ) {
+    return "TLS/network failure while contacting GitHub";
+  }
+  if (exitCode !== null) {
+    return `Git clone exited with code ${exitCode}`;
+  }
+  return "Git clone failed for an unknown reason";
 }
 
 /** Removes the entire scratch directory — the checkout, the credential helper, everything. */
 export function cleanupCheckout(workDir: string): void {
   rmSync(workDir, { recursive: true, force: true });
+}
+
+export interface GitAvailability {
+  available: boolean;
+  version?: string;
+  reason?: string;
+}
+
+/**
+ * Runs `git --version` with a short timeout — used once at API startup
+ * (a clear, immediate signal in the logs rather than only discovering
+ * this the first time an operator tries to deploy) and can also be
+ * called immediately before a clone for the same clear, controlled
+ * error instead of a generic ENOENT-derived message.
+ *
+ * `gitExecutable` is a test-only override (see DEFAULT_GIT_EXECUTABLE) —
+ * production startup/preflight callers should never pass it, so they
+ * always get the real, PATH-resolved "git".
+ */
+export async function verifyGitAvailable(gitExecutable: string = DEFAULT_GIT_EXECUTABLE): Promise<GitAvailability> {
+  const result = await runProcess({
+    command: gitExecutable,
+    args: ["--version"],
+    env: buildMinimalEnv(),
+    timeoutMs: 5_000,
+    maxOutputBytes: 4096
+  });
+
+  if (!result.processStarted) {
+    return {
+      available: false,
+      reason: describeSpawnFailure(result.spawnError?.code)
+    };
+  }
+
+  if (result.exitCode !== 0) {
+    return { available: false, reason: `git --version exited with code ${result.exitCode}` };
+  }
+
+  return { available: true, version: result.stdout.trim() };
 }

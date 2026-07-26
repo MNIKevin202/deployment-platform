@@ -375,6 +375,16 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
                 </dd>
               </div>
               <div>
+                <dt>Build strategy</dt>
+                <dd>
+                  {source.buildStrategy && source.buildStrategy !== "unsupported"
+                    ? STRATEGY_INFO[source.buildStrategy].title
+                    : source.buildStrategy === "unsupported"
+                      ? "Unsupported"
+                      : "Not inspected yet"}
+                </dd>
+              </div>
+              <div>
                 <dt>Auto deploy</dt>
                 <dd>{source.autoDeploy ? "Enabled" : "Disabled"} (coming in a later phase)</dd>
               </div>
@@ -523,16 +533,24 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
             setInspection(null);
             setShowLinkDialog(false);
 
-            if (outcome.deployed) {
+            if (outcome.inspectionFailed) {
+              // The source row is saved either way, but the mandatory
+              // authoritative re-inspection that follows a save did not
+              // succeed — deployment is never started in this case (see
+              // saveAndInspect/saveAndDeploy above).
+              setNotice(
+                `Source configuration saved, but inspecting it afterward failed: ${outcome.inspectionFailed}. Use "Inspect Repository" below to retry before deploying.`
+              );
+            } else if (outcome.deployed) {
               setDeployInProgress(true);
-              setNotice("Source configuration saved and a deployment has started — see progress below.");
+              setNotice("Source configuration saved, inspected, and a deployment has started — see progress below.");
             } else if (outcome.deployStartError) {
               setNotice(
-                `Source configuration saved, but the deployment could not be started automatically: ${outcome.deployStartError}. Use "Deploy from GitHub" below to retry.`
+                `Source configuration saved and inspected, but the deployment could not be started automatically: ${outcome.deployStartError}. Use "Deploy from GitHub" below to retry.`
               );
             } else {
               setNotice(
-                'Source configuration saved. This application is not yet serving repository code — use "Deploy from GitHub" below when you\'re ready.'
+                'Source configuration saved and inspected. This application is not yet serving repository code — use "Deploy from GitHub" below when you\'re ready.'
               );
             }
           }}
@@ -619,6 +637,9 @@ function InspectionResultCard({ inspection }: { inspection: RepositoryInspection
 interface SaveOutcome {
   deployed: boolean;
   deployStartError?: string;
+  /** Set when the save itself succeeded but the mandatory, authoritative
+   * server-side re-inspection that follows it did not. */
+  inspectionFailed?: string;
 }
 
 interface LinkRepositoryDialogProps {
@@ -921,6 +942,43 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
     return result.source;
   };
 
+  interface SaveAndInspectResult {
+    source: AppSourceInfo;
+    inspectionOk: boolean;
+    inspectionError?: string;
+  }
+
+  // The wizard's own pre-save inspection (the "Inspect" step above) is
+  // only a preview — browser-supplied inspection data is never trusted
+  // as the persisted, authoritative result. After every save, this calls
+  // the existing per-app inspection endpoint, which re-inspects the
+  // repository from the server and persists detected_project_type/
+  // build_strategy/latest_remote_commit_sha itself. Saving the
+  // configuration always resets those fields to null server-side (see
+  // app-source-database.ts's upsertAppSource), so re-fetching the source
+  // after this succeeds is what makes "Detected type" show the real
+  // value instead of "Not inspected yet".
+  const saveAndInspect = async (): Promise<SaveAndInspectResult> => {
+    const saved = await saveSource();
+
+    const inspectResponse = await fetch(`/api/apps/${appId}/source/inspect`, { method: "POST" });
+    const inspectResult = (await inspectResponse.json().catch(() => ({}))) as Partial<InspectSourceResponse>;
+
+    if (!inspectResponse.ok || !inspectResult.success) {
+      return {
+        source: saved,
+        inspectionOk: false,
+        inspectionError: inspectResult.message || "Unable to inspect the repository after saving"
+      };
+    }
+
+    const refreshedResponse = await fetch(`/api/apps/${appId}/source`);
+    const refreshedResult = (await refreshedResponse.json().catch(() => ({}))) as Partial<AppSourceResponse>;
+    const refreshedSource = refreshedResponse.ok && refreshedResult.source ? refreshedResult.source : saved;
+
+    return { source: refreshedSource, inspectionOk: true };
+  };
+
   const saveWithoutDeploying = async () => {
     if (saving) {
       return;
@@ -929,8 +987,8 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
       setSaving(true);
       setPendingAction("save");
       setSaveError("");
-      const saved = await saveSource();
-      onSaved(saved, { deployed: false });
+      const { source, inspectionOk, inspectionError } = await saveAndInspect();
+      onSaved(source, { deployed: false, inspectionFailed: inspectionOk ? undefined : inspectionError });
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "Unable to save source configuration");
     } finally {
@@ -948,10 +1006,14 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
       setPendingAction("deploy");
       setSaveError("");
 
-      // The source must be saved successfully before any deployment is
-      // ever started — a save failure here throws and no deploy call is
-      // made.
-      const saved = await saveSource();
+      // The source must be saved AND authoritatively re-inspected — both
+      // successfully — before any deployment is ever started.
+      const { source, inspectionOk, inspectionError } = await saveAndInspect();
+
+      if (!inspectionOk) {
+        onSaved(source, { deployed: false, inspectionFailed: inspectionError });
+        return;
+      }
 
       const deployResponse = await fetch(`/api/apps/${appId}/deploy/github`, {
         method: "POST",
@@ -961,11 +1023,11 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
       const deployResult = (await deployResponse.json().catch(() => ({}))) as Partial<GithubDeployResponse>;
 
       if (!deployResponse.ok || !deployResult.success) {
-        onSaved(saved, { deployed: false, deployStartError: deployResult.message || "Unable to start deployment" });
+        onSaved(source, { deployed: false, deployStartError: deployResult.message || "Unable to start deployment" });
         return;
       }
 
-      onSaved(saved, { deployed: true });
+      onSaved(source, { deployed: true });
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "Unable to save source configuration");
     } finally {

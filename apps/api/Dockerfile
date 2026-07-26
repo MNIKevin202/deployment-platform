@@ -18,6 +18,12 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# git is required at runtime: github-deploy-service.ts shells out to it
+# (via process-runner.ts) to clone a GitHub source repository before
+# building it. ca-certificates is required for that clone to work over
+# HTTPS. Nothing else is installed — keep this image minimal.
+RUN apk add --no-cache git ca-certificates
+
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 

@@ -19,8 +19,56 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   "health-became-unhealthy": "Became unhealthy",
   "health-check-error": "Health check error",
   "routing-warning": "Routing warning",
-  "cleanup-warning": "Cleanup warning"
+  "cleanup-warning": "Cleanup warning",
+  "source-linked": "Source linked",
+  "source-updated": "Source updated",
+  "source-removed": "Source removed",
+  "source-validation-succeeded": "Source validated",
+  "source-validation-failed": "Source validation failed",
+  "github-deploy-started": "GitHub deploy started",
+  "github-deploy-progress": "GitHub deploy progress",
+  "github-deploy-succeeded": "GitHub deploy succeeded",
+  "github-deploy-failed": "GitHub deploy failed",
+  "github-deploy-rolled-back": "GitHub deploy rolled back"
 };
+
+// Keys are already flat, primitive-only, and pre-sanitized server-side
+// (see deployment-event-service.ts's sanitizeMetadata) before they ever
+// reach this component — this only decides how to *label* and *format*
+// each one for a readable card instead of a raw JSON dump.
+const METADATA_KEY_LABELS: Record<string, string> = {
+  stage: "Stage",
+  exitCode: "Exit code",
+  signal: "Signal",
+  timedOut: "Timed out",
+  aborted: "Aborted",
+  processStarted: "Process started",
+  spawnErrorCode: "Spawn error code",
+  stderrSummary: "Error detail",
+  stdoutSummary: "Output detail",
+  rolledBack: "Rolled back",
+  commitShortSha: "Commit",
+  imageTag: "Image tag"
+};
+
+function formatMetadataKey(key: string): string {
+  if (METADATA_KEY_LABELS[key]) {
+    return METADATA_KEY_LABELS[key];
+  }
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/^./, (char) => char.toUpperCase());
+}
+
+function formatMetadataValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "—";
+  }
+  if (typeof value === "boolean") {
+    return value ? "Yes" : "No";
+  }
+  return String(value);
+}
 
 const SEVERITY_TONES: Record<string, "positive" | "negative" | "neutral" | "warning"> = {
   info: "neutral",
@@ -166,9 +214,14 @@ export default function ActivityPanel({ appId }: ActivityPanelProps) {
                   {expandedId === event.id && event.metadata && (
                     <tr>
                       <td colSpan={5}>
-                        <pre className="event-metadata">
-                          {JSON.stringify(event.metadata, null, 2)}
-                        </pre>
+                        <dl className="wizard-review-grid">
+                          {Object.entries(event.metadata).map(([key, value]) => (
+                            <div key={key}>
+                              <dt>{formatMetadataKey(key)}</dt>
+                              <dd>{formatMetadataValue(value)}</dd>
+                            </div>
+                          ))}
+                        </dl>
                       </td>
                     </tr>
                   )}

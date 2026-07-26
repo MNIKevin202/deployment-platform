@@ -42,6 +42,7 @@ import { registerSourceRoutes } from "./routes/source.js";
 import { createGithubBuildDockerOps } from "./services/github-deploy-docker-ops.js";
 import type { GithubDeployDependencies } from "./services/github-deploy-service.js";
 import { registerGithubDeployRoutes } from "./routes/github-deploy.js";
+import { verifyGitAvailable } from "./services/github-clone-service.js";
 
 const dockerOps = createDockerOps(docker);
 
@@ -930,6 +931,21 @@ const start = async (): Promise<void> => {
       { routingStatus: startupRoutingStatus },
       "Failed to reconcile routing on startup"
     );
+  }
+
+  // Non-fatal: the API serves everything else fine without git — only
+  // GitHub deployments need it, and those already fail with a clear,
+  // specific error if it's missing. This just puts that fact in the
+  // startup logs immediately instead of only surfacing on the first
+  // deploy attempt.
+  const gitAvailability = await verifyGitAvailable();
+  if (!gitAvailability.available) {
+    app.log.error(
+      { reason: gitAvailability.reason },
+      "git is not available in this runtime image — GitHub deployments will fail until it is installed"
+    );
+  } else {
+    app.log.info({ version: gitAvailability.version }, "git is available for GitHub deployments");
   }
 
   healthCheckScheduler.start();

@@ -46,7 +46,7 @@ function unusedDockerOps(): GithubDeployDependencies["dockerOps"] {
 describe("deployFromGithub — guard clauses (no clone/build reached)", () => {
   let tempDir: string;
   let appDatabase: AppDatabase;
-  let recordedEvents: Array<{ eventType: string; message: string }>;
+  let recordedEvents: Array<{ eventType: string; message: string; metadata?: Record<string, unknown> }>;
   let recordEvent: RecordEventFn;
   let baseDeps: GithubDeployDependencies;
 
@@ -55,7 +55,7 @@ describe("deployFromGithub — guard clauses (no clone/build reached)", () => {
     appDatabase = createAppDatabase(join(tempDir, `${randomUUID()}.sqlite`));
     recordedEvents = [];
     recordEvent = (input) => {
-      recordedEvents.push({ eventType: input.eventType, message: input.message });
+      recordedEvents.push({ eventType: input.eventType, message: input.message, metadata: input.metadata });
     };
 
     baseDeps = {
@@ -155,5 +155,62 @@ describe("deployFromGithub — guard clauses (no clone/build reached)", () => {
     // The lock we (the test) hold must not have been touched by the
     // rejected attempt.
     assert.equal(appDatabase.isDeploymentLocked(app.id), true);
+  });
+
+  test("records safe, structured clone-failure diagnostics on the deployment event, not a vague message", async () => {
+    const app = makeApp("clone-fails");
+    appDatabase.upsertAppSource(app.id, {
+      provider: "github",
+      repositoryOwner: "octocat",
+      repositoryName: "hello-world",
+      repositoryFullName: "octocat/hello-world",
+      repositoryCloneUrl: "https://github.com/octocat/hello-world.git",
+      repositoryId: null,
+      repositoryVisibility: null,
+      branch: "main",
+      subdirectory: ".",
+      deploymentMode: "dockerfile",
+      dockerfilePath: "Dockerfile",
+      buildContext: ".",
+      containerPort: null,
+      autoDeploy: false
+    });
+
+    const githubClient: SourceProviderClient = {
+      ...unusedGithubClient(),
+      resolveBranchCommit: async () => "a".repeat(40),
+      listCommits: async () => ({ items: [], hasMore: false })
+    };
+
+    const deps: GithubDeployDependencies = {
+      ...baseDeps,
+      githubClient,
+      resolveCredential: () => ({ success: true, token: "fake_token_for_tests_only" }),
+      // A guaranteed-nonexistent absolute path deterministically forces
+      // ENOENT on every platform — unlike clearing PATH, which does not
+      // reliably work (macOS in particular falls back to a default
+      // system PATH containing a real `git` when the child's own PATH
+      // is empty). This exercises the real clone code path (spawn ->
+      // ENOENT -> CloneError -> GithubDeployError -> event metadata)
+      // without a real repository, token, or network call.
+      gitExecutable: "/definitely-not-present/deployment-platform-test-git"
+    };
+
+    const result = await deployFromGithub(deps, app.id);
+
+    assert.equal(result.success, false);
+    assert.equal(result.rolledBack, false);
+    assert.equal(result.message, "Git executable was not found");
+    assert.doesNotMatch(result.message, /exit code unknown/i);
+
+    const failedEvent = recordedEvents.find((e) => e.eventType === "github-deploy-failed");
+    assert.ok(failedEvent, "a github-deploy-failed event should have been recorded");
+    assert.equal(failedEvent?.metadata?.stage, "cloning-repository");
+    assert.equal(failedEvent?.metadata?.processStarted, false);
+    assert.equal(failedEvent?.metadata?.spawnErrorCode, "ENOENT");
+
+    const metadataJson = JSON.stringify(failedEvent?.metadata ?? {});
+    assert.ok(!metadataJson.includes("fake_token_for_tests_only"));
+    assert.ok(!/\/tmp\//.test(metadataJson));
   });
 });

@@ -45,13 +45,33 @@ export type DeployStage =
   | "cleaning-temporary-files"
   | "deployment-complete";
 
+/**
+ * Safe, structured diagnostics attached to a deploy-stage failure — the
+ * same shape as CloneDiagnostics (from github-clone-service.ts), but not
+ * imported directly since not every DeployStage failure originates from
+ * a clone-related process; this keeps the field set generic enough for
+ * any future stage that shells out to an external command.
+ */
+export interface DeployDiagnostics {
+  exitCode?: number | null;
+  signal?: string | null;
+  timedOut?: boolean;
+  aborted?: boolean;
+  processStarted?: boolean;
+  spawnErrorCode?: string;
+  sanitizedStderrSummary?: string;
+  sanitizedStdoutSummary?: string;
+}
+
 export class GithubDeployError extends Error {
   readonly stage: DeployStage;
+  readonly diagnostics?: DeployDiagnostics;
 
-  constructor(message: string, stage: DeployStage) {
+  constructor(message: string, stage: DeployStage, diagnostics?: DeployDiagnostics) {
     super(message);
     this.name = "GithubDeployError";
     this.stage = stage;
+    this.diagnostics = diagnostics;
   }
 }
 
@@ -80,6 +100,8 @@ export interface GithubDeployDependencies {
   cloneTimeoutMs?: number;
   buildTimeoutMs?: number;
   maxLogBytes?: number;
+  /** Test-only override for the `git` executable — see DEFAULT_GIT_EXECUTABLE in github-clone-service.ts. Never set in production. */
+  gitExecutable?: string;
 }
 
 export function errorMessage(error: unknown): string {
@@ -255,10 +277,20 @@ export async function deployFromGithub(
       branch: source.branch,
       token: credential.token,
       timeoutMs: cloneTimeoutMs,
-      maxOutputBytes: maxLogBytes
+      maxOutputBytes: maxLogBytes,
+      gitExecutable: deps.gitExecutable
     }).catch((error) => {
       if (error instanceof CloneError) {
-        throw new GithubDeployError(error.message, error.stage as DeployStage);
+        throw new GithubDeployError(error.message, error.stage as DeployStage, {
+          exitCode: error.diagnostics.exitCode,
+          signal: error.diagnostics.signal,
+          timedOut: error.diagnostics.timedOut,
+          aborted: error.diagnostics.aborted,
+          processStarted: error.diagnostics.processStarted,
+          spawnErrorCode: error.diagnostics.spawnErrorCode,
+          sanitizedStderrSummary: error.diagnostics.sanitizedStderrSummary,
+          sanitizedStdoutSummary: error.diagnostics.sanitizedStdoutSummary
+        });
       }
       throw new GithubDeployError(errorMessage(error), "cloning-repository");
     });
@@ -479,6 +511,28 @@ export async function deployFromGithub(
   } catch (error) {
     const stage = error instanceof GithubDeployError ? error.stage : "deployment-complete";
     const message = error instanceof GithubDeployError ? error.message : errorMessage(error);
+    const diagnostics = error instanceof GithubDeployError ? error.diagnostics : undefined;
+
+    // Flat, primitive-only metadata — matches what deployment-event-
+    // service.ts's sanitizeMetadata expects and additionally defends
+    // against (it drops anything else, caps string length, and rejects
+    // secret-looking keys — this is deliberately never anything more than
+    // stage/exit-code/signal-shaped facts, never raw process output).
+    const eventMetadata: Record<string, unknown> = { stage };
+    if (diagnostics) {
+      if (diagnostics.exitCode !== undefined) eventMetadata.exitCode = diagnostics.exitCode;
+      if (diagnostics.signal !== undefined) eventMetadata.signal = diagnostics.signal;
+      if (diagnostics.timedOut !== undefined) eventMetadata.timedOut = diagnostics.timedOut;
+      if (diagnostics.aborted !== undefined) eventMetadata.aborted = diagnostics.aborted;
+      if (diagnostics.processStarted !== undefined) eventMetadata.processStarted = diagnostics.processStarted;
+      if (diagnostics.spawnErrorCode !== undefined) eventMetadata.spawnErrorCode = diagnostics.spawnErrorCode;
+      if (diagnostics.sanitizedStderrSummary !== undefined) {
+        eventMetadata.stderrSummary = diagnostics.sanitizedStderrSummary;
+      }
+      if (diagnostics.sanitizedStdoutSummary !== undefined) {
+        eventMetadata.stdoutSummary = diagnostics.sanitizedStdoutSummary;
+      }
+    }
 
     if (!anySwapPerformed) {
       // Nothing live was ever touched — clean up any replacement
@@ -492,7 +546,7 @@ export async function deployFromGithub(
         eventType: "github-deploy-failed",
         severity: "error",
         message: `GitHub deployment failed for "${app.name}" (stage: ${stage}): ${message}`,
-        metadata: { stage }
+        metadata: eventMetadata
       });
 
       return { success: false, rolledBack: false, message, stage };
@@ -530,7 +584,7 @@ export async function deployFromGithub(
       message: restored
         ? `GitHub deployment for "${app.name}" failed at stage "${stage}" (${message}); the previous version was restored.`
         : `GitHub deployment for "${app.name}" failed at stage "${stage}" (${message}); automatic rollback ALSO failed${restoreError ? `: ${restoreError}` : ""}. Manual attention required.`,
-      metadata: { stage }
+      metadata: { ...eventMetadata, rolledBack: restored }
     });
 
     return {

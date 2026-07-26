@@ -27,6 +27,13 @@ export interface ProcessRunOptions {
   signal?: AbortSignal;
 }
 
+export interface ProcessSpawnError {
+  /** Node's errno code, e.g. "ENOENT" when the executable does not exist. */
+  code?: string;
+  /** Sanitized — already run through sanitizeProcessOutput. */
+  message: string;
+}
+
 export interface ProcessRunResult {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
@@ -35,6 +42,17 @@ export interface ProcessRunResult {
   timedOut: boolean;
   aborted: boolean;
   truncated: boolean;
+  /**
+   * False only when the child process never actually started (e.g. the
+   * executable does not exist). Callers must check this before treating
+   * `exitCode: null` as "still ambiguous" — a `false` here means the
+   * failure happened before any process existed at all, which is a
+   * distinct case from a timeout, an abort, or a process that ran and
+   * exited nonzero.
+   */
+  processStarted: boolean;
+  /** Only set when the process could not be spawned at all. */
+  spawnError: ProcessSpawnError | null;
 }
 
 /** Minimal, explicit environment — PATH plus only what the caller asks for. */
@@ -108,12 +126,17 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
     let timedOut = false;
     let aborted = false;
     let settled = false;
+    let spawned = false;
 
     const child = spawn(options.command, options.args, {
       cwd: options.cwd,
       env: options.env,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"]
+    });
+
+    child.on("spawn", () => {
+      spawned = true;
     });
 
     const timer = setTimeout(() => {
@@ -175,20 +198,33 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
       resolvePromise(result);
     }
 
-    child.on("error", (error) => {
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      const sanitizedMessage = sanitizeProcessOutput(error.message);
       finish({
         exitCode: null,
         signal: null,
         stdout,
-        stderr: `${stderr}\n[process error: ${sanitizeProcessOutput(error.message)}]`,
+        stderr: `${stderr}\n[process error: ${sanitizedMessage}]`,
         timedOut,
         aborted,
-        truncated
+        truncated,
+        processStarted: spawned,
+        spawnError: { code: error.code, message: sanitizedMessage }
       });
     });
 
     child.on("close", (code, signal) => {
-      finish({ exitCode: code, signal, stdout, stderr, timedOut, aborted, truncated });
+      finish({
+        exitCode: code,
+        signal,
+        stdout,
+        stderr,
+        timedOut,
+        aborted,
+        truncated,
+        processStarted: true,
+        spawnError: null
+      });
     });
   });
 }

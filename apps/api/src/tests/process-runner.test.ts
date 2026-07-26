@@ -18,6 +18,8 @@ describe("runProcess", () => {
     assert.equal(result.stdout, "hello");
     assert.equal(result.timedOut, false);
     assert.equal(result.truncated, false);
+    assert.equal(result.processStarted, true);
+    assert.equal(result.spawnError, null);
   });
 
   test("captures a nonzero exit code without throwing", async () => {
@@ -74,7 +76,7 @@ describe("runProcess", () => {
     assert.equal(result.aborted, true);
   });
 
-  test("reports a process-spawn error without throwing", async () => {
+  test("reports a process-spawn error without throwing, distinct from a nonzero exit", async () => {
     const result = await runProcess({
       command: "this-binary-almost-certainly-does-not-exist-anywhere",
       args: [],
@@ -84,6 +86,15 @@ describe("runProcess", () => {
     });
 
     assert.equal(result.exitCode, null);
+    assert.equal(result.signal, null);
+    assert.equal(result.timedOut, false);
+    // The key structural distinction: this failure happened before any
+    // process existed at all — callers must be able to tell this apart
+    // from "the process ran and then failed."
+    assert.equal(result.processStarted, false);
+    assert.ok(result.spawnError);
+    assert.equal(result.spawnError?.code, "ENOENT");
+    assert.ok(!result.spawnError?.message.includes("secret"));
   });
 
   test("rejects synchronously when the working directory does not exist", async () => {
