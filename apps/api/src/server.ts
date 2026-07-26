@@ -6,6 +6,10 @@ import { registerAuthentication } from "./auth.js";
 import { createAppDatabase } from "./database.js";
 import { buildAppDomain } from "./domain.js";
 import { createRoutingService } from "./services/routing-service.js";
+import {
+  buildAppDetail,
+  type ContainerInspection
+} from "./services/app-detail-service.js";
 
 const appDatabase = createAppDatabase(
   process.env.DATABASE_PATH ?? "/data/deployment-platform.sqlite"
@@ -149,6 +153,15 @@ async function pullImage(image: string): Promise<void> {
   });
 }
 
+function getErrorStatusCode(error: unknown): number | null {
+  return typeof error === "object" &&
+    error !== null &&
+    "statusCode" in error &&
+    typeof error.statusCode === "number"
+    ? error.statusCode
+    : null;
+}
+
 function sendDockerError(
   reply: FastifyReply,
   error: unknown,
@@ -156,18 +169,36 @@ function sendDockerError(
 ) {
   app.log.error(error);
 
-  const statusCode =
-    typeof error === "object" &&
-    error !== null &&
-    "statusCode" in error &&
-    typeof error.statusCode === "number"
-      ? error.statusCode
-      : 500;
-
-  return reply.code(statusCode).send({
+  return reply.code(getErrorStatusCode(error) ?? 500).send({
     success: false,
     message: fallbackMessage
   });
+}
+
+async function inspectManagedContainer(
+  containerName: string
+): Promise<ContainerInspection | null> {
+  try {
+    const container = docker.getContainer(containerName);
+    const details = await container.inspect();
+
+    return {
+      id: details.Id,
+      state: {
+        running: details.State.Running,
+        status: details.State.Status,
+        exitCode: details.State.ExitCode,
+        startedAt: details.State.StartedAt,
+        finishedAt: details.State.FinishedAt
+      }
+    };
+  } catch (error) {
+    if (getErrorStatusCode(error) === 404) {
+      return null;
+    }
+
+    throw error;
+  }
 }
 
 app.get("/", async () => {
@@ -209,6 +240,52 @@ app.get("/apps", async () => {
       routingReady: isRoutingReady(storedApp.domain !== null)
     }))
   };
+});
+
+const appIdParamSchema = z.object({
+  id: z.coerce.number().int().positive()
+});
+
+interface AppIdParams {
+  id: string;
+}
+
+app.get<{ Params: AppIdParams }>("/apps/:id", async (request, reply) => {
+  const parsedParams = appIdParamSchema.safeParse(request.params);
+
+  if (!parsedParams.success) {
+    return reply.code(400).send({
+      success: false,
+      message: "Invalid app id"
+    });
+  }
+
+  const storedApp = appDatabase.getAppById(parsedParams.data.id);
+
+  if (!storedApp) {
+    return reply.code(404).send({
+      success: false,
+      message: "App not found"
+    });
+  }
+
+  try {
+    const inspection = storedApp.containerName
+      ? await inspectManagedContainer(storedApp.containerName)
+      : null;
+
+    return buildAppDetail(
+      storedApp,
+      inspection,
+      isRoutingReady(storedApp.domain !== null)
+    );
+  } catch (error) {
+    return sendDockerError(
+      reply,
+      error,
+      "Unable to load app details"
+    );
+  }
 });
 
 app.get("/routing/status", async () => {

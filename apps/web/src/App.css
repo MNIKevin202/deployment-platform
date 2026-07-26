@@ -105,12 +105,15 @@ h3 {
 .primary-button,
 .secondary-button,
 .container-actions button,
-.close-button {
+.close-button,
+.danger-button {
   border: 1px solid #343d60;
   border-radius: 10px;
   padding: 10px 14px;
   color: #f7f8ff;
   background: #171d31;
+  font: inherit;
+  cursor: pointer;
 }
 
 .primary-button {
@@ -132,13 +135,13 @@ h3 {
   padding: 8px 12px;
 }
 
-.container-actions .danger-button {
+.danger-button {
   border-color: #69343d;
   color: #ffb0b5;
   background: #2a171d;
 }
 
-.container-actions .danger-button:hover {
+.danger-button:hover {
   background: #3a1d25;
 }
 
@@ -607,5 +610,124 @@ h3 {
 
   .auth-brand {
     flex-direction: column;
+  }
+}
+
+.status-badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.status-badge.positive {
+  color: #70e4ad;
+  background: rgba(27, 124, 82, 0.22);
+}
+
+.status-badge.negative {
+  color: #ff9a9f;
+  background: rgba(145, 45, 55, 0.22);
+}
+
+.status-badge.neutral {
+  color: #aeb6ff;
+  background: rgba(83, 93, 255, 0.2);
+}
+
+.status-badge.warning {
+  color: #ffcf8a;
+  background: rgba(196, 139, 27, 0.2);
+}
+
+.confirm-modal {
+  width: min(460px, 100%);
+  border: 1px solid #303956;
+  border-radius: 18px;
+  padding: 24px;
+  background: #0d1220;
+  box-shadow: 0 30px 100px rgba(0, 0, 0, 0.55);
+}
+
+.confirm-modal h2 {
+  margin-bottom: 12px;
+}
+
+.confirm-modal-message {
+  color: #c8cee3;
+  line-height: 1.6;
+}
+
+.logs-state {
+  margin: 0;
+  padding: 22px;
+  color: #929bb5;
+}
+
+.logs-state.logs-error {
+  color: #ffbec3;
+}
+
+.app-detail {
+  margin-top: 28px;
+  display: grid;
+  gap: 20px;
+}
+
+.app-detail-header {
+  display: grid;
+  gap: 16px;
+}
+
+.app-detail-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.app-detail-title-row h1 {
+  margin: 0;
+  font-size: 2rem;
+}
+
+.app-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 18px;
+  margin: 0;
+  padding: 22px;
+  border: 1px solid #242c46;
+  border-radius: 16px;
+  background: rgba(17, 22, 39, 0.92);
+}
+
+.app-detail-grid div {
+  display: grid;
+  gap: 6px;
+}
+
+.app-detail-grid dt {
+  color: #7f89a5;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.app-detail-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #c8cee3;
+}
+
+.app-detail-actions {
+  margin-top: 0;
+}
+
+@media (max-width: 620px) {
+  .app-detail-title-row h1 {
+    font-size: 1.5rem;
   }
 }

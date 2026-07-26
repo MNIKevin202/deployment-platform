@@ -1,84 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 import { useAuth } from "./AuthGate";
-
-interface DockerInfo {
-  status: string;
-  containers: number;
-  containersRunning: number;
-  containersStopped: number;
-  images: number;
-  dockerVersion: string;
-  operatingSystem: string;
-  architecture: string;
-}
-
-interface ContainerPort {
-  IP?: string;
-  PrivatePort: number;
-  PublicPort?: number;
-  Type: string;
-}
-
-interface ContainerSummary {
-  id: string;
-  shortId: string;
-  names: string[];
-  image: string;
-  state: string;
-  status: string;
-  created: number;
-  ports: ContainerPort[];
-  labels: Record<string, string>;
-  isSystemContainer: boolean;
-  isManagedApp: boolean;
-}
-
-interface LogsResponse {
-  containerId: string;
-  logs: string;
-}
-
-interface StoredApp {
-  id: number;
-  name: string;
-  containerId: string | null;
-  containerName: string | null;
-  image: string;
-  containerPort: number;
-  domain: string | null;
-  status: string;
-  desiredStatus: string;
-  restartPolicy: string;
-  createdAt: string;
-  updatedAt: string;
-  lastDeployedAt: string | null;
-  routingReady: boolean;
-}
-
-interface StoredAppsResponse {
-  apps: StoredApp[];
-}
-
-interface ApiError {
-  message?: string;
-}
-
-interface CreateAppResponse {
-  success: boolean;
-  message: string;
-  app?: {
-    id: string;
-    shortId: string;
-    name: string;
-    containerName: string;
-    image: string;
-    containerPort: number;
-    state: string;
-  };
-}
-
-type ContainerAction = "start" | "stop" | "restart";
+import AppCard from "./components/AppCard";
+import AppDetail from "./components/AppDetail";
+import LogViewer from "./components/LogViewer";
+import type {
+  ApiError,
+  ContainerAction,
+  ContainerSummary,
+  CreateAppResponse,
+  DockerInfo,
+  StoredApp,
+  StoredAppsResponse
+} from "./types/api";
 
 function App() {
   const { username, logout } = useAuth();
@@ -88,7 +22,7 @@ function App() {
   const [storedApps, setStoredApps] = useState<StoredApp[]>([]);
   const [selectedContainer, setSelectedContainer] =
     useState<ContainerSummary | null>(null);
-  const [logs, setLogs] = useState("");
+  const [selectedAppId, setSelectedAppId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -239,34 +173,6 @@ function App() {
     }
   };
 
-  const openLogs = async (container: ContainerSummary) => {
-    try {
-      setError("");
-      setSelectedContainer(container);
-      setLogs("Loading logs...");
-
-      const response = await fetch(
-        `/api/containers/${container.id}/logs`
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          await getApiError(response, "Unable to load container logs")
-        );
-      }
-
-      const result = (await response.json()) as LogsResponse;
-      setLogs(result.logs || "No logs available.");
-    } catch (logsError) {
-      setLogs("");
-      setError(
-        logsError instanceof Error
-          ? logsError.message
-          : "Unable to load logs"
-      );
-    }
-  };
-
   const createApp = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -360,25 +266,7 @@ function App() {
     }
   };
 
-  const formatPorts = (ports: ContainerPort[]) => {
-    if (ports.length === 0) {
-      return "No exposed ports";
-    }
-
-    return ports
-      .map((port) =>
-        port.PublicPort
-          ? `${port.PublicPort}:${port.PrivatePort}/${port.Type}`
-          : `${port.PrivatePort}/${port.Type}`
-      )
-      .join(", ");
-  };
-
   const renderContainerCard = (container: ContainerSummary) => {
-    const isRunning = container.state === "running";
-    const containerName =
-      container.names[0] ?? container.shortId;
-
     const appName =
       container.labels["com.deployment-platform.app-name"];
     const storedApp = container.isManagedApp && appName
@@ -386,144 +274,60 @@ function App() {
       : undefined;
 
     return (
-      <article className="container-card" key={container.id}>
-        <div className="container-card-header">
-          <div>
-            <div className="title-row">
-              <h3>{containerName}</h3>
-
-              {container.isSystemContainer && (
-                <span className="type-badge system">Protected</span>
-              )}
-
-              {container.isManagedApp && (
-                <span className="type-badge managed">Managed App</span>
-              )}
-            </div>
-
-            <p>{container.image}</p>
-          </div>
-
-          <span
-            className={`status-pill ${
-              isRunning ? "running" : "stopped"
-            }`}
-          >
-            {container.state}
-          </span>
-        </div>
-
-        <dl className="container-details">
-          <div>
-            <dt>ID</dt>
-            <dd>{container.shortId}</dd>
-          </div>
-
-          <div>
-            <dt>Status</dt>
-            <dd>{container.status}</dd>
-          </div>
-
-          <div>
-            <dt>Ports</dt>
-            <dd>{formatPorts(container.ports)}</dd>
-          </div>
-
-          {storedApp?.domain && (
-            <div>
-              <dt>Domain</dt>
-              <dd>
-                {storedApp.domain}
-                {!storedApp.routingReady && (
-                  <span className="routing-badge not-ready">
-                    Routing not yet active
-                  </span>
-                )}
-              </dd>
-            </div>
-          )}
-        </dl>
-
-        <div className="container-actions">
-          {storedApp?.domain && (
-            <a
-              className="secondary-button open-app-button"
-              href={`https://${storedApp.domain}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open App
-            </a>
-          )}
-
-          {!container.isSystemContainer && !isRunning && (
-            <button
-              onClick={() => void runAction(container, "start")}
-              disabled={
-                actionLoading === `${container.id}:start`
-              }
-            >
-              {actionLoading === `${container.id}:start`
-                ? "Starting..."
-                : "Start"}
-            </button>
-          )}
-
-          {!container.isSystemContainer && isRunning && (
-            <button
-              onClick={() => void runAction(container, "stop")}
-              disabled={
-                actionLoading === `${container.id}:stop`
-              }
-            >
-              {actionLoading === `${container.id}:stop`
-                ? "Stopping..."
-                : "Stop"}
-            </button>
-          )}
-
-          {!container.isSystemContainer && (
-            <button
-              onClick={() => void runAction(container, "restart")}
-              disabled={
-                !isRunning ||
-                actionLoading === `${container.id}:restart`
-              }
-            >
-              {actionLoading === `${container.id}:restart`
-                ? "Restarting..."
-                : "Restart"}
-            </button>
-          )}
-
-          <button onClick={() => void openLogs(container)}>
-            Logs
-          </button>
-
-          {container.isManagedApp && (
-            <button
-              className="danger-button"
-              onClick={() => void deleteApp(container)}
-              disabled={
-                actionLoading === `${container.id}:delete`
-              }
-            >
-              {actionLoading === `${container.id}:delete`
-                ? "Deleting..."
-                : "Delete"}
-            </button>
-          )}
-        </div>
-
-        {container.isSystemContainer && (
-          <p className="protected-note">
-            Platform services are protected from stop, restart, and delete
-            actions.
-          </p>
-        )}
-      </article>
+      <AppCard
+        key={container.id}
+        container={container}
+        storedApp={storedApp}
+        actionLoading={actionLoading}
+        onAction={(targetContainer, action) =>
+          void runAction(targetContainer, action)
+        }
+        onOpenLogs={(targetContainer) =>
+          setSelectedContainer(targetContainer)
+        }
+        onDeleteApp={(targetContainer) => void deleteApp(targetContainer)}
+        onViewApp={(targetStoredApp) => {
+          setError("");
+          setNotice("");
+          setSelectedAppId(targetStoredApp.id);
+        }}
+      />
     );
   };
+
+  if (selectedAppId !== null) {
+    return (
+      <main className="dashboard">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">Deployment Platform</p>
+            <h1>App Detail</h1>
+          </div>
+
+          <div className="header-actions">
+            <span className="signed-in-user">
+              Signed in as <strong>{username}</strong>
+            </span>
+
+            <button className="secondary-button" onClick={() => void logout()}>
+              Log Out
+            </button>
+          </div>
+        </header>
+
+        <AppDetail
+          appId={selectedAppId}
+          onBack={() => setSelectedAppId(null)}
+          onDeleted={() => {
+            setSelectedAppId(null);
+            setNotice("App was deleted.");
+            void loadDashboard();
+          }}
+          onAppChanged={() => void loadDashboard()}
+        />
+      </main>
+    );
+  }
 
   return (
     <main className="dashboard">
@@ -795,34 +599,11 @@ function App() {
       )}
 
       {selectedContainer && (
-        <div
-          className="modal-backdrop"
-          onClick={() => setSelectedContainer(null)}
-        >
-          <section
-            className="logs-modal"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <header>
-              <div>
-                <p className="eyebrow">Container Logs</p>
-                <h2>
-                  {selectedContainer.names[0] ??
-                    selectedContainer.shortId}
-                </h2>
-              </div>
-
-              <button
-                className="close-button"
-                onClick={() => setSelectedContainer(null)}
-              >
-                Close
-              </button>
-            </header>
-
-            <pre>{logs}</pre>
-          </section>
-        </div>
+        <LogViewer
+          containerId={selectedContainer.id}
+          title={selectedContainer.names[0] ?? selectedContainer.shortId}
+          onClose={() => setSelectedContainer(null)}
+        />
       )}
     </main>
   );
