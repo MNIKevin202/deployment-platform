@@ -19,7 +19,23 @@ export type EventType =
   | "health-became-unhealthy"
   | "health-check-error"
   | "routing-warning"
-  | "cleanup-warning";
+  | "cleanup-warning"
+  | "source-linked"
+  | "source-updated"
+  | "source-removed"
+  | "source-validation-succeeded"
+  | "source-validation-failed"
+  /**
+   * GitHub connect/disconnect is a global integration event, not tied to
+   * any one app. app_deployment_events requires an app_id (FK, NOT NULL),
+   * so these two types are never actually written to that table in this
+   * phase — they exist here for a consistent, closed event vocabulary and
+   * for a future global-events surface. GitHub credential lifecycle is
+   * logged via the credential service's own logger instead; see
+   * github-credential-service.ts.
+   */
+  | "github-connected"
+  | "github-disconnected";
 
 export interface RecordEventInput {
   appId: number;

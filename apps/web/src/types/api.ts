@@ -368,3 +368,132 @@ export interface DeploymentEventsResponse {
   events: DeploymentEvent[];
   hasMore: boolean;
 }
+
+// ---------- GitHub integration (Phase 10) ----------
+
+export type SourceProviderName = "github";
+
+export type CredentialStatus =
+  | "not-configured"
+  | "connected"
+  | "encryption-key-missing"
+  | "encryption-key-invalid"
+  | "credential-unavailable";
+
+export interface GithubConnectionInfo {
+  success: boolean;
+  connected: boolean;
+  provider: SourceProviderName;
+  username: string | null;
+  lastValidatedAt: string | null;
+  credentialStatus: CredentialStatus;
+  permissions: string[] | null;
+  setupRequired: boolean;
+  message?: string;
+}
+
+export interface SourceAccount {
+  username: string;
+  htmlUrl: string;
+}
+
+export interface TestGithubTokenResponse {
+  success: boolean;
+  account?: SourceAccount;
+  message?: string;
+}
+
+export interface SourceRepository {
+  id: string;
+  owner: string;
+  name: string;
+  fullName: string;
+  private: boolean;
+  archived: boolean;
+  description: string | null;
+  defaultBranch: string;
+  htmlUrl: string;
+  pushedAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface GithubRepositoriesResponse {
+  success: boolean;
+  repositories: SourceRepository[];
+  hasMore: boolean;
+  message?: string;
+  credentialStatus?: CredentialStatus;
+}
+
+export interface GithubRepositoryResponse {
+  success: boolean;
+  repository?: SourceRepository;
+  message?: string;
+}
+
+export interface SourceBranch {
+  name: string;
+  commitSha: string;
+  protected: boolean;
+}
+
+export interface GithubBranchesResponse {
+  success: boolean;
+  branches: SourceBranch[];
+  hasMore: boolean;
+  message?: string;
+}
+
+export interface SourceCommit {
+  sha: string;
+  message: string;
+  authorName: string | null;
+  authorDate: string | null;
+  htmlUrl: string;
+}
+
+export interface GithubCommitsResponse {
+  success: boolean;
+  commits: SourceCommit[];
+  hasMore: boolean;
+  message?: string;
+}
+
+export type DeploymentMode = "prebuilt-image" | "dockerfile";
+export type SourceValidationStatus = "unknown" | "valid" | "invalid";
+
+export interface AppSourceInfo {
+  appId: number;
+  provider: SourceProviderName;
+  repositoryOwner: string;
+  repositoryName: string;
+  repositoryId: string | null;
+  repositoryVisibility: "public" | "private" | null;
+  branch: string;
+  deploymentMode: DeploymentMode;
+  dockerfilePath: string;
+  buildContext: string;
+  autoDeploy: boolean;
+  lastValidatedCommitSha: string | null;
+  lastValidatedAt: string | null;
+  validationStatus: SourceValidationStatus;
+  validationError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AppSourceResponse {
+  success: boolean;
+  source: AppSourceInfo | null;
+  message?: string;
+}
+
+export interface AppSourceConfigFormValues {
+  repositoryOwner: string;
+  repositoryName: string;
+  branch: string;
+  deploymentMode: DeploymentMode;
+  dockerfilePath: string;
+  buildContext: string;
+  autoDeploy: boolean;
+}

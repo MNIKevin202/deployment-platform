@@ -1,4 +1,9 @@
-export type Section = "overview" | "apps" | "environment" | "system";
+export type Section =
+  | "overview"
+  | "apps"
+  | "repositories"
+  | "environment"
+  | "system";
 
 interface SidebarProps {
   active: Section | null;
@@ -8,6 +13,7 @@ interface SidebarProps {
 const NAV_ITEMS: { key: Section; label: string; glyph: string }[] = [
   { key: "overview", label: "Overview", glyph: "◈" },
   { key: "apps", label: "Apps", glyph: "▣" },
+  { key: "repositories", label: "Repositories", glyph: "⌥" },
   { key: "environment", label: "Environment", glyph: "⚙" },
   { key: "system", label: "System", glyph: "◫" }
 ];

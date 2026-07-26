@@ -10,6 +10,8 @@ import AppDetail from "./components/AppDetail";
 import CreateAppWizard from "./components/CreateAppWizard";
 import OverviewPage from "./pages/OverviewPage";
 import AppsPage from "./pages/AppsPage";
+import RepositoriesPage from "./pages/RepositoriesPage";
+import RepositoryDetail from "./components/RepositoryDetail";
 import EnvironmentPage from "./pages/EnvironmentPage";
 import SystemPage from "./pages/SystemPage";
 import type {
@@ -26,6 +28,7 @@ import type {
 const SECTION_TITLES: Record<Section, string> = {
   overview: "Overview",
   apps: "Apps",
+  repositories: "Repositories",
   environment: "Environment",
   system: "System"
 };
@@ -33,6 +36,7 @@ const SECTION_TITLES: Record<Section, string> = {
 const SECTION_SUBTITLES: Record<Section, string> = {
   overview: "A snapshot of your platform and its managed applications.",
   apps: "Deploy and manage applications running on your server.",
+  repositories: "Connect GitHub and browse repositories available for source-linked apps.",
   environment: "Variables inherited by every managed app, unless overridden.",
   system: "Protected platform services and host information."
 };
@@ -42,6 +46,7 @@ function App() {
 
   const [section, setSection] = useState<Section>("overview");
   const [selectedAppId, setSelectedAppId] = useState<number | null>(null);
+  const [selectedRepo, setSelectedRepo] = useState<{ owner: string; name: string } | null>(null);
 
   const [dockerInfo, setDockerInfo] = useState<DockerInfo | null>(null);
   const [routingStatus, setRoutingStatus] = useState<RoutingStatus | null>(null);
@@ -255,6 +260,7 @@ function App() {
 
   const goToSection = (nextSection: Section) => {
     setSelectedAppId(null);
+    setSelectedRepo(null);
     setSection(nextSection);
   };
 
@@ -322,6 +328,16 @@ function App() {
 
       {section === "environment" ? (
         <EnvironmentPage refreshKey={environmentRefreshKey} />
+      ) : section === "repositories" ? (
+        selectedRepo ? (
+          <RepositoryDetail
+            owner={selectedRepo.owner}
+            name={selectedRepo.name}
+            onBack={() => setSelectedRepo(null)}
+          />
+        ) : (
+          <RepositoriesPage onSelectRepository={(owner, name) => setSelectedRepo({ owner, name })} />
+        )
       ) : loading ? (
         <div className="empty-state">Loading Docker information...</div>
       ) : section === "overview" ? (

@@ -35,6 +35,10 @@ import { registerHealthRoutes } from "./routes/health.js";
 import { registerMetricsRoutes } from "./routes/metrics.js";
 import { registerLogsRoutes } from "./routes/logs.js";
 import { registerEventRoutes } from "./routes/events.js";
+import { createGithubClient } from "./services/github-client.js";
+import { getDecryptedGithubToken } from "./services/github-credential-service.js";
+import { registerGithubRoutes } from "./routes/github.js";
+import { registerSourceRoutes } from "./routes/source.js";
 
 const dockerOps = createDockerOps(docker);
 
@@ -116,6 +120,33 @@ await registerHealthRoutes(app, { appDatabase, scheduler: healthCheckScheduler }
 await registerMetricsRoutes(app, { appDatabase, docker });
 await registerLogsRoutes(app, { appDatabase, docker });
 await registerEventRoutes(app, { appDatabase });
+
+/**
+ * GitHub remains read-only source-of-truth in this phase: this client is
+ * never used to clone, write, or otherwise mutate anything on GitHub.
+ * Logging here only ever receives the sanitized fields defined by
+ * SourceClientLogEvent — never a token, header, or response body.
+ */
+const githubClient = createGithubClient({
+  log: (event) => app.log.info(event, "GitHub API call")
+});
+
+const githubCredentialDeps = {
+  appDatabase,
+  githubClient,
+  logger: app.log
+};
+
+const appSourceServiceDeps = {
+  appDatabase,
+  githubClient,
+  resolveCredential: () => getDecryptedGithubToken({ appDatabase }),
+  recordEvent,
+  logger: app.log
+};
+
+await registerGithubRoutes(app, { credentialDeps: githubCredentialDeps, githubClient });
+await registerSourceRoutes(app, { appDatabase, sourceServiceDeps: appSourceServiceDeps });
 
 interface ContainerParams {
   id: string;

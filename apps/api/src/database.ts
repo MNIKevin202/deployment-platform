@@ -6,6 +6,8 @@ import { createEnvironmentRepository } from "./environment-database.js";
 import { createVolumeRepository } from "./volume-database.js";
 import { createHealthRepository } from "./health-database.js";
 import { createEventRepository } from "./event-database.js";
+import { createCredentialRepository } from "./credential-database.js";
+import { createAppSourceRepository } from "./app-source-database.js";
 
 export type {
   StoredGlobalEnvVar,
@@ -35,6 +37,19 @@ export type {
   CreateDeploymentEventInput,
   ListDeploymentEventsOptions
 } from "./event-database.js";
+
+export type {
+  StoredProviderCredential,
+  UpsertProviderCredentialInput
+} from "./credential-database.js";
+
+export type {
+  StoredAppSource,
+  DeploymentMode,
+  SourceValidationStatus,
+  UpsertAppSourceInput,
+  UpdateAppSourceValidationInput
+} from "./app-source-database.js";
 
 export interface StoredApp {
   id: number;
@@ -322,6 +337,8 @@ export function createAppDatabase(databasePath: string) {
   const volumeRepository = createVolumeRepository(db);
   const healthRepository = createHealthRepository(db);
   const eventRepository = createEventRepository(db);
+  const credentialRepository = createCredentialRepository(db);
+  const appSourceRepository = createAppSourceRepository(db);
 
   return {
     db,
@@ -344,7 +361,9 @@ export function createAppDatabase(databasePath: string) {
     ...environmentRepository,
     ...volumeRepository,
     ...healthRepository,
-    ...eventRepository
+    ...eventRepository,
+    ...credentialRepository,
+    ...appSourceRepository
   };
 }
 

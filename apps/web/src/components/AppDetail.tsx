@@ -22,6 +22,7 @@ import HealthPanel from "./HealthPanel";
 import MetricsPanel from "./MetricsPanel";
 import LogsPanel from "./LogsPanel";
 import ActivityPanel from "./ActivityPanel";
+import SourcePanel from "./SourcePanel";
 
 interface AppDetailProps {
   appId: number;
@@ -33,6 +34,7 @@ interface AppDetailProps {
 
 type DetailTab =
   | "overview"
+  | "source"
   | "environment"
   | "storage"
   | "health"
@@ -706,6 +708,7 @@ export default function AppDetail({
       <Tabs
         items={[
           { key: "overview", label: "Overview" },
+          { key: "source", label: "Source" },
           { key: "environment", label: "Environment" },
           { key: "storage", label: "Storage" },
           { key: "health", label: "Health" },
@@ -779,6 +782,8 @@ export default function AppDetail({
           </dl>
         </div>
       )}
+
+      {activeTab === "source" && <SourcePanel appId={appId} />}
 
       {activeTab === "environment" && (
         <div className="app-detail-tab-panel">

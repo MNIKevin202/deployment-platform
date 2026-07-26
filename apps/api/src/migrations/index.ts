@@ -5,6 +5,8 @@ import { migration003EnvironmentVariables } from "./003_environment_variables.js
 import { migration004AppVolumes } from "./004_app_volumes.js";
 import { migration005AppHealthChecks } from "./005_app_health_checks.js";
 import { migration006AppDeploymentEvents } from "./006_app_deployment_events.js";
+import { migration007ProviderCredentials } from "./007_provider_credentials.js";
+import { migration008AppSources } from "./008_app_sources.js";
 import type { Migration } from "./types.js";
 
 export type { Migration } from "./types.js";
@@ -15,7 +17,9 @@ const migrations: Migration[] = [
   migration003EnvironmentVariables,
   migration004AppVolumes,
   migration005AppHealthChecks,
-  migration006AppDeploymentEvents
+  migration006AppDeploymentEvents,
+  migration007ProviderCredentials,
+  migration008AppSources
 ];
 
 interface SchemaMigrationRow {

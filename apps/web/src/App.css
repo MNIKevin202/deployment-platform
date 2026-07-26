@@ -1091,6 +1091,126 @@ code {
   text-align: center;
 }
 
+/* ---------- Repositories ---------- */
+
+.repo-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.repo-filter-row input {
+  flex: 1 1 220px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  padding: 10px 12px;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+.repo-filter-row input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+.repo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+
+.repo-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  padding: 16px;
+}
+
+.repo-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.repo-card-title {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--color-text);
+  font-weight: 700;
+  font-size: 0.95rem;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.repo-card-title:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
+
+.repo-card-badges {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.repo-card-description {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.84rem;
+}
+
+.repo-card-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.repo-card-meta dt {
+  color: var(--color-text-faint);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.repo-card-meta dd {
+  margin: 2px 0 0;
+  font-size: 0.84rem;
+}
+
+.repo-select-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.repo-select-row.selected {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.linked-apps-list {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--color-text);
+  font-size: 0.88rem;
+  display: grid;
+  gap: 6px;
+}
+
 /* ---------- Health / Metrics / Logs / Activity panels ---------- */
 
 .form-actions-start {
