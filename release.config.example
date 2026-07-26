@@ -1,0 +1,34 @@
+# release.config.example
+#
+# Copy this file to "release.config" (same directory as release.sh) to
+# override any of the fixed defaults baked into release.sh. This file is
+# entirely optional — release.sh works with no release.config at all.
+#
+# release.config is parsed as plain KEY=VALUE lines (no shell execution,
+# no quoting rules beyond leading/trailing whitespace trimming). Lines
+# starting with # are comments. Any key not recognized by release.sh
+# causes it to refuse to start.
+#
+# This file must never contain secrets. It only ever holds the same kind
+# of infrastructure metadata that already appears, in plain text, at the
+# top of release.sh (hostnames, container names, paths). Tokens,
+# encryption keys, and passwords belong only in the VPS-side auth file
+# referenced by AUTH_FILE below — never here, and never committed.
+
+LOCAL_PROJECT_DIR=/Users/kevinpoulos/Documents/Projects/DeploymentPlatform
+VPS_HOST=94.130.73.188
+VPS_USER=kevin
+SSH_KEY=/Users/kevinpoulos/.ssh/hetzner_deployment
+VPS_SOURCE_DIR=/opt/deployment-platform/source
+AUTH_FILE=/opt/deployment-platform/config/auth.env
+CADDY_ROUTES_DIR=/opt/deployment-platform/caddy/routes
+API_CONTAINER=deployment-platform-api
+WEB_CONTAINER=deployment-platform-web
+API_IMAGE_REPOSITORY=deployment-platform-api
+WEB_IMAGE_REPOSITORY=deployment-platform-web
+PLATFORM_NETWORK=deployment-platform
+MANAGED_APPS_NETWORK=deployment-apps
+API_DATA_VOLUME=deployment-platform-api-data
+PUBLIC_URL_PANEL=https://panel.hookstats.com
+PUBLIC_URL_WIZARD_TEST=https://wizard-test.apps.hookstats.com
+PUBLIC_URL_SQLITE_TEST=https://sqlite-test.apps.hookstats.com
