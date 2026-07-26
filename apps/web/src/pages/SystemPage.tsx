@@ -9,6 +9,14 @@ interface SystemPageProps {
   onOpenLogs: (container: ContainerSummary) => void;
 }
 
+function formatMemory(bytes: number | undefined): string {
+  if (!bytes) {
+    return "Unknown";
+  }
+
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
 export default function SystemPage({
   systemContainers,
   dockerInfo,
@@ -40,6 +48,21 @@ export default function SystemPage({
           <div>
             <span>Architecture</span>
             <strong>{dockerInfo?.architecture ?? "Unknown"}</strong>
+          </div>
+
+          <div>
+            <span>CPU cores</span>
+            <strong>{dockerInfo?.cpuCount ?? "Unknown"}</strong>
+          </div>
+
+          <div>
+            <span>Total memory</span>
+            <strong>{formatMemory(dockerInfo?.memoryTotalBytes)}</strong>
+          </div>
+
+          <div>
+            <span>Images</span>
+            <strong>{dockerInfo?.images ?? "Unknown"}</strong>
           </div>
         </div>
       </section>

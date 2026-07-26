@@ -87,10 +87,10 @@ export default function OverviewPage({
           tone={dockerInfo?.status === "connected" ? "positive" : "negative"}
           hint={dockerInfo?.dockerVersion}
         />
-        <StatCard label="CPU Cores" value={dockerInfo ? String(dockerInfo.cpuCount) : "—"} />
         <StatCard
-          label="Total Memory"
-          value={dockerInfo ? formatMemory(dockerInfo.memoryTotalBytes) : "—"}
+          label="Host Resources"
+          value={dockerInfo ? `${dockerInfo.cpuCount} cores` : "—"}
+          hint={dockerInfo ? formatMemory(dockerInfo.memoryTotalBytes) : undefined}
         />
       </section>
 

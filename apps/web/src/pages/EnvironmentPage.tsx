@@ -8,6 +8,11 @@ interface GlobalEnvVarsResponse {
   variables: MaskedGlobalEnvVar[];
 }
 
+interface EnvironmentPageProps {
+  /** Bumped by the header's Refresh button to trigger a reload. */
+  refreshKey?: number;
+}
+
 async function readApiError(
   response: Response,
   fallbackMessage: string
@@ -20,7 +25,7 @@ async function readApiError(
   }
 }
 
-export default function EnvironmentPage() {
+export default function EnvironmentPage({ refreshKey = 0 }: EnvironmentPageProps) {
   const [variables, setVariables] = useState<MaskedGlobalEnvVar[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -60,7 +65,7 @@ export default function EnvironmentPage() {
 
   useEffect(() => {
     void loadVariables();
-  }, [loadVariables]);
+  }, [loadVariables, refreshKey]);
 
   const openCreateDialog = () => {
     setEditing(null);

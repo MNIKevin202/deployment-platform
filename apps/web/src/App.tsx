@@ -53,6 +53,8 @@ function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
+  const [environmentRefreshKey, setEnvironmentRefreshKey] = useState(0);
+
   const [showCreateApp, setShowCreateApp] = useState(false);
   const [appName, setAppName] = useState("");
   const [appImage, setAppImage] = useState("");
@@ -334,16 +336,21 @@ function App() {
     );
   }
 
-  const headerActions =
-    section === "overview" || section === "apps" ? (
-      <button
-        className="secondary-button"
-        type="button"
-        onClick={() => void loadDashboard()}
-      >
-        Refresh
-      </button>
-    ) : undefined;
+  const headerActions = (
+    <button
+      className="secondary-button"
+      type="button"
+      onClick={() => {
+        if (section === "environment") {
+          setEnvironmentRefreshKey((key) => key + 1);
+        } else {
+          void loadDashboard();
+        }
+      }}
+    >
+      Refresh
+    </button>
+  );
 
   return (
     <AppShell
@@ -362,7 +369,7 @@ function App() {
       {notice && <Notice kind="success">{notice}</Notice>}
 
       {section === "environment" ? (
-        <EnvironmentPage />
+        <EnvironmentPage refreshKey={environmentRefreshKey} />
       ) : loading ? (
         <div className="empty-state">Loading Docker information...</div>
       ) : section === "overview" ? (

@@ -406,7 +406,6 @@ export default function AppDetail({
                   : "neutral"
             }
           />
-          <StatusBadge label={`Desired: ${detail.desiredStatus}`} tone="neutral" />
           <StatusBadge
             label={canOpenApp ? "Routing ready" : "Routing not ready"}
             tone={canOpenApp ? "positive" : "warning"}
@@ -530,6 +529,11 @@ export default function AppDetail({
             <div>
               <dt>Restart policy</dt>
               <dd>{detail.restartPolicy}</dd>
+            </div>
+
+            <div>
+              <dt>Desired status</dt>
+              <dd>{detail.desiredStatus}</dd>
             </div>
 
             <div>

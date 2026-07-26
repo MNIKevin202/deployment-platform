@@ -46,29 +46,23 @@ export default function AppCard({
             {container.isSystemContainer && (
               <span className="type-badge system">Protected</span>
             )}
-
-            {container.isManagedApp && (
-              <span className="type-badge managed">Managed App</span>
-            )}
           </div>
 
           <p>{container.image}</p>
         </div>
 
-        <span className={`status-pill ${isRunning ? "running" : "stopped"}`}>
-          {container.state}
-        </span>
+        <div className="card-status">
+          <span className={`status-pill ${isRunning ? "running" : "stopped"}`}>
+            {container.state}
+          </span>
+          <span className="card-status-detail">{container.status}</span>
+        </div>
       </div>
 
       <dl className="container-details">
         <div>
           <dt>ID</dt>
           <dd>{container.shortId}</dd>
-        </div>
-
-        <div>
-          <dt>Status</dt>
-          <dd>{container.status}</dd>
         </div>
 
         <div>
@@ -91,17 +85,7 @@ export default function AppCard({
         )}
       </dl>
 
-      <div className="container-actions">
-        {container.isManagedApp && storedApp && onViewApp && (
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => onViewApp(storedApp)}
-          >
-            View App
-          </button>
-        )}
-
+      <div className="container-actions card-actions">
         {storedApp?.domain && storedApp.routingReady && (
           <a
             className="secondary-button open-app-button"
@@ -111,6 +95,16 @@ export default function AppCard({
           >
             Open App
           </a>
+        )}
+
+        {container.isManagedApp && storedApp && onViewApp && (
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => onViewApp(storedApp)}
+          >
+            View App
+          </button>
         )}
 
         {!container.isSystemContainer && !isRunning && (
