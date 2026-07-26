@@ -468,7 +468,8 @@ code {
 }
 
 .container-card {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
   border: 1px solid var(--color-border-soft);
   border-radius: var(--radius-md);
@@ -505,8 +506,17 @@ code {
   white-space: nowrap;
 }
 
+.card-actions {
+  /* Anchors the action row (and the protected-note beneath it, if present)
+     to the bottom of the card, so cards in the same grid row line up their
+     actions regardless of how much text wrapped above them. */
+  margin-top: auto;
+  padding-top: 2px;
+}
+
 .card-actions button,
 .card-actions .secondary-button,
+.card-actions .primary-button,
 .card-actions .danger-button {
   padding: 7px 12px;
   font-size: 0.8rem;
@@ -522,6 +532,7 @@ code {
 .title-row h3 {
   margin: 0;
   font-size: 1rem;
+  overflow-wrap: anywhere;
 }
 
 .container-details {

@@ -36,6 +36,14 @@ export default function AppCard({
   const isRunning = container.state === "running";
   const containerName = container.names[0] ?? container.shortId;
 
+  const canOpenApp = Boolean(storedApp?.domain && storedApp.routingReady);
+  const canStart = !container.isSystemContainer && !isRunning;
+
+  // At most one action is highlighted as "primary" per card — the single
+  // most useful next step for its current state — so hierarchy comes from
+  // color/weight, not from making buttons different sizes.
+  const highlightStart = canStart && !canOpenApp;
+
   return (
     <article className="container-card">
       <div className="container-card-header">
@@ -86,10 +94,10 @@ export default function AppCard({
       </dl>
 
       <div className="container-actions card-actions">
-        {storedApp?.domain && storedApp.routingReady && (
+        {canOpenApp && (
           <a
-            className="secondary-button open-app-button"
-            href={`https://${storedApp.domain}`}
+            className="primary-button open-app-button"
+            href={`https://${storedApp?.domain}`}
             target="_blank"
             rel="noreferrer"
           >
@@ -107,8 +115,9 @@ export default function AppCard({
           </button>
         )}
 
-        {!container.isSystemContainer && !isRunning && (
+        {canStart && (
           <button
+            className={highlightStart ? "primary-button" : undefined}
             onClick={() => onAction(container, "start")}
             disabled={actionLoading === `${container.id}:start`}
           >
