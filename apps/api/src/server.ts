@@ -25,6 +25,16 @@ import {
 import { createAppWithConfig } from "./services/app-creation-service.js";
 import { generateBuildBrief } from "./services/build-brief-service.js";
 import { getErrorStatusCode } from "./docker-errors.js";
+import { createEventRecorder } from "./services/deployment-event-service.js";
+import {
+  createHealthCheckScheduler,
+  createHttpHealthCheckClient
+} from "./services/health-check-service.js";
+import { decodeDockerLogs as sharedDecodeDockerLogs } from "./services/docker-logs-service.js";
+import { registerHealthRoutes } from "./routes/health.js";
+import { registerMetricsRoutes } from "./routes/metrics.js";
+import { registerLogsRoutes } from "./routes/logs.js";
+import { registerEventRoutes } from "./routes/events.js";
 
 const dockerOps = createDockerOps(docker);
 
@@ -84,6 +94,29 @@ await registerAuthentication(app);
 await registerEnvironmentRoutes(app, { appDatabase });
 await registerStorageRoutes(app, { appDatabase });
 
+const recordEvent = createEventRecorder(appDatabase, app.log);
+
+/**
+ * One centralized scheduler drives every managed app's health check.
+ * `isContainerRunning` resolves purely by the app's own stored container
+ * name — it never accepts or trusts anything from a request.
+ */
+const healthCheckScheduler = createHealthCheckScheduler({
+  appDatabase,
+  httpClient: createHttpHealthCheckClient(),
+  isContainerRunning: async (containerName) => {
+    const inspection = await inspectManagedContainer(containerName);
+    return inspection?.state.running ?? false;
+  },
+  recordEvent,
+  logger: app.log
+});
+
+await registerHealthRoutes(app, { appDatabase, scheduler: healthCheckScheduler });
+await registerMetricsRoutes(app, { appDatabase, docker });
+await registerLogsRoutes(app, { appDatabase, docker });
+await registerEventRoutes(app, { appDatabase });
+
 interface ContainerParams {
   id: string;
 }
@@ -92,33 +125,6 @@ const protectedContainerNames = new Set([
   "deployment-platform-api",
   "deployment-platform-web"
 ]);
-
-function decodeDockerLogs(buffer: Buffer): string {
-  const chunks: string[] = [];
-  let offset = 0;
-
-  while (offset + 8 <= buffer.length) {
-    const payloadLength = buffer.readUInt32BE(offset + 4);
-    const payloadStart = offset + 8;
-    const payloadEnd = payloadStart + payloadLength;
-
-    if (payloadEnd > buffer.length) {
-      break;
-    }
-
-    chunks.push(
-      buffer.subarray(payloadStart, payloadEnd).toString("utf8")
-    );
-
-    offset = payloadEnd;
-  }
-
-  if (chunks.length === 0) {
-    return buffer.toString("utf8");
-  }
-
-  return chunks.join("");
-}
 
 async function getContainerProtection(id: string) {
   const container = docker.getContainer(id);
@@ -215,11 +221,29 @@ function isRoutingReady(hasDomain: boolean): boolean {
   );
 }
 
+/**
+ * Cheap, DB-only summary for the dashboard's app cards — no Docker calls.
+ * Deliberately excludes live CPU/memory (that requires a Docker stats call
+ * per app and belongs on the app detail Metrics tab, polled only while
+ * visible, not fanned out across every card on every dashboard refresh).
+ */
+function summarizeAppHealth(appId: number): { state: string; lastCheckedAt: string | null } | null {
+  const health = appDatabase.getAppHealthCheck(appId);
+  return health ? { state: health.state, lastCheckedAt: health.lastCheckedAt } : null;
+}
+
+function latestEventSeverity(appId: number): string | null {
+  const [latest] = appDatabase.listDeploymentEvents(appId, { limit: 1 });
+  return latest?.severity ?? null;
+}
+
 app.get("/apps", async () => {
   return {
     apps: appDatabase.listApps().map((storedApp) => ({
       ...storedApp,
-      routingReady: isRoutingReady(storedApp.domain !== null)
+      routingReady: isRoutingReady(storedApp.domain !== null),
+      health: summarizeAppHealth(storedApp.id),
+      latestEventSeverity: latestEventSeverity(storedApp.id)
     }))
   };
 });
@@ -307,7 +331,8 @@ app.post<{ Params: AppIdParams }>(
       {
         appDatabase,
         dockerOps,
-        reconcileRouting: (db) => routingService.reconcile(db)
+        reconcileRouting: (db) => routingService.reconcile(db),
+        recordEvent
       },
       storedApp.id
     );
@@ -431,7 +456,8 @@ const creationServiceDeps = {
   dockerOps,
   buildDomain: buildAppDomain,
   reconcileRouting: (db: typeof appDatabase) => routingService.reconcile(db),
-  isRoutingReady
+  isRoutingReady,
+  recordEvent
 };
 
 /**
@@ -599,6 +625,35 @@ app.post(
   }
 );
 
+/**
+ * Best-effort lifecycle event for a container action — only recorded when
+ * the container belongs to a managed app the platform actually tracks.
+ * Never blocks or fails the action itself (recordEvent never throws).
+ */
+function recordContainerActionEvent(
+  protection: Awaited<ReturnType<typeof getContainerProtection>>,
+  eventType: "container-started" | "container-stopped" | "container-restarted",
+  actionLabel: string
+): void {
+  if (!protection.isManagedApp) {
+    return;
+  }
+
+  const appName = protection.labels["com.deployment-platform.app-name"];
+  const storedApp = appName ? appDatabase.getAppByName(appName) : null;
+
+  if (!storedApp) {
+    return;
+  }
+
+  recordEvent({
+    appId: storedApp.id,
+    eventType,
+    severity: "info",
+    message: `${storedApp.name} was ${actionLabel}`
+  });
+}
+
 app.post<{ Params: ContainerParams }>(
   "/containers/:id/start",
   async (request, reply) => {
@@ -608,6 +663,7 @@ app.post<{ Params: ContainerParams }>(
       );
 
       await protection.container.start();
+      recordContainerActionEvent(protection, "container-started", "started");
 
       return {
         success: true,
@@ -643,6 +699,7 @@ app.post<{ Params: ContainerParams }>(
       await protection.container.stop({
         t: 10
       });
+      recordContainerActionEvent(protection, "container-stopped", "stopped");
 
       return {
         success: true,
@@ -678,6 +735,7 @@ app.post<{ Params: ContainerParams }>(
       await protection.container.restart({
         t: 10
       });
+      recordContainerActionEvent(protection, "container-restarted", "restarted");
 
       return {
         success: true,
@@ -711,7 +769,7 @@ app.get<{ Params: ContainerParams }>(
 
       return {
         containerId: request.params.id,
-        logs: decodeDockerLogs(logs)
+        logs: sharedDecodeDockerLogs(logs)
       };
     } catch (error) {
       return sendDockerError(
@@ -804,6 +862,40 @@ const start = async (): Promise<void> => {
       "Failed to reconcile routing on startup"
     );
   }
+
+  healthCheckScheduler.start();
 };
+
+let shuttingDown = false;
+
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) {
+    return;
+  }
+
+  shuttingDown = true;
+  app.log.info({ signal }, "Shutting down");
+
+  // The scheduler's own timer is unref'd and never keeps the process alive
+  // on its own, but stopping it explicitly here still gives an orderly
+  // shutdown rather than leaving an in-flight check racing the exit.
+  healthCheckScheduler.stop();
+
+  try {
+    await app.close();
+  } catch (error) {
+    app.log.error(error, "Error while closing the server");
+  }
+
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});
+
+process.on("SIGINT", () => {
+  void shutdown("SIGINT");
+});
 
 await start();

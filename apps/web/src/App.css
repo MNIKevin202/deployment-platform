@@ -1091,6 +1091,64 @@ code {
   text-align: center;
 }
 
+/* ---------- Health / Metrics / Logs / Activity panels ---------- */
+
+.form-actions-start {
+  justify-content: flex-start;
+}
+
+.logs-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.logs-toolbar-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}
+
+.logs-toolbar-field {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px;
+}
+
+.logs-toolbar-field span {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.logs-toolbar-field .wizard-select {
+  width: auto;
+  padding: 7px 10px;
+}
+
+/* .logs-modal pre already wraps by default (white-space: pre-wrap); this
+   is the "Wrap lines" toggle turned off. */
+.logs-inline pre.logs-nowrap {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.event-metadata {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: #cbd5ef;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+
 /* ---------- Create App Wizard ---------- */
 
 .wizard-modal {

@@ -13,12 +13,15 @@ import type {
 } from "../types/api";
 import StatusBadge from "./StatusBadge";
 import ConfirmationDialog from "./ConfirmationDialog";
-import LogViewer from "./LogViewer";
 import Tabs from "./Tabs";
 import EnvVarTable from "./EnvVarTable";
 import EnvVarDialog from "./EnvVarDialog";
 import StorageTable from "./StorageTable";
 import StorageDialog from "./StorageDialog";
+import HealthPanel from "./HealthPanel";
+import MetricsPanel from "./MetricsPanel";
+import LogsPanel from "./LogsPanel";
+import ActivityPanel from "./ActivityPanel";
 
 interface AppDetailProps {
   appId: number;
@@ -28,7 +31,14 @@ interface AppDetailProps {
   onGoToGlobalEnvironment: () => void;
 }
 
-type DetailTab = "overview" | "environment" | "storage" | "logs";
+type DetailTab =
+  | "overview"
+  | "environment"
+  | "storage"
+  | "health"
+  | "metrics"
+  | "logs"
+  | "activity";
 
 async function readApiError(
   response: Response,
@@ -698,7 +708,10 @@ export default function AppDetail({
           { key: "overview", label: "Overview" },
           { key: "environment", label: "Environment" },
           { key: "storage", label: "Storage" },
-          { key: "logs", label: "Logs" }
+          { key: "health", label: "Health" },
+          { key: "metrics", label: "Metrics" },
+          { key: "logs", label: "Logs" },
+          { key: "activity", label: "Activity" }
         ]}
         active={activeTab}
         onChange={(key) => setActiveTab(key as DetailTab)}
@@ -936,21 +949,19 @@ export default function AppDetail({
         </div>
       )}
 
-      {activeTab === "logs" && (
-        <div className="app-detail-tab-panel">
-          {detail.containerId ? (
-            <LogViewer
-              containerId={detail.containerId}
-              title={detail.name}
-              variant="inline"
-            />
-          ) : (
-            <div className="empty-state">
-              Logs are unavailable because the container does not exist.
-            </div>
-          )}
-        </div>
+      {activeTab === "health" && (
+        <HealthPanel appId={appId} containerRunning={isRunning} />
       )}
+
+      {activeTab === "metrics" && (
+        <MetricsPanel appId={appId} containerRunning={isRunning} />
+      )}
+
+      {activeTab === "logs" && (
+        <LogsPanel appId={appId} appName={detail.name} containerRunning={isRunning} />
+      )}
+
+      {activeTab === "activity" && <ActivityPanel appId={appId} />}
 
       <EnvVarDialog
         open={showEnvDialog}

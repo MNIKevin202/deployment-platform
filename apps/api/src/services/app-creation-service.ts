@@ -10,6 +10,7 @@ import {
   generateUniqueVolumeName,
   isReservedVolumeName
 } from "./storage-service.js";
+import type { RecordEventFn } from "./deployment-event-service.js";
 
 export interface AppCreationEnvVarInput {
   key: string;
@@ -41,6 +42,7 @@ export interface CreateAppServiceDependencies {
     appDatabase: AppDatabase
   ) => Promise<RedeployReconcileResult>;
   isRoutingReady: (hasDomain: boolean) => boolean;
+  recordEvent: RecordEventFn;
 }
 
 export interface CreatedAppSummary {
@@ -133,6 +135,7 @@ async function cleanupAfterDockerFailure(
 async function failDockerCreation(
   appDatabase: AppDatabase,
   dockerOps: RedeployDockerOps,
+  recordEvent: RecordEventFn,
   appId: number,
   containerId: string | null,
   originalErrorMessage: string
@@ -143,6 +146,21 @@ async function failDockerCreation(
     appId,
     containerId
   );
+
+  // Only worth recording if the app row is still there to reference — once
+  // it's actually gone, an event pointing at it can never be read back.
+  if (cleanup.staleAppRecord) {
+    recordEvent({
+      appId,
+      eventType: "cleanup-warning",
+      severity: "error",
+      message: "App creation failed and its database record could not be automatically removed",
+      metadata: {
+        leftoverContainerId: cleanup.leftoverContainerId,
+        containerRemoved: cleanup.containerRemoved
+      }
+    });
+  }
 
   const cleanupParts: string[] = [];
 
@@ -184,7 +202,8 @@ export async function createAppWithConfig(
     dockerOps,
     buildDomain,
     reconcileRouting,
-    isRoutingReady
+    isRoutingReady,
+    recordEvent
   } = deps;
 
   const containerName = `app-${input.name}`;
@@ -355,7 +374,14 @@ export async function createAppWithConfig(
 
     containerId = created.id;
   } catch (error) {
-    return failDockerCreation(appDatabase, dockerOps, createdApp.id, null, errorMessage(error));
+    return failDockerCreation(
+      appDatabase,
+      dockerOps,
+      recordEvent,
+      createdApp.id,
+      null,
+      errorMessage(error)
+    );
   }
 
   if (!containerId) {
@@ -365,6 +391,7 @@ export async function createAppWithConfig(
     return failDockerCreation(
       appDatabase,
       dockerOps,
+      recordEvent,
       createdApp.id,
       null,
       "Container was not created"
@@ -390,6 +417,7 @@ export async function createAppWithConfig(
     return failDockerCreation(
       appDatabase,
       dockerOps,
+      recordEvent,
       createdApp.id,
       containerId,
       errorMessage(error)
@@ -420,6 +448,28 @@ export async function createAppWithConfig(
       message:
         "App was created, but its record could not be reloaded afterward."
     };
+  }
+
+  recordEvent({
+    appId: finalApp.id,
+    eventType: "app-created",
+    severity: "info",
+    message: `App "${finalApp.name}" was created`,
+    metadata: {
+      image: finalApp.image,
+      containerPort: finalApp.containerPort,
+      environmentVariableCount: envVars.length,
+      storageMountCount: resolvedVolumes.length
+    }
+  });
+
+  if (routingWarning) {
+    recordEvent({
+      appId: finalApp.id,
+      eventType: "routing-warning",
+      severity: "warning",
+      message: `Routing warning while creating "${finalApp.name}": ${routingWarning}`
+    });
   }
 
   return {

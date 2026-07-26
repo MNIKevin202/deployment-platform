@@ -4,6 +4,7 @@ import type { AppDatabase } from "../database.js";
 import { buildContainerEnvArray } from "./environment-service.js";
 import { buildVolumeMounts } from "./storage-service.js";
 import { getErrorStatusCode } from "../docker-errors.js";
+import type { RecordEventFn } from "./deployment-event-service.js";
 
 const PROTECTED_CONTAINER_NAMES = new Set([
   "deployment-platform-api",
@@ -142,6 +143,7 @@ export interface RedeployDependencies {
   reconcileRouting: (
     appDatabase: AppDatabase
   ) => Promise<RedeployReconcileResult>;
+  recordEvent: RecordEventFn;
 }
 
 export function errorMessage(error: unknown): string {
@@ -165,7 +167,7 @@ export async function redeployApp(
   deps: RedeployDependencies,
   appId: number
 ): Promise<RedeployResult> {
-  const { appDatabase, dockerOps, reconcileRouting } = deps;
+  const { appDatabase, dockerOps, reconcileRouting, recordEvent } = deps;
 
   const app = appDatabase.getAppById(appId);
 
@@ -184,13 +186,27 @@ export async function redeployApp(
   const exposedPort = `${app.containerPort}/tcp`;
   const tempContainerName = `${containerName}-redeploy-${randomBytes(4).toString("hex")}`;
 
+  recordEvent({
+    appId: app.id,
+    eventType: "redeploy-started",
+    severity: "info",
+    message: `Redeploy started for "${app.name}"`,
+    metadata: { image: app.image }
+  });
+
   try {
     await dockerOps.pullImage(app.image);
   } catch (error) {
-    return {
-      success: false,
-      message: `Unable to pull image "${app.image}": ${errorMessage(error)}`
-    };
+    const message = `Unable to pull image "${app.image}": ${errorMessage(error)}`;
+
+    recordEvent({
+      appId: app.id,
+      eventType: "redeploy-failed",
+      severity: "error",
+      message
+    });
+
+    return { success: false, message };
   }
 
   const volumes = appDatabase.listAppVolumes(app.id);
@@ -200,10 +216,16 @@ export async function redeployApp(
       await dockerOps.ensureVolume(volume.volumeName, app.name);
     }
   } catch (error) {
-    return {
-      success: false,
-      message: `Unable to prepare storage for this app: ${errorMessage(error)}. The existing app was not affected.`
-    };
+    const message = `Unable to prepare storage for this app: ${errorMessage(error)}. The existing app was not affected.`;
+
+    recordEvent({
+      appId: app.id,
+      eventType: "redeploy-failed",
+      severity: "error",
+      message
+    });
+
+    return { success: false, message };
   }
 
   const envArray = buildContainerEnvArray(
@@ -257,10 +279,16 @@ export async function redeployApp(
       await dockerOps.removeContainer(tempContainerName).catch(() => undefined);
     }
 
-    return {
-      success: false,
-      message: `Redeploy failed while starting the new container: ${errorMessage(error)}. The existing app was not affected.`
-    };
+    const message = `Redeploy failed while starting the new container: ${errorMessage(error)}. The existing app was not affected.`;
+
+    recordEvent({
+      appId: app.id,
+      eventType: "redeploy-failed",
+      severity: "error",
+      message
+    });
+
+    return { success: false, message };
   }
 
   // From here on, newContainerId is guaranteed non-null (the block above
@@ -277,23 +305,36 @@ export async function redeployApp(
     try {
       await dockerOps.removeContainer(confirmedNewContainerId);
 
-      return {
-        success: false,
-        message:
-          `The previous container could not be removed (${errorMessage(error)}), ` +
-          `so the redeploy was cancelled and the existing app was left running. ` +
-          `The unused replacement container was cleaned up automatically.`
-      };
+      const message =
+        `The previous container could not be removed (${errorMessage(error)}), ` +
+        `so the redeploy was cancelled and the existing app was left running. ` +
+        `The unused replacement container was cleaned up automatically.`;
+
+      recordEvent({
+        appId: app.id,
+        eventType: "redeploy-failed",
+        severity: "error",
+        message
+      });
+
+      return { success: false, message };
     } catch (cleanupError) {
-      return {
-        success: false,
-        message:
-          `The previous container could not be removed (${errorMessage(error)}), ` +
-          `so the redeploy was cancelled and the existing app was left running. ` +
-          `The unused replacement container (id ${confirmedNewContainerId}) could ` +
-          `not be cleaned up automatically (${errorMessage(cleanupError)}) — ` +
-          `remove it manually.`
-      };
+      const message =
+        `The previous container could not be removed (${errorMessage(error)}), ` +
+        `so the redeploy was cancelled and the existing app was left running. ` +
+        `The unused replacement container (id ${confirmedNewContainerId}) could ` +
+        `not be cleaned up automatically (${errorMessage(cleanupError)}) — ` +
+        `remove it manually.`;
+
+      recordEvent({
+        appId: app.id,
+        eventType: "redeploy-failed",
+        severity: "error",
+        message,
+        metadata: { leftoverContainerId: confirmedNewContainerId }
+      });
+
+      return { success: false, message };
     }
   }
 
@@ -304,17 +345,24 @@ export async function redeployApp(
   try {
     await dockerOps.renameContainer(confirmedNewContainerId, containerName);
   } catch (error) {
-    return {
-      success: false,
-      message:
-        `The previous container was removed, but the replacement could not ` +
-        `be renamed to "${containerName}" (${errorMessage(error)}). The app ` +
-        `is currently down. The replacement container (id ` +
-        `${confirmedNewContainerId}) is still running under a temporary name ` +
-        `— check Docker manually. The database was not updated, so retrying ` +
-        `redeploy may resolve this once no container is named ` +
-        `"${containerName}".`
-    };
+    const message =
+      `The previous container was removed, but the replacement could not ` +
+      `be renamed to "${containerName}" (${errorMessage(error)}). The app ` +
+      `is currently down. The replacement container (id ` +
+      `${confirmedNewContainerId}) is still running under a temporary name ` +
+      `— check Docker manually. The database was not updated, so retrying ` +
+      `redeploy may resolve this once no container is named ` +
+      `"${containerName}".`;
+
+    recordEvent({
+      appId: app.id,
+      eventType: "redeploy-failed",
+      severity: "error",
+      message,
+      metadata: { leftoverContainerId: confirmedNewContainerId }
+    });
+
+    return { success: false, message };
   }
 
   // The rename succeeded, so the replacement is confirmed to be the app's
@@ -342,15 +390,21 @@ export async function redeployApp(
     // Docker is actually fine at this point (the replacement is running as
     // the app's canonical container) — it's specifically the database write
     // that failed, so say so precisely rather than claiming success.
-    return {
-      success: false,
-      message:
-        `The replacement container (id ${finalContainerId}) is running as ` +
-        `"${containerName}", but the database could not be updated ` +
-        `(${errorMessage(error)}). The dashboard may show stale information ` +
-        `until this is resolved — retrying redeploy should recover cleanly.`,
-      containerId: finalContainerId
-    };
+    const message =
+      `The replacement container (id ${finalContainerId}) is running as ` +
+      `"${containerName}", but the database could not be updated ` +
+      `(${errorMessage(error)}). The dashboard may show stale information ` +
+      `until this is resolved — retrying redeploy should recover cleanly.`;
+
+    recordEvent({
+      appId: app.id,
+      eventType: "redeploy-failed",
+      severity: "error",
+      message,
+      metadata: { newContainerId: finalContainerId }
+    });
+
+    return { success: false, message, containerId: finalContainerId };
   }
 
   let routingWarning: string | null = null;
@@ -368,6 +422,23 @@ export async function redeployApp(
   const warnings = [statusWarning, routingWarning].filter(
     (warning): warning is string => warning !== null
   );
+
+  recordEvent({
+    appId: app.id,
+    eventType: "redeploy-succeeded",
+    severity: "info",
+    message: `Redeploy succeeded for "${app.name}"`,
+    metadata: { newContainerId: finalContainerId, image: app.image }
+  });
+
+  if (routingWarning) {
+    recordEvent({
+      appId: app.id,
+      eventType: "routing-warning",
+      severity: "warning",
+      message: `Routing warning after redeploying "${app.name}": ${routingWarning}`
+    });
+  }
 
   return {
     success: true,

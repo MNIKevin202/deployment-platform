@@ -31,7 +31,7 @@ describe("appDatabase", () => {
       .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
       .all() as { version: number; name: string }[];
 
-    assert.equal(rows.length, 4);
+    assert.equal(rows.length, 6);
     assert.equal(rows[0].version, 1);
     assert.equal(rows[0].name, "initial_schema");
     assert.equal(rows[1].version, 2);
@@ -40,6 +40,10 @@ describe("appDatabase", () => {
     assert.equal(rows[2].name, "environment_variables");
     assert.equal(rows[3].version, 4);
     assert.equal(rows[3].name, "app_volumes");
+    assert.equal(rows[4].version, 5);
+    assert.equal(rows[4].name, "app_health_checks");
+    assert.equal(rows[5].version, 6);
+    assert.equal(rows[5].name, "app_deployment_events");
 
     cleanup();
   });
@@ -50,10 +54,12 @@ describe("appDatabase", () => {
     const reopened = createAppDatabase(dbPath);
 
     const rows = reopened.db
-      .prepare("SELECT version FROM schema_migrations ORDER BY version")
-      .all() as { version: number }[];
+      .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
+      .all() as { version: number; name: string }[];
 
-    assert.equal(rows.length, 4);
+    assert.equal(rows.length, 6);
+    assert.equal(rows[rows.length - 1].version, 6);
+    assert.equal(rows[rows.length - 1].name, "app_deployment_events");
 
     reopened.close();
     rmSync(tempDir, { recursive: true, force: true });

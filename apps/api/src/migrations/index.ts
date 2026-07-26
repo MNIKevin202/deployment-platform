@@ -3,6 +3,8 @@ import { migration001InitialSchema } from "./001_initial_schema.js";
 import { migration002ExpandAppsColumns } from "./002_expand_apps_columns.js";
 import { migration003EnvironmentVariables } from "./003_environment_variables.js";
 import { migration004AppVolumes } from "./004_app_volumes.js";
+import { migration005AppHealthChecks } from "./005_app_health_checks.js";
+import { migration006AppDeploymentEvents } from "./006_app_deployment_events.js";
 import type { Migration } from "./types.js";
 
 export type { Migration } from "./types.js";
@@ -11,7 +13,9 @@ const migrations: Migration[] = [
   migration001InitialSchema,
   migration002ExpandAppsColumns,
   migration003EnvironmentVariables,
-  migration004AppVolumes
+  migration004AppVolumes,
+  migration005AppHealthChecks,
+  migration006AppDeploymentEvents
 ];
 
 interface SchemaMigrationRow {

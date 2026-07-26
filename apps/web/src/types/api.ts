@@ -60,6 +60,8 @@ export interface StoredApp {
   updatedAt: string;
   lastDeployedAt: string | null;
   routingReady: boolean;
+  health: { state: HealthState; lastCheckedAt: string | null } | null;
+  latestEventSeverity: DeploymentEventSeverity | null;
 }
 
 export interface StoredAppsResponse {
@@ -250,4 +252,119 @@ export interface BuildBriefResponse {
   success: boolean;
   domain: string;
   brief: string;
+}
+
+export type HealthState =
+  | "disabled"
+  | "unknown"
+  | "healthy"
+  | "unhealthy"
+  | "checking"
+  | "container-not-running"
+  | "error";
+
+export interface HealthCheckInfo {
+  appId: number;
+  configured: boolean;
+  enabled: boolean;
+  path: string;
+  expectedStatus: number;
+  intervalSeconds: number;
+  timeoutSeconds: number;
+  failureThreshold: number;
+  successThreshold: number;
+  state: HealthState;
+  lastCheckedAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastStatusCode: number | null;
+  lastLatencyMs: number | null;
+  consecutiveSuccesses: number;
+  consecutiveFailures: number;
+  lastError: string | null;
+}
+
+export interface HealthCheckFormValues {
+  enabled: boolean;
+  path: string;
+  expectedStatus: number;
+  intervalSeconds: number;
+  timeoutSeconds: number;
+  failureThreshold: number;
+  successThreshold: number;
+}
+
+export interface HealthCheckResponse {
+  success: boolean;
+  health: HealthCheckInfo;
+}
+
+export interface HealthCheckOutcome {
+  appId: number;
+  skipped: boolean;
+  reason?: string;
+  state?: HealthState;
+  changed: boolean;
+  /** False for a manual check run against a disabled configuration — the
+   * probe ran for real, but nothing was saved and persistent state stays
+   * "disabled". */
+  persisted: boolean;
+  statusCode?: number | null;
+  latencyMs?: number | null;
+  errorMessage?: string | null;
+}
+
+export interface RunHealthCheckResponse {
+  success: boolean;
+  outcome?: HealthCheckOutcome;
+  health?: HealthCheckInfo;
+  message?: string;
+}
+
+export interface ContainerMetrics {
+  cpuPercent: number | null;
+  memoryUsageBytes: number | null;
+  memoryLimitBytes: number | null;
+  memoryPercent: number | null;
+  networkRxBytes: number | null;
+  networkTxBytes: number | null;
+  blockReadBytes: number | null;
+  blockWriteBytes: number | null;
+  pids: number | null;
+}
+
+export interface MetricsResponse {
+  success: boolean;
+  containerRunning: boolean;
+  metrics: ContainerMetrics | null;
+  message?: string;
+}
+
+export interface AppLogsResponse {
+  success: boolean;
+  appId: number;
+  containerId: string | null;
+  retrievedAt: string;
+  lines: string[];
+  truncated: boolean;
+  containerRunning: boolean;
+  error?: string;
+}
+
+export type DeploymentEventSeverity = "info" | "warning" | "error";
+
+export interface DeploymentEvent {
+  id: number;
+  appId: number;
+  eventType: string;
+  severity: DeploymentEventSeverity;
+  message: string;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface DeploymentEventsResponse {
+  success: boolean;
+  events: DeploymentEvent[];
+  hasMore: boolean;
 }

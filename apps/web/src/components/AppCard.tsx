@@ -10,6 +10,44 @@ interface AppCardProps {
   onViewApp?: (storedApp: StoredApp) => void;
 }
 
+/**
+ * A running container is never labeled healthy on its own — health only
+ * ever comes from the app's own configured check, if it has one.
+ */
+function summarizeHealth(
+  isRunning: boolean,
+  health: StoredApp["health"] | undefined
+): { label: string; tone: "positive" | "negative" | "neutral" | "warning" } | null {
+  if (!isRunning) {
+    return null;
+  }
+
+  const state = health?.state;
+
+  if (!state || state === "disabled" || state === "unknown") {
+    return { label: "Health Unknown", tone: "neutral" };
+  }
+
+  if (state === "healthy") {
+    return { label: "Healthy", tone: "positive" };
+  }
+
+  if (state === "unhealthy" || state === "container-not-running") {
+    return { label: "Unhealthy", tone: "negative" };
+  }
+
+  return { label: "Health Check Error", tone: "negative" };
+}
+
+function formatLastChecked(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toLocaleTimeString();
+}
+
 function formatPorts(ports: ContainerPort[]): string {
   if (ports.length === 0) {
     return "No exposed ports";
@@ -63,7 +101,38 @@ export default function AppCard({
           <span className={`status-pill ${isRunning ? "running" : "stopped"}`}>
             {container.state}
           </span>
+
+          {container.isManagedApp &&
+            (() => {
+              const health = summarizeHealth(isRunning, storedApp?.health ?? undefined);
+              if (!health) {
+                return null;
+              }
+
+              return (
+                <span className={`status-badge compact ${health.tone}`}>{health.label}</span>
+              );
+            })()}
+
+          {(storedApp?.latestEventSeverity === "warning" ||
+            storedApp?.latestEventSeverity === "error") && (
+            <span
+              className={`status-badge compact ${
+                storedApp.latestEventSeverity === "error" ? "negative" : "warning"
+              }`}
+              title="A recent deployment or health event needs attention — see the Activity tab"
+            >
+              Recent Warning
+            </span>
+          )}
+
           <span className="card-status-detail">{container.status}</span>
+
+          {container.isManagedApp && formatLastChecked(storedApp?.health?.lastCheckedAt) && (
+            <span className="card-status-detail">
+              Checked {formatLastChecked(storedApp?.health?.lastCheckedAt)}
+            </span>
+          )}
         </div>
       </div>
 

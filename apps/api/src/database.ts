@@ -4,6 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import { runMigrations } from "./migrations/index.js";
 import { createEnvironmentRepository } from "./environment-database.js";
 import { createVolumeRepository } from "./volume-database.js";
+import { createHealthRepository } from "./health-database.js";
+import { createEventRepository } from "./event-database.js";
 
 export type {
   StoredGlobalEnvVar,
@@ -19,6 +21,20 @@ export type {
   CreateAppVolumeInput,
   UpdateAppVolumeInput
 } from "./volume-database.js";
+
+export type {
+  StoredAppHealthCheck,
+  HealthState,
+  UpsertHealthConfigInput,
+  UpdateHealthStateInput
+} from "./health-database.js";
+
+export type {
+  StoredDeploymentEvent,
+  DeploymentEventSeverity,
+  CreateDeploymentEventInput,
+  ListDeploymentEventsOptions
+} from "./event-database.js";
 
 export interface StoredApp {
   id: number;
@@ -304,6 +320,8 @@ export function createAppDatabase(databasePath: string) {
 
   const environmentRepository = createEnvironmentRepository(db);
   const volumeRepository = createVolumeRepository(db);
+  const healthRepository = createHealthRepository(db);
+  const eventRepository = createEventRepository(db);
 
   return {
     db,
@@ -324,7 +342,9 @@ export function createAppDatabase(databasePath: string) {
     healthCheck,
     close,
     ...environmentRepository,
-    ...volumeRepository
+    ...volumeRepository,
+    ...healthRepository,
+    ...eventRepository
   };
 }
 

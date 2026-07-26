@@ -11,6 +11,9 @@ import {
   type RedeployDockerOps,
   type RedeployReconcileResult
 } from "../services/redeploy-service.js";
+import type { RecordEventFn } from "../services/deployment-event-service.js";
+
+const fakeRecordEvent: RecordEventFn = () => {};
 
 interface FakeDockerOpsOptions {
   createContainerFails?: boolean;
@@ -139,7 +142,7 @@ describe("redeployApp", () => {
     const { ops } = createFakeDockerOps();
 
     const result = await redeployApp(
-      { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile },
+      { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile, recordEvent: fakeRecordEvent },
       999999
     );
 
@@ -158,7 +161,7 @@ describe("redeployApp", () => {
     const { ops, calls } = createFakeDockerOps();
 
     const result = await redeployApp(
-      { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile },
+      { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile, recordEvent: fakeRecordEvent },
       app.id
     );
 
@@ -201,7 +204,8 @@ describe("redeployApp", () => {
         reconcileRouting: async () => {
           reconcileCalled = true;
           return fakeReconcile();
-        }
+        },
+        recordEvent: fakeRecordEvent
       },
       app.id
     );
@@ -243,7 +247,7 @@ describe("redeployApp", () => {
     const { ops, calls } = createFakeDockerOps({ inspectRunning: false });
 
     const result = await redeployApp(
-      { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile },
+      { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile, recordEvent: fakeRecordEvent },
       app.id
     );
 
@@ -272,7 +276,7 @@ describe("redeployApp", () => {
     const { ops, calls } = createFakeDockerOps({ createContainerFails: true });
 
     const result = await redeployApp(
-      { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile },
+      { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile, recordEvent: fakeRecordEvent },
       app.id
     );
 
@@ -312,7 +316,7 @@ describe("redeployApp", () => {
       const { ops, calls } = createFakeDockerOps();
 
       const result = await redeployApp(
-        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile },
+        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile, recordEvent: fakeRecordEvent },
         app.id
       );
 
@@ -377,7 +381,7 @@ describe("redeployApp", () => {
       const { ops, calls } = createFakeDockerOps({ ensureVolumeFails: true });
 
       const result = await redeployApp(
-        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile },
+        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile, recordEvent: fakeRecordEvent },
         app.id
       );
 
@@ -405,7 +409,7 @@ describe("redeployApp", () => {
       const { ops, calls } = createFakeDockerOps();
 
       const result = await redeployApp(
-        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile },
+        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile, recordEvent: fakeRecordEvent },
         app.id
       );
 
@@ -432,7 +436,7 @@ describe("redeployApp", () => {
       const { ops, calls } = createFakeDockerOps({ removeOldFails: true });
 
       const result = await redeployApp(
-        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile },
+        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile, recordEvent: fakeRecordEvent },
         app.id
       );
 
@@ -468,7 +472,7 @@ describe("redeployApp", () => {
       });
 
       const result = await redeployApp(
-        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile },
+        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile, recordEvent: fakeRecordEvent },
         app.id
       );
 
@@ -496,7 +500,7 @@ describe("redeployApp", () => {
       const { ops } = createFakeDockerOps({ renameFails: true });
 
       const result = await redeployApp(
-        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile },
+        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile, recordEvent: fakeRecordEvent },
         app.id
       );
 
@@ -519,7 +523,7 @@ describe("redeployApp", () => {
       const { ops } = createFakeDockerOps({ finalInspectFails: true });
 
       const result = await redeployApp(
-        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile },
+        { appDatabase, dockerOps: ops, reconcileRouting: fakeReconcile, recordEvent: fakeRecordEvent },
         app.id
       );
 
@@ -555,7 +559,8 @@ describe("redeployApp", () => {
           dockerOps: ops,
           reconcileRouting: async () => {
             throw new Error("simulated Caddy exec crash");
-          }
+          },
+          recordEvent: fakeRecordEvent
         },
         app.id
       );
@@ -588,7 +593,8 @@ describe("redeployApp", () => {
           reconcileRouting: async () => ({
             lastReconcileSucceeded: false,
             lastError: "Caddy reload failed"
-          })
+          }),
+          recordEvent: fakeRecordEvent
         },
         app.id
       );
@@ -623,7 +629,8 @@ describe("redeployApp", () => {
         {
           appDatabase: throwingAppDatabase,
           dockerOps: ops,
-          reconcileRouting: fakeReconcile
+          reconcileRouting: fakeReconcile,
+          recordEvent: fakeRecordEvent
         },
         app.id
       );

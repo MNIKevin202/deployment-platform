@@ -10,6 +10,9 @@ import {
   type CreateAppServiceDependencies
 } from "../services/app-creation-service.js";
 import type { RedeployDockerOps } from "../services/redeploy-service.js";
+import type { RecordEventFn } from "../services/deployment-event-service.js";
+
+const fakeRecordEvent: RecordEventFn = () => {};
 
 interface FakeOpsSettings {
   pullFails?: boolean;
@@ -182,6 +185,7 @@ describe("createAppWithConfig", () => {
       buildDomain: (name) => `${name}.apps.hookstats.com`,
       reconcileRouting: fakeReconcileSuccess,
       isRoutingReady: fakeIsRoutingReady,
+      recordEvent: fakeRecordEvent,
       ...overrides
     };
   }
