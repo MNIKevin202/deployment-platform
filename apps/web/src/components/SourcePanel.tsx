@@ -3,8 +3,10 @@ import type {
   ApiError,
   AppSourceInfo,
   AppSourceResponse,
+  BuildStrategy,
   DeploymentMode,
   GithubBranchesResponse,
+  GithubCommitsResponse,
   GithubConnectionInfo,
   GithubDeployResponse,
   GithubDeployStatusResponse,
@@ -17,7 +19,7 @@ import type {
 import StatusBadge from "./StatusBadge";
 import ConfirmationDialog from "./ConfirmationDialog";
 
-const PROJECT_TYPE_LABELS: Record<string, string> = {
+export const PROJECT_TYPE_LABELS: Record<string, string> = {
   dockerfile: "Dockerfile project",
   nodejs: "Node.js",
   static: "Static site",
@@ -511,7 +513,7 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
           appId={appId}
           existing={source}
           onClose={() => setShowLinkDialog(false)}
-          onSaved={(saved) => {
+          onSaved={(saved, outcome) => {
             setSource(saved);
             // The saved config's build_strategy/detected_project_type are
             // already reset to null server-side on any config change —
@@ -520,7 +522,19 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
             // that no longer matches what was actually inspected.
             setInspection(null);
             setShowLinkDialog(false);
-            setNotice("Source configuration saved. Inspect the repository again before deploying.");
+
+            if (outcome.deployed) {
+              setDeployInProgress(true);
+              setNotice("Source configuration saved and a deployment has started — see progress below.");
+            } else if (outcome.deployStartError) {
+              setNotice(
+                `Source configuration saved, but the deployment could not be started automatically: ${outcome.deployStartError}. Use "Deploy from GitHub" below to retry.`
+              );
+            } else {
+              setNotice(
+                'Source configuration saved. This application is not yet serving repository code — use "Deploy from GitHub" below when you\'re ready.'
+              );
+            }
           }}
         />
       )}
@@ -602,22 +616,43 @@ function InspectionResultCard({ inspection }: { inspection: RepositoryInspection
   );
 }
 
+interface SaveOutcome {
+  deployed: boolean;
+  deployStartError?: string;
+}
+
 interface LinkRepositoryDialogProps {
   appId: number;
   existing: AppSourceInfo | null;
   onClose: () => void;
-  onSaved: (source: AppSourceInfo) => void;
+  onSaved: (source: AppSourceInfo, outcome: SaveOutcome) => void;
 }
 
-type WizardStep = "provider" | "repository" | "branch" | "mode" | "review";
+type WizardStep = "provider" | "repository" | "branch" | "inspect" | "deployment" | "review";
 
-const STEP_ORDER: WizardStep[] = ["provider", "repository", "branch", "mode", "review"];
+const STEP_ORDER: WizardStep[] = ["provider", "repository", "branch", "inspect", "deployment", "review"];
 const STEP_LABELS: Record<WizardStep, string> = {
   provider: "Provider",
   repository: "Repository",
   branch: "Branch",
-  mode: "Deployment",
+  inspect: "Inspect",
+  deployment: "Deployment",
   review: "Review"
+};
+
+const STRATEGY_INFO: Record<Exclude<BuildStrategy, "unsupported">, { title: string; description: string }> = {
+  dockerfile: {
+    title: "Dockerfile",
+    description: "Build using the Dockerfile committed in this repository."
+  },
+  nodejs: {
+    title: "Node.js",
+    description: "Use the platform-managed Node.js build strategy."
+  },
+  static: {
+    title: "Static site",
+    description: "Build or serve static files using the platform-controlled Nginx strategy."
+  }
 };
 
 function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkRepositoryDialogProps) {
@@ -635,18 +670,31 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
   const [branchesError, setBranchesError] = useState("");
   const [selectedBranch, setSelectedBranch] = useState(existing?.branch ?? "");
 
-  const [deploymentMode, setDeploymentMode] = useState<DeploymentMode>(
-    existing?.deploymentMode ?? "prebuilt-image"
-  );
   const [subdirectory, setSubdirectory] = useState(existing?.subdirectory ?? ".");
+
+  // Populated only by a successful "Inspect Repository" call — never
+  // invented client-side. Cleared automatically whenever repository,
+  // branch, or subdirectory changes (see the effect below), so a stale
+  // inspection from a different selection can never be reused.
+  const [inspection, setInspection] = useState<RepositoryInspectionResult | null>(null);
+  const [inspectedCommitSha, setInspectedCommitSha] = useState<string | null>(null);
+  const [latestCommitMessage, setLatestCommitMessage] = useState<string | null>(null);
+  const [inspecting, setInspecting] = useState(false);
+  const [inspectError, setInspectError] = useState("");
+
   const [dockerfilePath, setDockerfilePath] = useState(existing?.dockerfilePath ?? "Dockerfile");
   const [buildContext, setBuildContext] = useState(existing?.buildContext ?? ".");
   const [containerPort, setContainerPort] = useState(
     existing?.containerPort != null ? String(existing.containerPort) : ""
   );
-  const [autoDeploy, setAutoDeploy] = useState(existing?.autoDeploy ?? false);
+  // autoDeploy has no UI control (it is currently inert on the backend —
+  // no scheduler or webhook ever reads it) but the existing stored value
+  // is preserved across a save for backward compatibility rather than
+  // being silently reset to false.
+  const existingAutoDeploy = existing?.autoDeploy ?? false;
 
   const [saving, setSaving] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"save" | "deploy" | null>(null);
   const [saveError, setSaveError] = useState("");
 
   // GitHub's repository-listing endpoint has no name-search parameter, so
@@ -719,66 +767,210 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
     void loadBranches(repo);
   };
 
-  const goBack = () => {
-    const index = STEP_ORDER.indexOf(step);
-    if (index > 0) {
-      setStep(STEP_ORDER[index - 1]);
+  // Stale-inspection handling: any change to repository, branch, or
+  // subdirectory invalidates a prior inspection result outright — an
+  // inspection from one selection must never be reused for another.
+  useEffect(() => {
+    setInspection(null);
+    setInspectedCommitSha(null);
+    setLatestCommitMessage(null);
+    setInspectError("");
+  }, [selectedRepo?.fullName, selectedBranch, subdirectory]);
+
+  const runInspect = async () => {
+    if (!selectedRepo || !selectedBranch) {
+      return;
+    }
+
+    try {
+      setInspecting(true);
+      setInspectError("");
+
+      const [inspectResponse, commitsResponse] = await Promise.all([
+        fetch(
+          `/api/integrations/github/repositories/${selectedRepo.owner}/${selectedRepo.name}/inspect`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ branch: selectedBranch, subdirectory })
+          }
+        ),
+        fetch(
+          `/api/integrations/github/repositories/${selectedRepo.owner}/${selectedRepo.name}/commits?` +
+            new URLSearchParams({ branch: selectedBranch, page: "1", perPage: "1" }).toString()
+        )
+      ]);
+
+      const inspectResult = (await inspectResponse.json().catch(() => ({}))) as Partial<InspectSourceResponse>;
+
+      if (!inspectResponse.ok || !inspectResult.success) {
+        throw new Error(inspectResult.message || "Unable to inspect repository");
+      }
+
+      setInspection(inspectResult.inspection ?? null);
+      setInspectedCommitSha(inspectResult.commitSha ?? null);
+
+      // The commit message lookup is best-effort context only — the
+      // inspection result itself does not depend on it succeeding.
+      if (commitsResponse.ok) {
+        const commitsResult = (await commitsResponse.json().catch(() => null)) as GithubCommitsResponse | null;
+        setLatestCommitMessage(commitsResult?.commits?.[0]?.message ?? null);
+      } else {
+        setLatestCommitMessage(null);
+      }
+    } catch (error) {
+      setInspectError(error instanceof Error ? error.message : "Unable to inspect repository");
+      setInspection(null);
+      setInspectedCommitSha(null);
+      setLatestCommitMessage(null);
+    } finally {
+      setInspecting(false);
     }
   };
 
+  const recommendedStrategy = inspection?.recommendedStrategy ?? null;
+  const isUnsupported = inspection !== null && !inspection.supported;
+
+  const goBack = () => {
+    const index = STEP_ORDER.indexOf(step);
+    if (index <= 0) {
+      return;
+    }
+    // Unsupported repositories skip the Deployment step entirely (there is
+    // nothing to configure), so going back from Review must return to
+    // Inspect rather than to the skipped Deployment step.
+    if (step === "review" && isUnsupported) {
+      setStep("inspect");
+      return;
+    }
+    setStep(STEP_ORDER[index - 1]);
+  };
+
   const goNext = () => {
+    if (step === "inspect" && isUnsupported) {
+      setStep("review");
+      return;
+    }
     const index = STEP_ORDER.indexOf(step);
     if (index < STEP_ORDER.length - 1) {
       setStep(STEP_ORDER[index + 1]);
     }
   };
 
+  const nodejsStartScriptMissing =
+    recommendedStrategy === "nodejs" && inspection?.packageJson?.hasStartScript === false;
+
   const canContinue =
     step === "provider" ||
     (step === "repository" && selectedRepo !== null) ||
     (step === "branch" && selectedBranch.length > 0) ||
-    (step === "mode" &&
-      subdirectory.length > 0 &&
-      (deploymentMode === "prebuilt-image" || (dockerfilePath.length > 0 && buildContext.length > 0)));
+    (step === "inspect" && inspection !== null) ||
+    (step === "deployment" &&
+      recommendedStrategy !== null &&
+      recommendedStrategy !== "unsupported" &&
+      !nodejsStartScriptMissing &&
+      (recommendedStrategy !== "dockerfile" || (dockerfilePath.length > 0 && buildContext.length > 0)));
 
-  const submit = async () => {
-    if (!selectedRepo) {
-      return;
+  const buildSourcePayload = () => {
+    if (!selectedRepo || !recommendedStrategy) {
+      return null;
     }
 
+    // deploymentMode is the one field the backend actually persists and
+    // acts on for source-save validation (it decides whether Dockerfile
+    // existence is checked). The Node.js and static build strategies are
+    // always auto-detected fresh at deploy time from the real repository
+    // content (see repository-inspection-service.ts / github-deploy-
+    // service.ts) — there is no backend field to "select" them, so they
+    // both map to "prebuilt-image" here, which simply skips the
+    // Dockerfile-existence check that only makes sense for the Dockerfile
+    // strategy.
+    const deploymentMode: DeploymentMode = recommendedStrategy === "dockerfile" ? "dockerfile" : "prebuilt-image";
+
+    return {
+      repositoryOwner: selectedRepo.owner,
+      repositoryName: selectedRepo.name,
+      branch: selectedBranch,
+      subdirectory,
+      deploymentMode,
+      dockerfilePath,
+      buildContext,
+      containerPort: containerPort.trim() ? Number(containerPort) : undefined,
+      autoDeploy: existingAutoDeploy
+    };
+  };
+
+  const saveSource = async (): Promise<AppSourceInfo> => {
+    const payload = buildSourcePayload();
+    if (!payload) {
+      throw new Error("Select a repository and branch before saving.");
+    }
+
+    const response = await fetch(`/api/apps/${appId}/source`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const result = (await response.json().catch(() => ({}))) as Partial<AppSourceResponse>;
+
+    if (!response.ok || !result.success || !result.source) {
+      throw new Error(result.message || "Unable to save source configuration");
+    }
+
+    return result.source;
+  };
+
+  const saveWithoutDeploying = async () => {
+    if (saving) {
+      return;
+    }
     try {
       setSaving(true);
+      setPendingAction("save");
       setSaveError("");
-
-      const response = await fetch(`/api/apps/${appId}/source`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          repositoryOwner: selectedRepo.owner,
-          repositoryName: selectedRepo.name,
-          branch: selectedBranch,
-          subdirectory,
-          deploymentMode,
-          dockerfilePath,
-          buildContext,
-          containerPort: containerPort.trim() ? Number(containerPort) : undefined,
-          autoDeploy
-        })
-      });
-
-      const result = (await response.json().catch(() => ({}))) as Partial<AppSourceResponse>;
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.message || "Unable to save source configuration");
-      }
-
-      if (result.source) {
-        onSaved(result.source);
-      }
+      const saved = await saveSource();
+      onSaved(saved, { deployed: false });
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "Unable to save source configuration");
     } finally {
       setSaving(false);
+      setPendingAction(null);
+    }
+  };
+
+  const saveAndDeploy = async () => {
+    if (saving) {
+      return;
+    }
+    try {
+      setSaving(true);
+      setPendingAction("deploy");
+      setSaveError("");
+
+      // The source must be saved successfully before any deployment is
+      // ever started — a save failure here throws and no deploy call is
+      // made.
+      const saved = await saveSource();
+
+      const deployResponse = await fetch(`/api/apps/${appId}/deploy/github`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      const deployResult = (await deployResponse.json().catch(() => ({}))) as Partial<GithubDeployResponse>;
+
+      if (!deployResponse.ok || !deployResult.success) {
+        onSaved(saved, { deployed: false, deployStartError: deployResult.message || "Unable to start deployment" });
+        return;
+      }
+
+      onSaved(saved, { deployed: true });
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Unable to save source configuration");
+    } finally {
+      setSaving(false);
+      setPendingAction(null);
     }
   };
 
@@ -888,8 +1080,19 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
             </>
           )}
 
-          {step === "mode" && (
+          {step === "inspect" && selectedRepo && (
             <>
+              <dl className="wizard-review-grid">
+                <div>
+                  <dt>Repository</dt>
+                  <dd>{selectedRepo.fullName}</dd>
+                </div>
+                <div>
+                  <dt>Branch</dt>
+                  <dd>{selectedBranch}</dd>
+                </div>
+              </dl>
+
               <label>
                 <span>Subdirectory (optional)</span>
                 <input
@@ -897,22 +1100,71 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
                   onChange={(event) => setSubdirectory(event.target.value)}
                   placeholder="."
                 />
-                <small>Use this when the app lives in a subfolder of the repository. Leave as "." to use the repository root.</small>
+                <small>
+                  Use this when the app lives in a subfolder of the repository. Leave as "." to use
+                  the repository root. Changing this clears any previous inspection result.
+                </small>
               </label>
 
-              <label>
-                <span>Deployment mode</span>
-                <select
-                  className="wizard-select"
-                  value={deploymentMode}
-                  onChange={(event) => setDeploymentMode(event.target.value as DeploymentMode)}
+              <div className="form-actions form-actions-start">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={inspecting || !selectedBranch}
+                  onClick={() => void runInspect()}
                 >
-                  <option value="prebuilt-image">Prebuilt image (unchanged deployment behavior)</option>
-                  <option value="dockerfile">Dockerfile (build settings only — no builds yet)</option>
-                </select>
-              </label>
+                  {inspecting ? "Inspecting..." : inspection ? "Re-inspect Repository" : "Inspect Repository"}
+                </button>
+              </div>
 
-              {deploymentMode === "dockerfile" && (
+              {inspectError && <div className="error-banner">{inspectError}</div>}
+
+              {inspection && (
+                <>
+                  <dl className="wizard-review-grid">
+                    <div>
+                      <dt>Latest remote commit</dt>
+                      <dd title={inspectedCommitSha ?? undefined}>
+                        <code>{shortSha(inspectedCommitSha)}</code>
+                        {latestCommitMessage && <span className="text-faint"> — {latestCommitMessage}</span>}
+                      </dd>
+                    </div>
+                  </dl>
+                  <InspectionResultCard inspection={inspection} />
+                </>
+              )}
+
+              {!inspection && !inspecting && !inspectError && (
+                <p className="section-description">
+                  Inspect this repository before continuing — the platform needs to know what kind
+                  of project it is before it can offer a build strategy.
+                </p>
+              )}
+            </>
+          )}
+
+          {step === "deployment" && inspection && recommendedStrategy && recommendedStrategy !== "unsupported" && (
+            <>
+              <div className="wizard-row-list">
+                {(Object.keys(STRATEGY_INFO) as Array<Exclude<BuildStrategy, "unsupported">>).map((key) => {
+                  const active = recommendedStrategy === key;
+                  return (
+                    <div
+                      key={key}
+                      className={`wizard-row strategy-card ${active ? "selected" : "disabled"}`}
+                    >
+                      <strong>
+                        {STRATEGY_INFO[key].title}
+                        {active && <span className="status-badge positive compact">Detected</span>}
+                      </strong>
+                      <span className="text-faint">{STRATEGY_INFO[key].description}</span>
+                      {!active && <span className="text-faint">Not detected for this repository.</span>}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {recommendedStrategy === "dockerfile" && (
                 <>
                   <label>
                     <span>Dockerfile path</span>
@@ -933,6 +1185,37 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
                 </>
               )}
 
+              {recommendedStrategy === "nodejs" && inspection.packageJson && (
+                <dl className="wizard-review-grid">
+                  <div>
+                    <dt>Package manager</dt>
+                    <dd>{inspection.packageJson.packageManager}</dd>
+                  </div>
+                  <div>
+                    <dt>Start script</dt>
+                    <dd>{inspection.packageJson.hasStartScript ? "Found" : "Missing"}</dd>
+                  </div>
+                  <div>
+                    <dt>Build script</dt>
+                    <dd>{inspection.packageJson.hasBuildScript ? "Found" : "None"}</dd>
+                  </div>
+                </dl>
+              )}
+
+              {nodejsStartScriptMissing && (
+                <div className="warning-banner">
+                  No "start" script was found in package.json. Add one to the repository before this
+                  application can be deployed as a Node.js build.
+                </div>
+              )}
+
+              {recommendedStrategy === "static" && (
+                <p className="section-description">
+                  Static output directory is not currently configurable — the entire contents of{" "}
+                  <code>{subdirectory}</code> are served as-is by the platform-managed Nginx image.
+                </p>
+              )}
+
               <label>
                 <span>Container port (optional)</span>
                 <input
@@ -943,36 +1226,64 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
                   onChange={(event) => setContainerPort(event.target.value)}
                   placeholder="Uses the app's current port if left blank"
                 />
-                <small>Only needed for Node.js/static deployments where the built image should expose a different port than the app's current setting.</small>
-              </label>
-
-              <label className="checkbox-field">
-                <input
-                  type="checkbox"
-                  checked={autoDeploy}
-                  onChange={(event) => setAutoDeploy(event.target.checked)}
-                />
-                <span>Auto deploy on push — coming in a later phase (safe to enable now, has no effect yet)</span>
+                <small>Only needed when the built image should expose a different port than the app's current setting.</small>
               </label>
             </>
           )}
 
           {step === "review" && selectedRepo && (
             <>
+              {isUnsupported && inspection?.unsupportedReason && (
+                <div className="warning-banner">{inspection.unsupportedReason}</div>
+              )}
+
               <dl className="wizard-review-grid">
                 <div>
                   <dt>Repository</dt>
                   <dd>{selectedRepo.fullName}</dd>
                 </div>
                 <div>
+                  <dt>Visibility</dt>
+                  <dd>{selectedRepo.private ? "Private" : "Public"}</dd>
+                </div>
+                <div>
                   <dt>Branch</dt>
                   <dd>{selectedBranch}</dd>
                 </div>
                 <div>
-                  <dt>Deployment mode</dt>
-                  <dd>{deploymentMode}</dd>
+                  <dt>Subdirectory</dt>
+                  <dd>
+                    <code>{subdirectory}</code>
+                  </dd>
                 </div>
-                {deploymentMode === "dockerfile" && (
+                <div>
+                  <dt>Latest remote commit</dt>
+                  <dd title={inspectedCommitSha ?? undefined}>
+                    <code>{shortSha(inspectedCommitSha)}</code>
+                    {latestCommitMessage && <span className="text-faint"> — {latestCommitMessage}</span>}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Detected type</dt>
+                  <dd>
+                    {inspection
+                      ? PROJECT_TYPE_LABELS[inspection.detectedProjectType] ?? inspection.detectedProjectType
+                      : "Not inspected"}
+                  </dd>
+                </div>
+                {!isUnsupported && recommendedStrategy && (
+                  <div>
+                    <dt>Build strategy</dt>
+                    <dd>{STRATEGY_INFO[recommendedStrategy as Exclude<BuildStrategy, "unsupported">]?.title ?? recommendedStrategy}</dd>
+                  </div>
+                )}
+                {recommendedStrategy === "nodejs" && inspection?.packageJson && (
+                  <div>
+                    <dt>Package manager</dt>
+                    <dd>{inspection.packageJson.packageManager}</dd>
+                  </div>
+                )}
+                {recommendedStrategy === "dockerfile" && (
                   <>
                     <div>
                       <dt>Dockerfile path</dt>
@@ -985,13 +1296,23 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
                   </>
                 )}
                 <div>
-                  <dt>Auto deploy</dt>
-                  <dd>{autoDeploy ? "Enabled (inactive this phase)" : "Disabled"}</dd>
+                  <dt>Container port</dt>
+                  <dd>{containerPort.trim() ? containerPort : "Uses the app's current port"}</dd>
                 </div>
               </dl>
+
+              {inspection && inspection.warnings.length > 0 && (
+                <ul className="wizard-warning-list">
+                  {inspection.warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              )}
+
               <p className="section-description">
-                Saving will validate this configuration against GitHub immediately (repository
-                access, branch existence, and Dockerfile presence if applicable).
+                {isUnsupported
+                  ? "This project type is not supported for automatic deployment yet. You can still save the repository link for reference, but deployment is disabled until a Dockerfile is added."
+                  : "Saving validates this configuration against GitHub immediately (repository access and branch existence). Choose below whether to just save it, or save it and start a deployment right away."}
               </p>
               {saveError && <div className="error-banner">{saveError}</div>}
             </>
@@ -1014,9 +1335,26 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
             </button>
 
             {step === "review" ? (
-              <button className="primary-button" type="button" disabled={saving} onClick={() => void submit()}>
-                {saving ? "Saving..." : "Save & Validate"}
-              </button>
+              <>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={saving}
+                  onClick={() => void saveWithoutDeploying()}
+                >
+                  {pendingAction === "save" ? "Saving..." : "Save without deploying"}
+                </button>
+                {!isUnsupported && (
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={saving}
+                    onClick={() => void saveAndDeploy()}
+                  >
+                    {pendingAction === "deploy" ? "Saving and deploying..." : "Save and deploy"}
+                  </button>
+                )}
+              </>
             ) : (
               <button className="primary-button" type="button" disabled={!canContinue} onClick={goNext}>
                 Continue

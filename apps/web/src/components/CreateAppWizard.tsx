@@ -7,10 +7,13 @@ import type {
   CreateAppWizardPayload,
   CreateAppWizardResponse,
   CreatedAppSummary,
+  DeploymentMode,
   GithubBranchesResponse,
   GithubConnectionInfo,
   GithubRepositoriesResponse,
+  InspectSourceResponse,
   MaskedGlobalEnvVar,
+  RepositoryInspectionResult,
   RestartPolicy,
   SourceBranch,
   SourceRepository,
@@ -26,6 +29,7 @@ import {
   validateEnvVars,
   validateStorageMounts
 } from "../lib/wizardValidation";
+import { PROJECT_TYPE_LABELS } from "./SourcePanel";
 
 interface CreateAppWizardProps {
   open: boolean;
@@ -45,11 +49,13 @@ const STEP_LABELS = [
 
 const LAST_STEP = STEP_LABELS.length - 1;
 
-// Placeholder used only when the "Deploy from GitHub" path is chosen —
-// app creation still requires a pullable image to exist right away; the
-// real image is built and swapped in by the first GitHub deployment,
-// triggered either immediately (if the operator chooses "Create and
-// deploy") or later from the app's Source tab.
+// Internal placeholder only — never the deployed application. App
+// creation still requires a pullable image to exist right away; the real
+// image is built and swapped in by the first GitHub deployment, triggered
+// either immediately ("Create and deploy") or later from the app's
+// Source tab ("Save application without deploying"). The operator never
+// needs to know this value — it is not surfaced anywhere in this
+// component's own UI, only in this comment.
 const GITHUB_PLACEHOLDER_IMAGE = "nginx:alpine";
 
 const RUNTIME_OPTIONS: Array<{ value: BuildBriefRuntime; label: string }> = [
@@ -119,6 +125,10 @@ export default function CreateAppWizard({
   const [githubSubdirectory, setGithubSubdirectory] = useState(".");
   const [deployAfterCreate, setDeployAfterCreate] = useState(true);
 
+  const [githubInspection, setGithubInspection] = useState<RepositoryInspectionResult | null>(null);
+  const [githubInspecting, setGithubInspecting] = useState(false);
+  const [githubInspectError, setGithubInspectError] = useState("");
+
   const [name, setName] = useState("");
   const [image, setImage] = useState("");
 
@@ -153,6 +163,9 @@ export default function CreateAppWizard({
     setGithubBranch("");
     setGithubSubdirectory(".");
     setDeployAfterCreate(true);
+    setGithubInspection(null);
+    setGithubInspecting(false);
+    setGithubInspectError("");
     setName("");
     setImage("");
     setContainerPort("3000");
@@ -279,12 +292,62 @@ export default function CreateAppWizard({
     }
   };
 
+  // Stale-inspection handling: any change to repository, branch, or
+  // subdirectory invalidates a prior inspection result — it must never be
+  // reused for a different selection.
+  useEffect(() => {
+    setGithubInspection(null);
+    setGithubInspectError("");
+  }, [githubRepo?.fullName, githubBranch, githubSubdirectory]);
+
+  const runGithubInspect = async () => {
+    if (!githubRepo || !githubBranch) {
+      return;
+    }
+
+    try {
+      setGithubInspecting(true);
+      setGithubInspectError("");
+
+      const response = await fetch(
+        `/api/integrations/github/repositories/${githubRepo.owner}/${githubRepo.name}/inspect`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ branch: githubBranch, subdirectory: githubSubdirectory })
+        }
+      );
+
+      const result = (await response.json().catch(() => ({}))) as Partial<InspectSourceResponse>;
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.message || "Unable to inspect repository");
+      }
+
+      setGithubInspection(result.inspection ?? null);
+    } catch (error) {
+      setGithubInspectError(error instanceof Error ? error.message : "Unable to inspect repository");
+      setGithubInspection(null);
+    } finally {
+      setGithubInspecting(false);
+    }
+  };
+
   const trimmedName = name.trim();
   const trimmedImage = image.trim();
   const parsedPort = Number(containerPort);
 
+  const githubNodejsStartScriptMissing =
+    githubInspection?.recommendedStrategy === "nodejs" &&
+    githubInspection.packageJson?.hasStartScript === false;
+
   const sourceValid =
-    sourceType === "manual" || (githubRepo !== null && githubBranch.trim().length > 0);
+    sourceType === "manual" ||
+    (githubRepo !== null &&
+      githubBranch.trim().length > 0 &&
+      githubInspection !== null &&
+      githubInspection.supported &&
+      !githubNodejsStartScriptMissing);
   const basicsValid = isValidAppName(trimmedName) && isValidImage(trimmedImage);
   const runtimeValid = isValidPort(parsedPort);
 
@@ -481,6 +544,14 @@ export default function CreateAppWizard({
       return;
     }
 
+    // The backend has no field to select the Node.js/static build
+    // strategies directly (they are always auto-detected fresh at deploy
+    // time from the actual repository content) — deploymentMode only
+    // controls whether the source-save step checks for a Dockerfile, so
+    // it is "dockerfile" only when that's genuinely what was detected.
+    const deploymentMode: DeploymentMode =
+      githubInspection?.recommendedStrategy === "dockerfile" ? "dockerfile" : "prebuilt-image";
+
     try {
       const sourceResponse = await fetch(`/api/apps/${appId}/source`, {
         method: "PUT",
@@ -490,7 +561,7 @@ export default function CreateAppWizard({
           repositoryName: githubRepo.name,
           branch: githubBranch,
           subdirectory: githubSubdirectory,
-          deploymentMode: "dockerfile",
+          deploymentMode,
           dockerfilePath: "Dockerfile",
           buildContext: ".",
           containerPort: parsedPort,
@@ -731,7 +802,67 @@ export default function CreateAppWizard({
                               onChange={(event) => setGithubSubdirectory(event.target.value)}
                               placeholder="."
                             />
+                            <small>Changing this clears any previous inspection result.</small>
                           </label>
+
+                          <div className="form-actions form-actions-start">
+                            <button
+                              className="secondary-button"
+                              type="button"
+                              disabled={githubInspecting || !githubBranch}
+                              onClick={() => void runGithubInspect()}
+                            >
+                              {githubInspecting
+                                ? "Inspecting..."
+                                : githubInspection
+                                  ? "Re-inspect Repository"
+                                  : "Inspect Repository"}
+                            </button>
+                          </div>
+
+                          {githubInspectError && <div className="error-banner">{githubInspectError}</div>}
+
+                          {githubInspection && (
+                            <dl className="wizard-review-grid">
+                              <div>
+                                <dt>Detected type</dt>
+                                <dd>
+                                  {PROJECT_TYPE_LABELS[githubInspection.detectedProjectType] ??
+                                    githubInspection.detectedProjectType}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt>Build strategy</dt>
+                                <dd>{githubInspection.recommendedStrategy}</dd>
+                              </div>
+                            </dl>
+                          )}
+
+                          {githubInspection && !githubInspection.supported && githubInspection.unsupportedReason && (
+                            <div className="warning-banner">{githubInspection.unsupportedReason}</div>
+                          )}
+
+                          {githubNodejsStartScriptMissing && (
+                            <div className="warning-banner">
+                              No "start" script was found in package.json. Add one to the repository
+                              before this application can be deployed as a Node.js build.
+                            </div>
+                          )}
+
+                          {githubInspection && githubInspection.warnings.length > 0 && (
+                            <ul className="wizard-warning-list">
+                              {githubInspection.warnings.map((warning) => (
+                                <li key={warning}>{warning}</li>
+                              ))}
+                            </ul>
+                          )}
+
+                          {!githubInspection && !githubInspecting && !githubInspectError && (
+                            <p className="section-description">
+                              Inspect this repository before continuing — the platform needs to
+                              know what kind of project it is before it can deploy it.
+                            </p>
+                          )}
 
                           <label className="checkbox-field">
                             <input
@@ -739,14 +870,14 @@ export default function CreateAppWizard({
                               checked={deployAfterCreate}
                               onChange={(event) => setDeployAfterCreate(event.target.checked)}
                             />
-                            <span>Create and deploy immediately (uncheck to just save the app and deploy later)</span>
+                            <span>Deploy immediately after creation (uncheck to save the app and deploy later)</span>
                           </label>
 
                           <p className="section-description">
-                            Continuing will use a temporary placeholder image (
-                            <code>{GITHUB_PLACEHOLDER_IMAGE}</code>) until the first GitHub
-                            deployment replaces it. Repository inspection and build strategy
-                            selection happen from the Source tab after this app is created.
+                            Continuing will create the app with a temporary internal placeholder —
+                            it is never what gets served publicly. The real image is built from this
+                            repository and swapped in by the first GitHub deployment, either right
+                            after creation or later from the Source tab.
                           </p>
                         </>
                       )}
@@ -1296,8 +1427,10 @@ export default function CreateAppWizard({
                   >
                     {creating
                       ? "Creating..."
-                      : sourceType === "github" && deployAfterCreate
-                        ? "Create and Deploy"
+                      : sourceType === "github"
+                        ? deployAfterCreate
+                          ? "Create and Deploy"
+                          : "Save Without Deploying"
                         : "Create App"}
                   </button>
                 )}

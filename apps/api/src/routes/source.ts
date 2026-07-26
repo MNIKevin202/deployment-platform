@@ -58,7 +58,7 @@ function serializeSource(source: StoredAppSource) {
   };
 }
 
-function serializeInspection(detection: InspectionDetection) {
+export function serializeInspection(detection: InspectionDetection) {
   return {
     detectedProjectType: detection.detectedProjectType,
     recommendedStrategy: detection.recommendedStrategy,

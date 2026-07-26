@@ -1,7 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { githubTokenSchema } from "../schemas/github.js";
-import { repositoryNameSchema, repositoryOwnerSchema, branchNameSchema } from "../schemas/source.js";
+import {
+  repositoryNameSchema,
+  repositoryOwnerSchema,
+  branchNameSchema,
+  subdirectorySchema,
+  DEFAULT_SUBDIRECTORY
+} from "../schemas/source.js";
 import {
   deleteGithubCredential,
   getDecryptedGithubToken,
@@ -11,6 +17,8 @@ import {
   type GithubCredentialDeps
 } from "../services/github-credential-service.js";
 import { SourceClientError, type SourceProviderClient } from "../services/source-provider.js";
+import { inspectRepositoryRemote } from "../services/repository-inspection-service.js";
+import { serializeInspection } from "./source.js";
 
 interface RegisterGithubRoutesOptions {
   credentialDeps: GithubCredentialDeps;
@@ -45,6 +53,19 @@ const listQuerySchema = z.object({
 const commitsQuerySchema = listQuerySchema.extend({
   branch: branchNameSchema
 });
+
+// Used by the "Inspect Repository" step of both the Repository Source
+// wizard and the Create App wizard, before any app/source row exists to
+// attach the result to — this is a read-only preview, and it never
+// persists anything. Deliberately just {branch, subdirectory}: owner/repo
+// are already path params on this route, unlike the standalone
+// repositoryInspectionRequestSchema which also carries them.
+const inspectBodySchema = z
+  .object({
+    branch: branchNameSchema,
+    subdirectory: subdirectorySchema.optional().default(DEFAULT_SUBDIRECTORY)
+  })
+  .strict();
 
 function statusCodeForClientError(error: unknown): number {
   if (!(error instanceof SourceClientError)) {
@@ -280,6 +301,70 @@ export async function registerGithubRoutes(
         );
 
         return { success: true, commits: page.items, hasMore: page.hasMore };
+      } catch (error) {
+        return reply.code(statusCodeForClientError(error)).send({ success: false, message: safeMessage(error) });
+      }
+    }
+  );
+
+  // Read-only repository inspection with no app/source dependency — used
+  // by wizard "Inspect Repository" steps to preview the detected project
+  // type and recommended build strategy for a candidate repository/
+  // branch/subdirectory before anything is saved. Never writes to any
+  // app row; the per-app POST /apps/:id/source/inspect route (which does
+  // persist detection results against an already-saved source) is
+  // unchanged and unrelated to this one.
+  fastify.post<{ Params: OwnerRepoParams }>(
+    "/integrations/github/repositories/:owner/:repo/inspect",
+    { config: { rateLimit: { max: 15, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const parsedParams = ownerRepoParamsSchema.safeParse(request.params);
+
+      if (!parsedParams.success) {
+        return reply.code(400).send({ success: false, message: "Invalid repository" });
+      }
+
+      const parsedBody = inspectBodySchema.safeParse(request.body);
+
+      if (!parsedBody.success) {
+        return reply.code(400).send({
+          success: false,
+          message: "A valid branch is required",
+          errors: parsedBody.error.flatten()
+        });
+      }
+
+      const credential = getDecryptedGithubToken({ appDatabase: credentialDeps.appDatabase });
+
+      if (!credential.success) {
+        return reply.code(409).send({
+          success: false,
+          message: "GitHub is not connected.",
+          credentialStatus: credential.credentialStatus
+        });
+      }
+
+      try {
+        const commitSha = await githubClient.resolveBranchCommit(
+          credential.token,
+          parsedParams.data.owner,
+          parsedParams.data.repo,
+          parsedBody.data.branch
+        );
+
+        const detection = await inspectRepositoryRemote(githubClient, {
+          token: credential.token,
+          repositoryOwner: parsedParams.data.owner,
+          repositoryName: parsedParams.data.repo,
+          ref: commitSha,
+          subdirectory: parsedBody.data.subdirectory
+        });
+
+        return {
+          success: true,
+          commitSha,
+          inspection: serializeInspection(detection)
+        };
       } catch (error) {
         return reply.code(statusCodeForClientError(error)).send({ success: false, message: safeMessage(error) });
       }
