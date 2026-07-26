@@ -89,8 +89,19 @@ fail() {
   exit 1
 }
 
+# --yes support — unchanged behavior:
+#   - auto-confirms the stage/commit prompt
+#   - auto-confirms the deployment prompt
+#   - never invents a commit message
+#   - every other safety check still runs exactly as before
 confirm() {
   local prompt="$1"
+
+  if [ "${AUTO_YES}" -eq 1 ]; then
+    printf '%s [auto-confirmed via --yes]\n' "${prompt}"
+    return 0
+  fi
+
   local answer=""
   printf '%s [y/N]: ' "${prompt}"
   read -r answer || answer=""
@@ -188,6 +199,25 @@ Options:
                           deploying anything.
   --no-deploy             Run checks, stage, and commit. Stops before
                           syncing source or contacting the VPS.
+  --yes                   Auto-confirm the two interactive prompts (stage
+                          and commit; proceed with remote deployment)
+                          instead of waiting for y/N input. A commit
+                          message is still required — pass --message, or
+                          the script will fail cleanly asking for one
+                          rather than guessing at one.
+  --resume-release PATH   Redeploy an already-committed, already-synced
+                          immutable release directory on the VPS, instead
+                          of staging/committing/syncing anything new. PATH
+                          must be under VPS_SOURCE_DIR/releases/ and match
+                          the release-<timestamp>-<sha> naming convention.
+                          See docs/RELEASE_AUTOMATION.md for details.
+  --resume-mode MODE      Which component(s) the resumed release touches:
+                          api, web, or both (default: both).
+  --resume-commit SHA     Commit SHA (or prefix) the release directory is
+                          expected to correspond to. Defaults to the
+                          current local HEAD. The release directory's own
+                          commit suffix must match this, or the resume is
+                          refused.
   --help                  Show this help text.
 
 Run with no options from the project root for the full interactive
@@ -276,6 +306,210 @@ compute_next_version() {
 }
 
 # ============================================================
+# Resume-path validation (--resume-release)
+# ============================================================
+#
+# Deliberately restrictive: only a path that is exactly
+# "${VPS_SOURCE_DIR}/releases/release-<timestamp>-<12 hex chars>" is
+# accepted. No traversal, no shell metacharacters, no arbitrary path —
+# this string is later passed as --source-dir to the remote script and
+# used directly in `docker build`/file-existence checks on the VPS.
+validate_resume_release_path() {
+  local path="$1"
+  local expected_prefix="${VPS_SOURCE_DIR}/releases/"
+
+  case "${path}" in
+    "${expected_prefix}"*) ;;
+    *)
+      fail "--resume-release must be a path under ${expected_prefix} (got: ${path})"
+      ;;
+  esac
+
+  case "${path}" in
+    *'..'*|*'`'*|*'$'*|*';'*|*'|'*|*'&'*|*'"'*|*"'"*|*$'\n'*|*'*'*|*'?'*|*'~'*)
+      fail "--resume-release contains disallowed characters."
+      ;;
+  esac
+
+  local dir_name="${path#"${expected_prefix}"}"
+  case "${dir_name}" in
+    release-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+      ;;
+    *)
+      fail "--resume-release directory name does not match the expected release-<timestamp>-<sha> pattern: ${dir_name}"
+      ;;
+  esac
+
+  RESUME_DIR_COMMIT_SUFFIX="${dir_name: -12}"
+}
+
+# ============================================================
+# Shared remote-invocation + reporting
+#
+# Used by both the normal flow and --resume-release, so the two paths
+# can never drift out of sync on status handling. Expects the caller to
+# have already set: DEPLOY_MODE, REMOTE_RELEASE_DIR, COMMIT_SHA,
+# API_CHANGED, WEB_CHANGED, PREVIOUS_API_IMAGE, PREVIOUS_WEB_IMAGE,
+# PREVIOUS_API_VERSION, PREVIOUS_WEB_VERSION, NEW_API_VERSION,
+# NEW_WEB_VERSION. Prints its own "REMOTE PRE-FLIGHT" / "RELEASE
+# COMPLETE" headers and returns 0 only for an exact PASS status.
+# ============================================================
+
+run_remote_deploy_and_report() {
+  print_header "REMOTE PRE-FLIGHT"
+
+  info "Deploy mode: ${DEPLOY_MODE}"
+  info "API: ${PREVIOUS_API_VERSION} -> ${NEW_API_VERSION}"
+  info "Web: ${PREVIOUS_WEB_VERSION} -> ${NEW_WEB_VERSION}"
+
+  if ! confirm "Proceed with the remote build and deployment described above?"; then
+    info "Aborted by operator before deployment. Commit ${COMMIT_SHA} and the synced release directory (${REMOTE_RELEASE_DIR}) are unaffected — re-run to try again."
+    return 1
+  fi
+
+  if [ ! -f "${REMOTE_SCRIPT_LOCAL_PATH}" ]; then
+    fail "Remote deployment script not found: ${REMOTE_SCRIPT_LOCAL_PATH}"
+  fi
+
+  REMOTE_SCRIPT_REMOTE_PATH="$(ssh_run mktemp /tmp/release-remote.XXXXXX)"
+  scp -i "${SSH_KEY}" "${REMOTE_SCRIPT_LOCAL_PATH}" "${VPS_USER}@${VPS_HOST}:${REMOTE_SCRIPT_REMOTE_PATH}" >/dev/null
+  ssh_run chmod 700 "${REMOTE_SCRIPT_REMOTE_PATH}"
+
+  local remote_args=(
+    "${REMOTE_SCRIPT_REMOTE_PATH}"
+    --mode "${DEPLOY_MODE}"
+    --source-dir "${REMOTE_RELEASE_DIR}"
+    --auth-file "${AUTH_FILE}"
+    --caddy-routes-dir "${CADDY_ROUTES_DIR}"
+    --api-container "${API_CONTAINER}"
+    --web-container "${WEB_CONTAINER}"
+    --api-image-repo "${API_IMAGE_REPOSITORY}"
+    --web-image-repo "${WEB_IMAGE_REPOSITORY}"
+    --platform-network "${PLATFORM_NETWORK}"
+    --apps-network "${MANAGED_APPS_NETWORK}"
+    --api-data-volume "${API_DATA_VOLUME}"
+    --api-version "${NEW_API_VERSION}"
+    --web-version "${NEW_WEB_VERSION}"
+    --previous-api-version "${PREVIOUS_API_VERSION}"
+    --previous-web-version "${PREVIOUS_WEB_VERSION}"
+    --url-panel "${PUBLIC_URL_PANEL}"
+    --url-wizard-test "${PUBLIC_URL_WIZARD_TEST}"
+    --url-sqlite-test "${PUBLIC_URL_SQLITE_TEST}"
+    --current-symlink "${VPS_SOURCE_DIR}/current"
+  )
+
+  # Build a safely quoted remote command string. Every argument is our own
+  # fixed configuration or a validated semver/path string — none of it is
+  # operator-supplied free text that reaches the shell unquoted.
+  local remote_command=""
+  local arg
+  for arg in "${remote_args[@]}"; do
+    remote_command="${remote_command}$(printf '%q ' "${arg}")"
+  done
+
+  local remote_log
+  remote_log="$(new_tmp_file)"
+  local deploy_exit_code=0
+  ssh -i "${SSH_KEY}" -o BatchMode=yes "${VPS_USER}@${VPS_HOST}" "${remote_command}" 2>&1 | tee "${remote_log}" || deploy_exit_code=$?
+
+  ssh_quiet rm -f "${REMOTE_SCRIPT_REMOTE_PATH}" || true
+  REMOTE_CLEANUP_DONE=1
+
+  print_header "RELEASE COMPLETE"
+
+  local summary_status summary_new_api_image summary_new_web_image summary_backup_path
+  local summary_rollback_containers summary_url_panel summary_url_wizard summary_url_sqlite
+  local summary_live_api_image summary_live_web_image summary_rollback_state summary_current_pointer
+
+  read_summary_value() {
+    local key="$1"
+    grep -E "^RELEASE_SUMMARY_${key}=" "${remote_log}" | tail -n 1 | sed -e "s/^RELEASE_SUMMARY_${key}=//"
+  }
+
+  summary_new_api_image="$(read_summary_value NEW_API_IMAGE)"
+  summary_new_web_image="$(read_summary_value NEW_WEB_IMAGE)"
+  summary_backup_path="$(read_summary_value BACKUP_PATH)"
+  summary_rollback_containers="$(read_summary_value ROLLBACK_CONTAINERS)"
+  summary_url_panel="$(read_summary_value URL_RESULT_PANEL)"
+  summary_url_wizard="$(read_summary_value URL_RESULT_WIZARD)"
+  summary_url_sqlite="$(read_summary_value URL_RESULT_SQLITE)"
+  summary_status="$(read_summary_value STATUS)"
+  summary_live_api_image="$(read_summary_value LIVE_API_IMAGE)"
+  summary_live_web_image="$(read_summary_value LIVE_WEB_IMAGE)"
+  summary_rollback_state="$(read_summary_value ROLLBACK_CONTAINERS_STATE)"
+  summary_current_pointer="$(read_summary_value CURRENT_POINTER)"
+
+  # Never invent a success: if the remote script didn't emit a status at
+  # all (e.g. the SSH connection dropped), or it reported PASS/
+  # PASS_WITH_WARNINGS but the invocation's own exit code was nonzero,
+  # treat it as FAILED rather than trusting a possibly-incomplete summary.
+  if [ -z "${summary_status}" ]; then
+    summary_status="FAILED"
+  fi
+  if [ "${deploy_exit_code}" -ne 0 ]; then
+    case "${summary_status}" in
+      PASS|PASS_WITH_WARNINGS) summary_status="FAILED" ;;
+    esac
+  fi
+
+  # The remote script now owns updating the VPS "current" source pointer
+  # itself, as the last required step before it ever emits PASS — it is
+  # not re-done here, and a rollback never reaches this point with the
+  # pointer changed (the remote script only updates it after every other
+  # verification step already succeeded).
+  info "Current source pointer: ${summary_current_pointer:-unchanged}"
+
+  info "Commit SHA: ${COMMIT_SHA}"
+  info "API changed: ${API_CHANGED}"
+  info "Web changed: ${WEB_CHANGED}"
+  info "Previous API image: ${PREVIOUS_API_IMAGE:-unknown}"
+  info "New API image (built): ${summary_new_api_image:-n/a}"
+  info "Live API image: ${summary_live_api_image:-n/a}"
+  info "Previous web image: ${PREVIOUS_WEB_IMAGE:-unknown}"
+  info "New web image (built): ${summary_new_web_image:-n/a}"
+  info "Live web image: ${summary_live_web_image:-n/a}"
+  info "Database backup path: ${summary_backup_path:-none}"
+  info "Rollback containers: ${summary_rollback_containers:-none} (${summary_rollback_state:-n/a})"
+  info "Release directory: ${REMOTE_RELEASE_DIR}"
+  info "panel.hookstats.com: ${summary_url_panel:-not checked}"
+  info "wizard-test.apps.hookstats.com: ${summary_url_wizard:-not checked}"
+  info "sqlite-test.apps.hookstats.com: ${summary_url_sqlite:-not checked}"
+
+  # Status meanings, kept distinct and never collapsed together:
+  #   PASS                 — deployment succeeded, verified, and the
+  #                          current source pointer was updated.
+  #   PASS_WITH_WARNINGS   — deployment succeeded and is live and
+  #                          verified, but a non-critical post-success
+  #                          step (currently: the current source
+  #                          pointer) did not complete. Live containers
+  #                          were NOT rolled back for this.
+  #   FAILED               — failed before any live container was touched.
+  #   ROLLED_BACK          — a swap began, but the previous container(s)
+  #                          were successfully restored.
+  #   ROLLBACK_FAILED      — a swap began and restoration did NOT fully
+  #                          succeed; treat as an incident requiring
+  #                          immediate manual attention.
+  info "Status: ${summary_status}"
+
+  case "${summary_status}" in
+    PASS)
+      return 0
+      ;;
+    PASS_WITH_WARNINGS)
+      info "PASS_WITH_WARNINGS: the deployment itself is live and verified. Review the warning above (likely the current source pointer) and fix it manually before the next release."
+      return 0
+      ;;
+    ROLLBACK_FAILED)
+      info "ROLLBACK_FAILED: do not assume either container is healthy — check the VPS manually right away."
+      return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# ============================================================
 # CLI argument parsing
 # ============================================================
 
@@ -285,6 +519,10 @@ WEB_VERSION_OVERRIDE=""
 VERIFY_ONLY=0
 PLAN_ONLY=0
 NO_DEPLOY=0
+AUTO_YES=0
+RESUME_RELEASE_DIR=""
+RESUME_MODE="both"
+RESUME_COMMIT_OVERRIDE=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -315,6 +553,25 @@ while [ "$#" -gt 0 ]; do
       NO_DEPLOY=1
       shift
       ;;
+    --yes)
+      AUTO_YES=1
+      shift
+      ;;
+    --resume-release)
+      [ "$#" -ge 2 ] || fail "--resume-release requires a value"
+      RESUME_RELEASE_DIR="$2"
+      shift 2
+      ;;
+    --resume-mode)
+      [ "$#" -ge 2 ] || fail "--resume-mode requires a value"
+      RESUME_MODE="$2"
+      shift 2
+      ;;
+    --resume-commit)
+      [ "$#" -ge 2 ] || fail "--resume-commit requires a value"
+      RESUME_COMMIT_OVERRIDE="$2"
+      shift 2
+      ;;
     --help|-h)
       print_help
       exit 0
@@ -339,8 +596,123 @@ if [ -n "${WEB_VERSION_OVERRIDE}" ] && ! is_valid_semver "${WEB_VERSION_OVERRIDE
   fail "--web-version must be a semantic version like 1.2.3 (got: ${WEB_VERSION_OVERRIDE})"
 fi
 
+if [ -n "${RESUME_RELEASE_DIR}" ]; then
+  case "${RESUME_MODE}" in
+    api|web|both) ;;
+    *) fail "--resume-mode must be one of: api, web, both (got: ${RESUME_MODE})" ;;
+  esac
+  if [ "${VERIFY_ONLY}" -eq 1 ] || [ "${PLAN_ONLY}" -eq 1 ] || [ "${NO_DEPLOY}" -eq 1 ]; then
+    fail "--resume-release cannot be combined with --verify-only, --plan-only, or --no-deploy."
+  fi
+  if [ -n "${COMMIT_MESSAGE}" ]; then
+    fail "--resume-release does not create a commit — --message has no effect and cannot be combined with it."
+  fi
+fi
+
 load_config_file "${CONFIG_FILE}"
 require_tools
+
+# ============================================================
+# --resume-release: redeploy an already-committed, already-synced
+# release directory without touching local Git state.
+# ============================================================
+
+if [ -n "${RESUME_RELEASE_DIR}" ]; then
+  print_header "LOCAL PRE-FLIGHT (resume)"
+
+  REPO_TOPLEVEL="$(cd "${SCRIPT_DIR}" && git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -z "${REPO_TOPLEVEL}" ]; then
+    fail "This does not look like a Git repository: ${SCRIPT_DIR}"
+  fi
+
+  EXPECTED_TOPLEVEL="$(cd "${LOCAL_PROJECT_DIR}" && pwd -P)"
+  ACTUAL_TOPLEVEL="$(cd "${REPO_TOPLEVEL}" && pwd -P)"
+  if [ "${ACTUAL_TOPLEVEL}" != "${EXPECTED_TOPLEVEL}" ]; then
+    fail "release.sh must run from ${LOCAL_PROJECT_DIR} (found repo at ${ACTUAL_TOPLEVEL})"
+  fi
+
+  cd "${LOCAL_PROJECT_DIR}"
+  info "Repository: ${LOCAL_PROJECT_DIR}"
+  info "Resume mode: skipping local build, tests, staging, commit, and source sync."
+  info "The already-committed, already-synced release directory below is used as-is."
+
+  print_header "RESUME RELEASE"
+
+  validate_resume_release_path "${RESUME_RELEASE_DIR}"
+
+  RESUME_EXPECTED_COMMIT="${RESUME_COMMIT_OVERRIDE:-$(git rev-parse HEAD)}"
+  RESUME_EXPECTED_COMMIT_SHORT="${RESUME_EXPECTED_COMMIT:0:12}"
+
+  if [ "${RESUME_DIR_COMMIT_SUFFIX}" != "${RESUME_EXPECTED_COMMIT_SHORT}" ]; then
+    fail "Release directory commit suffix (${RESUME_DIR_COMMIT_SUFFIX}) does not match the expected commit (${RESUME_EXPECTED_COMMIT_SHORT}). Pass --resume-commit <sha> to override if this is intentional, or check out the matching commit first."
+  fi
+  info "Commit match confirmed: ${RESUME_EXPECTED_COMMIT_SHORT}"
+
+  if ! ssh_quiet true; then
+    fail "Could not reach the VPS (${VPS_HOST})."
+  fi
+
+  if ! ssh_quiet test -d "${RESUME_RELEASE_DIR}"; then
+    fail "Release directory not found on VPS: ${RESUME_RELEASE_DIR}"
+  fi
+
+  for check_path in "package.json" "apps/api/Dockerfile" "apps/web/Dockerfile"; do
+    if ! ssh_quiet test -f "${RESUME_RELEASE_DIR}/${check_path}"; then
+      fail "Expected file missing in release directory: ${RESUME_RELEASE_DIR}/${check_path}"
+    fi
+  done
+  info "Release directory verified on VPS (package.json, both Dockerfiles present)."
+
+  DEPLOY_MODE="${RESUME_MODE}"
+  API_CHANGED="no"
+  WEB_CHANGED="no"
+  if [ "${DEPLOY_MODE}" = "api" ] || [ "${DEPLOY_MODE}" = "both" ]; then
+    API_CHANGED="yes"
+  fi
+  if [ "${DEPLOY_MODE}" = "web" ] || [ "${DEPLOY_MODE}" = "both" ]; then
+    WEB_CHANGED="yes"
+  fi
+
+  PREVIOUS_API_IMAGE=""
+  PREVIOUS_WEB_IMAGE=""
+  PREVIOUS_API_VERSION="unknown"
+  PREVIOUS_WEB_VERSION="unknown"
+
+  if [ "${API_CHANGED}" = "yes" ]; then
+    PREVIOUS_API_IMAGE="$(ssh_run docker inspect --format '{{.Config.Image}}' "${API_CONTAINER}" 2>/dev/null || true)"
+    [ -n "${PREVIOUS_API_IMAGE}" ] && PREVIOUS_API_VERSION="$(extract_tag "${PREVIOUS_API_IMAGE}")"
+    if [ "${PREVIOUS_API_VERSION}" = "unknown" ]; then
+      fail "Could not inspect the current API container/image on the VPS."
+    fi
+  fi
+
+  if [ "${WEB_CHANGED}" = "yes" ]; then
+    PREVIOUS_WEB_IMAGE="$(ssh_run docker inspect --format '{{.Config.Image}}' "${WEB_CONTAINER}" 2>/dev/null || true)"
+    [ -n "${PREVIOUS_WEB_IMAGE}" ] && PREVIOUS_WEB_VERSION="$(extract_tag "${PREVIOUS_WEB_IMAGE}")"
+    if [ "${PREVIOUS_WEB_VERSION}" = "unknown" ]; then
+      fail "Could not inspect the current web container/image on the VPS."
+    fi
+  fi
+
+  NEW_API_VERSION="${PREVIOUS_API_VERSION}"
+  NEW_WEB_VERSION="${PREVIOUS_WEB_VERSION}"
+  [ "${API_CHANGED}" = "yes" ] && NEW_API_VERSION="$(compute_next_version "${PREVIOUS_API_VERSION}" "yes" "${API_VERSION_OVERRIDE}")"
+  [ "${WEB_CHANGED}" = "yes" ] && NEW_WEB_VERSION="$(compute_next_version "${PREVIOUS_WEB_VERSION}" "yes" "${WEB_VERSION_OVERRIDE}")"
+
+  info "Current API image: ${PREVIOUS_API_IMAGE:-unknown}"
+  info "Current web image: ${PREVIOUS_WEB_IMAGE:-unknown}"
+  info "Proposed API version: ${NEW_API_VERSION} (included: ${API_CHANGED})"
+  info "Proposed web version: ${NEW_WEB_VERSION} (included: ${WEB_CHANGED})"
+
+  COMMIT_SHA="${RESUME_EXPECTED_COMMIT}"
+  REMOTE_RELEASE_DIR="${RESUME_RELEASE_DIR}"
+
+  if run_remote_deploy_and_report; then
+    exit 0
+  else
+    exit 1
+  fi
+fi
 
 # ============================================================
 # 1. LOCAL PRE-FLIGHT
@@ -830,7 +1202,6 @@ fi
 # influence this build's Docker context.
 RELEASE_DIR_NAME="release-${RELEASE_TIMESTAMP}-${COMMIT_SHA:0:12}"
 REMOTE_RELEASE_DIR="${VPS_SOURCE_DIR}/releases/${RELEASE_DIR_NAME}"
-REMOTE_CURRENT_SYMLINK="${VPS_SOURCE_DIR}/current"
 
 RSYNC_EXCLUDES=(
   --exclude=node_modules
@@ -870,10 +1241,8 @@ done
 info "Source sync verified. This release will build from ${REMOTE_RELEASE_DIR} only."
 
 # ============================================================
-# 8. REMOTE PRE-FLIGHT / DEPLOY
+# 8. REMOTE PRE-FLIGHT / DEPLOY / RELEASE COMPLETE
 # ============================================================
-
-print_header "REMOTE PRE-FLIGHT"
 
 DEPLOY_MODE="api"
 if [ "${API_CHANGED}" = "yes" ] && [ "${WEB_CHANGED}" = "yes" ]; then
@@ -882,114 +1251,8 @@ elif [ "${WEB_CHANGED}" = "yes" ]; then
   DEPLOY_MODE="web"
 fi
 
-info "Deploy mode: ${DEPLOY_MODE}"
-info "API: ${PREVIOUS_API_VERSION} -> ${NEW_API_VERSION}"
-info "Web: ${PREVIOUS_WEB_VERSION} -> ${NEW_WEB_VERSION}"
-
-if ! confirm "Proceed with the remote build and deployment described above?"; then
-  info "Aborted by operator before deployment. Commit ${COMMIT_SHA} was already created and source was already synced to ${REMOTE_RELEASE_DIR}."
-  exit 1
-fi
-
-if [ ! -f "${REMOTE_SCRIPT_LOCAL_PATH}" ]; then
-  fail "Remote deployment script not found: ${REMOTE_SCRIPT_LOCAL_PATH}"
-fi
-
-REMOTE_SCRIPT_REMOTE_PATH="$(ssh_run mktemp /tmp/release-remote.XXXXXX)"
-scp -i "${SSH_KEY}" "${REMOTE_SCRIPT_LOCAL_PATH}" "${VPS_USER}@${VPS_HOST}:${REMOTE_SCRIPT_REMOTE_PATH}" >/dev/null
-ssh_run chmod 700 "${REMOTE_SCRIPT_REMOTE_PATH}"
-
-REMOTE_ARGS=(
-  "${REMOTE_SCRIPT_REMOTE_PATH}"
-  --mode "${DEPLOY_MODE}"
-  --source-dir "${REMOTE_RELEASE_DIR}"
-  --auth-file "${AUTH_FILE}"
-  --caddy-routes-dir "${CADDY_ROUTES_DIR}"
-  --api-container "${API_CONTAINER}"
-  --web-container "${WEB_CONTAINER}"
-  --api-image-repo "${API_IMAGE_REPOSITORY}"
-  --web-image-repo "${WEB_IMAGE_REPOSITORY}"
-  --platform-network "${PLATFORM_NETWORK}"
-  --apps-network "${MANAGED_APPS_NETWORK}"
-  --api-data-volume "${API_DATA_VOLUME}"
-  --api-version "${NEW_API_VERSION}"
-  --web-version "${NEW_WEB_VERSION}"
-  --previous-api-version "${PREVIOUS_API_VERSION}"
-  --previous-web-version "${PREVIOUS_WEB_VERSION}"
-  --url-panel "${PUBLIC_URL_PANEL}"
-  --url-wizard-test "${PUBLIC_URL_WIZARD_TEST}"
-  --url-sqlite-test "${PUBLIC_URL_SQLITE_TEST}"
-)
-
-# Build a safely quoted remote command string. Every argument is our own
-# fixed configuration or a validated semver string — none of it is
-# operator-supplied free text that reaches the shell unquoted.
-REMOTE_COMMAND=""
-for arg in "${REMOTE_ARGS[@]}"; do
-  REMOTE_COMMAND="${REMOTE_COMMAND}$(printf '%q ' "${arg}")"
-done
-
-REMOTE_LOG="$(new_tmp_file)"
-DEPLOY_EXIT_CODE=0
-ssh -i "${SSH_KEY}" -o BatchMode=yes "${VPS_USER}@${VPS_HOST}" "${REMOTE_COMMAND}" 2>&1 | tee "${REMOTE_LOG}" || DEPLOY_EXIT_CODE=$?
-
-ssh_quiet rm -f "${REMOTE_SCRIPT_REMOTE_PATH}" || true
-REMOTE_CLEANUP_DONE=1
-
-# ============================================================
-# 9. RELEASE COMPLETE
-# ============================================================
-
-print_header "RELEASE COMPLETE"
-
-read_summary_value() {
-  local key="$1"
-  grep -E "^RELEASE_SUMMARY_${key}=" "${REMOTE_LOG}" | tail -n 1 | sed -e "s/^RELEASE_SUMMARY_${key}=//"
-}
-
-SUMMARY_NEW_API_IMAGE="$(read_summary_value NEW_API_IMAGE)"
-SUMMARY_NEW_WEB_IMAGE="$(read_summary_value NEW_WEB_IMAGE)"
-SUMMARY_BACKUP_PATH="$(read_summary_value BACKUP_PATH)"
-SUMMARY_ROLLBACK_CONTAINERS="$(read_summary_value ROLLBACK_CONTAINERS)"
-SUMMARY_URL_PANEL="$(read_summary_value URL_RESULT_PANEL)"
-SUMMARY_URL_WIZARD="$(read_summary_value URL_RESULT_WIZARD)"
-SUMMARY_URL_SQLITE="$(read_summary_value URL_RESULT_SQLITE)"
-SUMMARY_STATUS="$(read_summary_value STATUS)"
-
-DEPLOY_SUCCEEDED=1
-if [ "${DEPLOY_EXIT_CODE}" -ne 0 ] || [ "${SUMMARY_STATUS}" = "ROLLED_BACK" ] || [ "${SUMMARY_STATUS}" = "FAILED" ] || [ -z "${SUMMARY_STATUS}" ]; then
-  DEPLOY_SUCCEEDED=0
-fi
-
-if [ "${DEPLOY_SUCCEEDED}" -eq 1 ]; then
-  info "Deployment verified successfully — updating the VPS 'current' source pointer."
-  if ssh_run ln -sfn "${REMOTE_RELEASE_DIR}" "${REMOTE_CURRENT_SYMLINK}"; then
-    info "current -> ${REMOTE_RELEASE_DIR}"
-  else
-    info "WARNING: deployment succeeded but updating the 'current' symlink failed. The release directory is still ${REMOTE_RELEASE_DIR}."
-  fi
+if run_remote_deploy_and_report; then
+  exit 0
 else
-  info "Deployment did not succeed — the VPS 'current' source pointer was left unchanged."
-fi
-
-info "Commit SHA: ${COMMIT_SHA}"
-info "API changed: ${API_CHANGED}"
-info "Web changed: ${WEB_CHANGED}"
-info "Previous API image: ${PREVIOUS_API_IMAGE:-unknown}"
-info "New API image: ${SUMMARY_NEW_API_IMAGE:-n/a}"
-info "Previous web image: ${PREVIOUS_WEB_IMAGE:-unknown}"
-info "New web image: ${SUMMARY_NEW_WEB_IMAGE:-n/a}"
-info "Database backup path: ${SUMMARY_BACKUP_PATH:-none}"
-info "Rollback containers preserved: ${SUMMARY_ROLLBACK_CONTAINERS:-none}"
-info "Release directory: ${REMOTE_RELEASE_DIR}"
-info "panel.hookstats.com: ${SUMMARY_URL_PANEL:-not checked}"
-info "wizard-test.apps.hookstats.com: ${SUMMARY_URL_WIZARD:-not checked}"
-info "sqlite-test.apps.hookstats.com: ${SUMMARY_URL_SQLITE:-not checked}"
-
-if [ "${DEPLOY_SUCCEEDED}" -eq 0 ]; then
-  info "Status: FAILED/ROLLED BACK"
   exit 1
 fi
-
-info "Status: PASS"
-exit 0

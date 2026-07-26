@@ -35,12 +35,89 @@ This runs the full workflow, interactively:
    database, swaps containers while preserving their runtime
    configuration, and verifies the result.
 9. **Release complete** — prints one final report you can paste back
-   into ChatGPT for review, and — only on success — points the VPS
-   `current` source pointer at the new release directory.
+   into ChatGPT for review. The remote script itself atomically updates
+   the VPS `current` source pointer, as the very last required step
+   before it reports success — see "Current source pointer update" and
+   "Rollback behavior" below.
 
 The whole run produces a single, continuous, copy-pasteable transcript
 with `===== SECTION =====` headers. No color codes are used, so the
 output survives being pasted into anything.
+
+## `--yes` (no interactive confirmation)
+
+```bash
+./release.sh --message "Fix the thing" --yes
+```
+
+Auto-confirms the two `y/N` prompts (staging/committing, and proceeding
+with the remote build/deploy) instead of waiting for input. A commit
+message is still required — pass it with `--message`. If you omit
+`--message` under `--yes`, the script does not invent one; it fails
+cleanly at the empty-commit-message check instead of guessing at what
+happened. `--yes` does not change anything else about the workflow —
+every check, build, test, and safety gate still runs exactly as before;
+it only removes the two points that would otherwise wait for a human to
+type `y`.
+
+## Resuming an already-committed, already-synced release
+
+If a release makes it through local verification, commit, and source
+sync, but then fails during remote pre-flight/build/swap/verification
+(for example, a missing host-level dependency on the VPS) — the commit
+and the immutable release directory it created are both left in place,
+untouched. There is no need to make a fake code change just to get
+another deployment attempt.
+
+```bash
+./release.sh \
+  --resume-release /opt/deployment-platform/source/releases/release-20260726T191815Z-ac3bbc13ae2b \
+  --api-version 1.2.1 \
+  --web-version 1.1.2 \
+  --yes
+```
+
+`--resume-release` redeploys that exact, already-synced directory
+instead of staging, committing, or syncing anything new. It:
+
+- **only** accepts a path under `${VPS_SOURCE_DIR}/releases/` that
+  matches the `release-<timestamp>-<12 hex sha>` naming convention
+  release.sh itself uses — anything else (a different directory,
+  `..` traversal, shell metacharacters, a path outside `releases/`) is
+  rejected outright, before any SSH call is made;
+- verifies, over SSH, that the directory actually exists on the VPS and
+  that `package.json`, `apps/api/Dockerfile`, and `apps/web/Dockerfile`
+  are all present inside it;
+- extracts the 12-character commit suffix from the directory name and
+  requires it to match the current local `git rev-parse HEAD` (or an
+  explicit `--resume-commit <sha>` override) — refusing if they don't,
+  so you can't accidentally resume a directory that doesn't correspond
+  to the commit you think it does;
+- skips local build, tests, staging, commit, and source sync entirely —
+  nothing in your working tree is touched;
+- still inspects the **currently running** API/web image versions on
+  the VPS (exactly like a normal release does) and shows them before
+  asking for confirmation;
+- still requires the same explicit confirmation as a normal deploy
+  (`--yes` still works here, exactly as documented above);
+- still runs every remote pre-flight, image-build, backup, migration,
+  container-swap, verification, and automatic-rollback protection in
+  `scripts/release-remote.sh` — including its existing refusal to
+  overwrite an image tag that already exists, and its refusal if the
+  intended rollback container name is already taken;
+- never accepts an arbitrary remote command — the resumed directory is
+  passed to the exact same, fixed `--source-dir` flag a normal release
+  uses.
+
+`--resume-mode api|web|both` (default `both`) controls which
+component(s) the resumed release rebuilds and swaps — set this to match
+what the original, interrupted release was actually meant to touch.
+
+`--api-version`/`--web-version` behave exactly as in a normal release:
+if you omit them, the next patch version is computed from whatever is
+currently live. Passing them explicitly (as in the example above) is
+recommended for a resume, since it makes the intended target version
+unambiguous.
 
 ## No-change behavior
 
@@ -186,6 +263,125 @@ touched by the sync step — `AUTH_FILE`, `CADDY_ROUTES_DIR`, Docker
 volumes, and database backups all live elsewhere and are never in its
 path.
 
+### Current source pointer update
+
+`scripts/release-remote.sh` (not `release.sh`) owns updating
+`${VPS_SOURCE_DIR}/current`, via `--current-symlink` (which `release.sh`
+always passes). It is the **last required success action** — the script
+does not print `PASS` until it has completed:
+
+1. Verifies the release directory still has `package.json`,
+   `apps/api/Dockerfile`, and `apps/web/Dockerfile`.
+2. Points a temporary symlink at the release directory
+   (`ln -sfn`), then atomically renames it into place over `current`
+   (`mv -T`) — never a direct, non-atomic overwrite.
+3. Resolves `current` with `readlink -f` and verifies it matches the
+   release directory exactly.
+
+If any of those steps fails, the script does **not** roll back the
+already-verified, already-live containers — by this point the
+deployment itself is healthy, and undoing it wouldn't fix a symlink
+problem anyway. Instead it reports `PASS_WITH_WARNINGS` (see "Rollback
+behavior" below) and tells you the exact manual command to run.
+
+## Required host tools
+
+**On the Mac** (`release.sh`): `git`, `npm`, `ssh`, `rsync`, `sed`,
+`grep`, `awk`, `curl`.
+
+**On the VPS** (`scripts/release-remote.sh`): `docker`, `curl`,
+`openssl`, plus the standard POSIX/Linux utilities the script already
+relies on (`sed`, `grep`, `tr`, `date`, `mktemp`, `id`). **The VPS
+deliberately has no host-level Node.js installation, and this tooling
+never requires one.** Node only ever runs two ways:
+
+1. Inside the API image itself at runtime (and, briefly, inside the
+   already-running API container via `docker exec` for the database
+   backup, migration check, and `CREDENTIAL_ENCRYPTION_KEY` check — all
+   three use that container's own bundled Node, never the host).
+2. Inside a throwaway, pinned `node:24-alpine` container the remote
+   script runs itself — see below.
+
+If you ever see `required tool not found on VPS: node`, it means an
+older copy of `scripts/release-remote.sh` is on the VPS or was invoked
+directly; do not "fix" this by installing Node on the host — re-sync
+the current script instead (a normal `./release.sh` run always
+overwrites it via `scp` before every remote invocation).
+
+## Dockerized Node runtime parser
+
+Two things this tooling does — parsing a captured container's mount
+list, and computing the exact `docker create` arguments needed to
+reproduce a container's runtime configuration — need real structured
+JSON parsing, not `grep`/`sed` against Docker's JSON output. Both run
+inside a small, sandboxed helper container instead of requiring Node on
+the host:
+
+- **Image**: `node:24-alpine` — a fixed, non-floating tag, never
+  `latest`. `scripts/release-remote.sh` checks for it during remote
+  pre-flight (before any live container is touched) and pulls it if
+  missing; a pull failure is reported as `FAILED` at that point, not
+  partway through a swap. You'll see a line like:
+
+  ```
+  Runtime parser: Dockerized Node node:24-alpine
+  ```
+
+- **Isolation**: the helper container runs with `--network none`, no
+  added capabilities (`--cap-drop ALL`), `--security-opt
+  no-new-privileges`, a read-only root filesystem, and as the same
+  uid/gid as the invoking shell rather than root. **It is never given
+  access to the Docker socket** — it cannot start, stop, or inspect any
+  container itself; every real `docker` command stays on the host, in
+  `scripts/release-remote.sh`.
+- **Input handling**: the Node script and every data file it needs
+  (captured container/image JSON, the mounts list) are bind-mounted
+  into the container read-only, each under its own path, and passed to
+  the script as plain file-path arguments. Nothing is inlined into the
+  `docker run` command line itself, so none of that captured
+  content — which can include environment values — ever appears in
+  `argv`, `ps` output, or shell history.
+- **Temporary files**: every file this involves (the Node scripts
+  themselves, captured JSON, argument/summary output) is created with
+  `mktemp` and `chmod 600`, and removed by a `trap`-based cleanup on
+  exit — success or failure.
+
+A third script also runs through this same helper: determining the
+**expected** migration versions/names from source, for the migration
+verification step. It locates each `apps/api/src/migrations/NNN_*.ts`
+file's own `export const ...: Migration = { ... }` object header and
+reads `version`/`name` only from within that slice (up to the file's
+`up(` function) — never from a whole-file text match. This matters
+because some migration files also contain an unrelated, unquoted
+`name: string;` field (part of a local row-typing `interface`, not the
+migration's own name) that a naive `grep '^\s*name:'` would match first
+and silently pass through unchanged.
+
+## Existing-image retry policy
+
+`scripts/release-remote.sh` refuses, during pre-flight, to build an
+image tag that already exists — this is unconditional and has no
+override:
+
+```
+ERROR: API image tag already exists, refusing to overwrite: deployment-platform-api:1.2.1
+```
+
+If a previous attempt already built (and possibly deployed and rolled
+back) `deployment-platform-api:1.2.1` / `deployment-platform-web:1.1.2`,
+a retry must target the **next** patch versions instead of reusing
+those tags — even if the previous attempt's containers are no longer
+live:
+
+```bash
+./release.sh --resume-release <release-dir> --api-version 1.2.2 --web-version 1.1.3 --yes
+```
+
+This is deliberately the simple, safe option: it never risks silently
+overwriting a tag that might still be referenced by a preserved rollback
+container, and it costs nothing (patch version bumps are free on this
+project).
+
 ## What is automated
 
 - Verifying the repo/branch, scanning for secret-like files, running the
@@ -206,8 +402,11 @@ path.
 - Checking that all three public URLs return HTTP 200.
 - Automatically rolling back to the preserved container(s) if any of the
   above verification steps fails.
-- Advancing the VPS `current` source pointer only after a verified
-  success.
+- Advancing the VPS `current` source pointer atomically, as the last
+  required step before reporting success (see "Current source pointer
+  update" above) — never before every other verification has passed,
+  and never rolling back an already-verified deployment if only this
+  bookkeeping step fails (`PASS_WITH_WARNINGS` instead).
 
 ## What still requires your confirmation
 
@@ -295,18 +494,62 @@ succeeded does it rename the current container(s) to
 `<container>-rollback-<previous-version>-<timestamp>` and create the
 replacement(s).
 
-This means:
+The final status is always exactly one of five values, and
+`release.sh` displays whichever one the remote script actually reported
+— it never collapses two of these into one label:
 
-- A failure during pre-flight, image build, database backup, or runtime
-  configuration capture/validation happens **before any container is
-  touched** — the final status is `FAILED`, and both original containers
-  (in a combined API+web release) are simply left running untouched.
-- A failure **after** a container has been renamed away — a missing
-  startup log line, a wrong image, a missing network, a failed migration
-  check, a bad `CREDENTIAL_ENCRYPTION_KEY`, or a failed public URL check
-  — triggers automatic rollback and the final status is `ROLLED_BACK`.
-  In a combined release, both the API and web original containers are
-  restored, not just the one that failed.
+- **`PASS`** — the deployment succeeded, was fully verified, and the
+  `current` source pointer was updated.
+- **`PASS_WITH_WARNINGS`** — the deployment itself succeeded and is
+  live and fully verified (containers, migrations, encryption key,
+  public URLs), but a non-critical post-success step — currently, only
+  the `current` source pointer update — did not complete. The live
+  containers are **not** rolled back for this; `release.sh` treats it as
+  a success (exit code `0`) and prints the warning and the manual fix
+  command.
+- **`FAILED`** — something failed during pre-flight, image build,
+  database backup, or runtime configuration capture/validation, all of
+  which happen **before any container is touched**. Both original
+  containers (in a combined API+web release) are simply left running,
+  untouched.
+- **`ROLLED_BACK`** — a failure happened **after** a container had
+  already been renamed away — a missing startup log line, a wrong
+  image, a missing network, a failed migration check, a bad
+  `CREDENTIAL_ENCRYPTION_KEY`, or a failed public URL check — and the
+  previous container(s) were successfully restored. In a combined
+  release, both the API and web original containers are restored, not
+  just the one that failed.
+- **`ROLLBACK_FAILED`** — a swap had begun (as above), automatic
+  rollback was attempted, but restoring the previous container did
+  **not** fully succeed (it could not be renamed back, could not be
+  restarted, or came back up not running). Treat this as an active
+  incident: do not assume either the API or the web container is
+  healthy, and check the VPS by hand immediately.
+
+The remote script guards against ever rolling back a deployment that has
+already fully succeeded: it only sets an internal "deployment complete"
+flag, and disarms its own automatic-rollback trap, immediately before
+printing `PASS`/`PASS_WITH_WARNINGS` — after the current source pointer
+update above, which is itself the last required step. Any error trapped
+before that point still triggers the automatic rollback described below;
+nothing after it can.
+
+When an unexpected failure does trigger the automatic rollback, the
+transcript now includes the specific stage, source line, and exit code,
+for example:
+
+```
+===== AUTOMATIC ROLLBACK =====
+Reason: An unexpected command failure occurred during deployment.
+Failure stage: CONTAINER SWAP
+Failure line: 842
+Exit code: 1
+```
+
+This never includes environment values, auth-file contents, encryption
+keys, tokens, or captured Docker environment file contents — only the
+stage name (from the same `===== SECTION =====` headers already printed
+throughout the run), the failing line number, and the exit code.
 
 On rollback, the script:
 

@@ -35,6 +35,7 @@ PREVIOUS_WEB_VERSION=""
 URL_PANEL=""
 URL_WIZARD_TEST=""
 URL_SQLITE_TEST=""
+CURRENT_SYMLINK=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -56,6 +57,7 @@ while [ "$#" -gt 0 ]; do
     --url-panel) URL_PANEL="$2"; shift 2 ;;
     --url-wizard-test) URL_WIZARD_TEST="$2"; shift 2 ;;
     --url-sqlite-test) URL_SQLITE_TEST="$2"; shift 2 ;;
+    --current-symlink) CURRENT_SYMLINK="$2"; shift 2 ;;
     *)
       printf 'Unknown argument: %s\n' "$1" >&2
       exit 1
@@ -100,7 +102,9 @@ RELEASE_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 # Utilities
 # ============================================================
 
+CURRENT_STAGE="startup"
 print_header() {
+  CURRENT_STAGE="$1"
   printf '\n===== %s =====\n' "$1"
 }
 
@@ -112,26 +116,108 @@ TMP_FILES=()
 new_tmp_file() {
   local path
   path="$(mktemp "/tmp/release-remote.XXXXXX")"
+  # Explicit, not just relying on umask defaults — these files can hold
+  # captured container environments and other sensitive config.
+  chmod 600 "${path}"
   TMP_FILES+=("${path}")
   printf '%s' "${path}"
 }
 
 cleanup_tmp_files() {
+  # Deliberately built with `if` blocks and an explicit final `return 0`
+  # rather than a chained `[ -n ] && [ -e ] && rm -f`: the chained form's
+  # own exit status (false whenever the last-checked file no longer
+  # exists) becomes this function's exit status, and — because `set -E`
+  # (errtrace) propagates ERR into trap handlers — a false chain here can
+  # re-fire the ERR trap even when every real deployment step already
+  # succeeded. This function must never fail, since it also runs as the
+  # EXIT trap after a successful release.
   local path
-  for path in "${TMP_FILES[@]:-}"; do
-    [ -n "${path:-}" ] && [ -e "${path}" ] && rm -f "${path}"
-  done
+  if [ "${#TMP_FILES[@]}" -gt 0 ]; then
+    for path in "${TMP_FILES[@]}"; do
+      if [ -n "${path}" ] && [ -e "${path}" ]; then
+        rm -f "${path}" || true
+      fi
+    done
+  fi
+  return 0
 }
 trap cleanup_tmp_files EXIT
 
+# This VPS deliberately has no host-level Node installation — Node only
+# ever runs inside Docker images (the API image at runtime, and this
+# pinned helper image for the structured JSON parsing this script itself
+# needs). Only genuinely host-level tools belong here.
 require_tools() {
   local tool
-  for tool in docker node curl openssl; do
+  for tool in docker curl openssl; do
     if ! command -v "${tool}" >/dev/null 2>&1; then
       printf 'ERROR: required tool not found on VPS: %s\n' "${tool}" >&2
       exit 1
     fi
   done
+}
+
+# ============================================================
+# Dockerized Node helper — replaces every former host `node` call
+# ============================================================
+#
+# Pinned, non-floating tag: never "latest". Pulled (if missing) during
+# remote pre-flight, before any live container is touched, so a pull
+# failure is reported as FAILED rather than surfacing partway through a
+# swap.
+NODE_HELPER_IMAGE="node:24-alpine"
+
+ensure_node_helper_image() {
+  if docker image inspect "${NODE_HELPER_IMAGE}" >/dev/null 2>&1; then
+    info "Runtime parser: Dockerized Node ${NODE_HELPER_IMAGE} (already present)"
+    return 0
+  fi
+
+  info "Pulling runtime parser image ${NODE_HELPER_IMAGE}..."
+  if ! docker pull "${NODE_HELPER_IMAGE}" >/dev/null; then
+    fail "Unable to pull the required runtime-parser image (${NODE_HELPER_IMAGE}). Nothing has been changed yet."
+  fi
+  info "Runtime parser: Dockerized Node ${NODE_HELPER_IMAGE}"
+}
+
+# run_node_helper <script-file> [data-file...]
+#
+# Executes a Node script inside a throwaway, sandboxed node:24-alpine
+# container: no network, no Docker socket, no capabilities, a read-only
+# root filesystem (with a small tmpfs for /tmp), and running as the same
+# uid/gid as the invoking shell rather than root. The script and every
+# data file are bind-mounted read-only under /work by their own
+# basenames and passed to the script as argv — nothing is inlined into
+# the `docker run` command line itself, so none of the captured
+# JSON/config content (which can include environment values) ever
+# appears in argv, `ps` output, or shell history. This container only
+# ever transforms already-captured text; it never touches Docker itself
+# — every real `docker` command stays on the host, in this script.
+run_node_helper() {
+  local script_file="$1"
+  shift
+
+  local -a mounts=(-v "${script_file}:/work/script.js:ro")
+  local -a container_args=()
+  local arg base
+
+  for arg in "$@"; do
+    base="$(basename "${arg}")"
+    mounts+=(-v "${arg}:/work/data/${base}:ro")
+    container_args+=("/work/data/${base}")
+  done
+
+  docker run --rm \
+    --network none \
+    --user "$(id -u):$(id -g)" \
+    --security-opt no-new-privileges \
+    --cap-drop ALL \
+    --read-only \
+    --tmpfs /tmp \
+    "${mounts[@]}" \
+    "${NODE_HELPER_IMAGE}" \
+    node /work/script.js "${container_args[@]}" < /dev/null
 }
 
 # Sanitizes a block of log text before printing it — used for container
@@ -157,10 +243,20 @@ BACKUP_PATH=""
 ROLLBACK_TRIGGERED=0
 ANY_SWAP_PERFORMED=0
 
+# Set to 1 only once every required success action (container/migration/
+# key/public-URL verification AND the current-source-pointer update) has
+# completed. The ERR trap checks this before ever triggering a rollback,
+# and it is also the point at which the ERR trap itself is disarmed —
+# see section 6 below. Never set this early "to suppress an error";
+# it must only ever become true after real success.
+DEPLOYMENT_COMPLETE=0
+
 emit_summary() {
   # Machine-parseable lines consumed by release.sh. Keep these as the
   # last thing this script prints so release.sh's log-tail parsing is
-  # unambiguous.
+  # unambiguous. Fields 9-12 were added for rollback-summary accuracy;
+  # release.sh parses by key name, so older/newer versions of either
+  # script stay compatible.
   printf 'RELEASE_SUMMARY_NEW_API_IMAGE=%s\n' "${1}"
   printf 'RELEASE_SUMMARY_NEW_WEB_IMAGE=%s\n' "${2}"
   printf 'RELEASE_SUMMARY_BACKUP_PATH=%s\n' "${3}"
@@ -169,6 +265,10 @@ emit_summary() {
   printf 'RELEASE_SUMMARY_URL_RESULT_WIZARD=%s\n' "${6}"
   printf 'RELEASE_SUMMARY_URL_RESULT_SQLITE=%s\n' "${7}"
   printf 'RELEASE_SUMMARY_STATUS=%s\n' "${8}"
+  printf 'RELEASE_SUMMARY_LIVE_API_IMAGE=%s\n' "${9}"
+  printf 'RELEASE_SUMMARY_LIVE_WEB_IMAGE=%s\n' "${10}"
+  printf 'RELEASE_SUMMARY_ROLLBACK_CONTAINERS_STATE=%s\n' "${11}"
+  printf 'RELEASE_SUMMARY_CURRENT_POINTER=%s\n' "${12}"
 }
 
 rollback_component() {
@@ -207,12 +307,19 @@ rollback_component() {
       info "${label}: restored ${live_name} from ${rollback_name} and it is running."
     else
       info "${label}: restored ${live_name} from ${rollback_name} but it is NOT running. Manual attention required."
+      return 1
     fi
   fi
 
   return 0
 }
 
+# Status semantics, kept distinct and never collapsed together:
+#   FAILED          — failed before any live container was touched.
+#   ROLLED_BACK     — a swap began, but the previous container(s) were
+#                     successfully restored.
+#   ROLLBACK_FAILED — a swap began AND restoration itself did not fully
+#                     succeed; do not assume either app is healthy.
 trigger_rollback() {
   local reason="$1"
 
@@ -224,10 +331,15 @@ trigger_rollback() {
   print_header "AUTOMATIC ROLLBACK"
   info "Reason: ${reason}"
 
+  local api_rollback_ok=1
+  local web_rollback_ok=1
+
   if ! rollback_component "API" "${API_CONTAINER}" "${API_ROLLBACK_NAME}" "${API_NEW_CREATED}" "${API_NEW_STARTED}"; then
+    api_rollback_ok=0
     info "API rollback encountered an error — see above. Do not assume the API container is healthy."
   fi
   if ! rollback_component "web" "${WEB_CONTAINER}" "${WEB_ROLLBACK_NAME}" "${WEB_NEW_CREATED}" "${WEB_NEW_STARTED}"; then
+    web_rollback_ok=0
     info "Web rollback encountered an error — see above. Do not assume the web container is healthy."
   fi
 
@@ -236,17 +348,67 @@ trigger_rollback() {
   fi
   info "Release directory preserved for inspection: ${SOURCE_DIR}"
 
-  local rollback_names=""
-  [ -n "${API_ROLLBACK_NAME}" ] && rollback_names="${rollback_names}${API_ROLLBACK_NAME} "
-  [ -n "${WEB_ROLLBACK_NAME}" ] && rollback_names="${rollback_names}${WEB_ROLLBACK_NAME} "
-
   local status="FAILED"
   if [ "${ANY_SWAP_PERFORMED}" -eq 1 ]; then
     status="ROLLED_BACK"
+    if [ "${api_rollback_ok}" -eq 0 ] || [ "${web_rollback_ok}" -eq 0 ]; then
+      status="ROLLBACK_FAILED"
+      info "ROLLBACK_FAILED: restoration did not fully succeed — manual intervention required immediately."
+    fi
+  fi
+
+  # Rollback container names only actually still exist under their
+  # rollback-suffixed name if THAT component's restoration did not fully
+  # succeed (rename-back failed, or the restored container didn't come
+  # back up). Once rollback_component succeeds, the container has been
+  # renamed back to its live name and no longer exists under the
+  # rollback name — reporting it as "preserved" at that point would be
+  # false, since it was consumed by the restore.
+  local rollback_names=""
+  local rollback_containers_state="n/a (no swap occurred)"
+  if [ "${ANY_SWAP_PERFORMED}" -eq 1 ]; then
+    if [ -n "${API_ROLLBACK_NAME}" ] && [ "${api_rollback_ok}" -eq 0 ]; then
+      rollback_names="${rollback_names}${API_ROLLBACK_NAME} "
+    fi
+    if [ -n "${WEB_ROLLBACK_NAME}" ] && [ "${web_rollback_ok}" -eq 0 ]; then
+      rollback_names="${rollback_names}${WEB_ROLLBACK_NAME} "
+    fi
+    if [ "${api_rollback_ok}" -eq 1 ] && [ "${web_rollback_ok}" -eq 1 ]; then
+      rollback_containers_state="consumed (renamed back to live container names during restore)"
+    else
+      rollback_containers_state="NOT fully restored — still exists under the rollback name(s) above; manual intervention required"
+    fi
+  fi
+
+  # Live image accuracy: on a rollback the newly built image is NOT live
+  # (even though it still exists as an image on disk). The live image is
+  # either the untouched original (no swap happened for this component)
+  # or the restored previous version (swap happened and rollback
+  # succeeded) or genuinely unknown (rollback for this component failed).
+  local live_api_image="n/a"
+  local live_web_image="n/a"
+  if [ "${MODE}" = "api" ] || [ "${MODE}" = "both" ]; then
+    if [ "${ANY_SWAP_PERFORMED}" -eq 0 ]; then
+      live_api_image="${API_IMAGE_REPO}:${PREVIOUS_API_VERSION} (untouched)"
+    elif [ "${api_rollback_ok}" -eq 1 ]; then
+      live_api_image="${API_IMAGE_REPO}:${PREVIOUS_API_VERSION} (restored)"
+    else
+      live_api_image="UNKNOWN — restoration did not fully succeed, verify manually"
+    fi
+  fi
+  if [ "${MODE}" = "web" ] || [ "${MODE}" = "both" ]; then
+    if [ "${ANY_SWAP_PERFORMED}" -eq 0 ]; then
+      live_web_image="${WEB_IMAGE_REPO}:${PREVIOUS_WEB_VERSION} (untouched)"
+    elif [ "${web_rollback_ok}" -eq 1 ]; then
+      live_web_image="${WEB_IMAGE_REPO}:${PREVIOUS_WEB_VERSION} (restored)"
+    else
+      live_web_image="UNKNOWN — restoration did not fully succeed, verify manually"
+    fi
   fi
 
   print_header "RELEASE COMPLETE"
-  emit_summary "n/a" "n/a" "${BACKUP_PATH}" "${rollback_names}" "not reached" "not reached" "not reached" "${status}"
+  emit_summary "n/a" "n/a" "${BACKUP_PATH}" "${rollback_names}" "not reached" "not reached" "not reached" "${status}" \
+    "${live_api_image}" "${live_web_image}" "${rollback_containers_state}" "unchanged (rollback occurred before any pointer update)"
 }
 
 fail() {
@@ -256,7 +418,20 @@ fail() {
 }
 
 on_err() {
-  trigger_rollback "An unexpected command failure occurred during deployment."
+  local exit_code=$?
+  local line_no="${BASH_LINENO[0]:-0}"
+
+  # The deployment already reached full success and disarmed this trap
+  # before printing PASS (see section 6); if it still somehow fires past
+  # that point (e.g. from best-effort bookkeeping after the trap removal
+  # itself), it must never roll back an already-verified, already-live
+  # release. This is a backstop, not the fix — the actual fix is
+  # disarming the trap and correcting cleanup_tmp_files above.
+  if [ "${DEPLOYMENT_COMPLETE}" -eq 1 ]; then
+    return 0
+  fi
+
+  trigger_rollback "$(printf 'An unexpected command failure occurred during deployment.\nFailure stage: %s\nFailure line: %s\nExit code: %s' "${CURRENT_STAGE}" "${line_no}" "${exit_code}")"
 }
 trap on_err ERR
 
@@ -278,6 +453,8 @@ fi
 if [ ! -f "${AUTH_FILE}" ]; then
   fail "Auth file not found: ${AUTH_FILE}"
 fi
+
+ensure_node_helper_image
 
 check_network_exists() {
   docker network inspect "$1" >/dev/null 2>&1
@@ -399,36 +576,42 @@ merge_encryption_key() {
 
 # Mounts, including tmpfs mounts, captured generically from whatever the
 # live container actually has — never hardcoded to a specific path.
+# Parsed by the Dockerized Node helper rather than fragile grep/sed
+# against Docker's JSON output.
+read -r -d '' MOUNT_PARSE_SCRIPT <<'NODE_EOF' || true
+const fs = require("fs");
+const raw = fs.readFileSync(process.argv[2], "utf8");
+const mounts = JSON.parse(raw || "[]");
+for (const m of mounts) {
+  const type = m.Type;
+  const target = m.Destination;
+  if (type === "tmpfs") {
+    process.stdout.write(`type=tmpfs,target=${target}\n`);
+    continue;
+  }
+  const source = type === "volume" ? m.Name : m.Source;
+  const readOnly = m.RW === false ? ",readonly" : "";
+  process.stdout.write(`type=${type},source=${source},target=${target}${readOnly}\n`);
+}
+NODE_EOF
+
+MOUNT_PARSE_SCRIPT_FILE="$(new_tmp_file)"
+printf '%s' "${MOUNT_PARSE_SCRIPT}" > "${MOUNT_PARSE_SCRIPT_FILE}"
+
 MOUNT_ARGS=()
 capture_mounts() {
   local container="$1"
   MOUNT_ARGS=()
 
-  local mounts_json
-  mounts_json="$(docker inspect --format '{{json .Mounts}}' "${container}")"
+  local mounts_json_file
+  mounts_json_file="$(new_tmp_file)"
+  docker inspect --format '{{json .Mounts}}' "${container}" > "${mounts_json_file}"
 
   local mount_spec
   while IFS= read -r mount_spec || [ -n "${mount_spec}" ]; do
     [ -n "${mount_spec}" ] || continue
     MOUNT_ARGS+=("--mount" "${mount_spec}")
-  done < <(printf '%s' "${mounts_json}" | node -e '
-let data = "";
-process.stdin.on("data", (chunk) => { data += chunk; });
-process.stdin.on("end", () => {
-  const mounts = JSON.parse(data || "[]");
-  for (const m of mounts) {
-    const type = m.Type;
-    const target = m.Destination;
-    if (type === "tmpfs") {
-      process.stdout.write(`type=tmpfs,target=${target}\n`);
-      continue;
-    }
-    const source = type === "volume" ? m.Name : m.Source;
-    const readOnly = m.RW === false ? ",readonly" : "";
-    process.stdout.write(`type=${type},source=${source},target=${target}${readOnly}\n`);
-  }
-});
-')
+  done < <(run_node_helper "${MOUNT_PARSE_SCRIPT_FILE}" "${mounts_json_file}")
 }
 
 # ---------- Runtime configuration capture ----------
@@ -472,9 +655,11 @@ function arraysEqual(a, b) {
   return true;
 }
 
-const container = readJson(process.argv[1]);
-const oldImage = readJson(process.argv[2]);
-const newImage = readJson(process.argv[3]);
+// Run as a real script file inside the Dockerized helper (not via
+// `node -e`), so the first data argument is process.argv[2], not [1].
+const container = readJson(process.argv[2]);
+const oldImage = readJson(process.argv[3]);
+const newImage = readJson(process.argv[4]);
 
 if (!container) {
   console.error("Could not read captured container configuration.");
@@ -682,6 +867,9 @@ for (const s of summary) {
 process.exit(0);
 NODE_EOF
 
+RUNTIME_CONFIG_SCRIPT_FILE="$(new_tmp_file)"
+printf '%s' "${RUNTIME_CONFIG_SCRIPT}" > "${RUNTIME_CONFIG_SCRIPT_FILE}"
+
 RUNTIME_OPTION_ARGS=()
 RUNTIME_COMMAND_ARGS=()
 
@@ -711,7 +899,7 @@ capture_runtime_config() {
 
   docker inspect --format '{{json .}}' "${new_image_ref}" > "${new_image_json}"
 
-  if ! node -e "${RUNTIME_CONFIG_SCRIPT}" "${container_json}" "${old_image_json}" "${new_image_json}" >"${args_file}" 2>"${summary_file}"; then
+  if ! run_node_helper "${RUNTIME_CONFIG_SCRIPT_FILE}" "${container_json}" "${old_image_json}" "${new_image_json}" >"${args_file}" 2>"${summary_file}"; then
     fail "Unsupported runtime setting for ${label} (nothing was changed): $(cat "${summary_file}")"
   fi
 
@@ -744,6 +932,69 @@ wait_for_log_marker() {
   done
 
   return 1
+}
+
+# update_current_pointer — atomically points the VPS "current" source
+# symlink at this release directory. Verifies the release directory has
+# the files a build needs both before (defense in depth; release.sh and
+# the pre-flight/resume paths already checked this) and after the swap
+# (the symlink actually resolves to the intended directory).
+#
+# Deliberately does NOT call fail()/trigger_rollback on error: by the
+# time this runs, containers/migrations/keys/public URLs are already
+# fully verified and live. Rolling back a healthy, verified deployment
+# because a bookkeeping symlink update failed would be destructive and
+# would not even fix the underlying problem. Instead this returns 1 and
+# lets the caller classify it as a non-fatal warning (PASS_WITH_WARNINGS)
+# while leaving the live containers exactly as they are.
+CURRENT_POINTER_RESULT=""
+CURRENT_POINTER_ERROR=""
+update_current_pointer() {
+  CURRENT_POINTER_RESULT=""
+  CURRENT_POINTER_ERROR=""
+
+  if [ -z "${CURRENT_SYMLINK}" ]; then
+    CURRENT_POINTER_RESULT="skipped (no --current-symlink provided)"
+    return 0
+  fi
+
+  info "Updating current source pointer -> ${SOURCE_DIR}"
+
+  if [ ! -f "${SOURCE_DIR}/package.json" ]; then
+    CURRENT_POINTER_ERROR="package.json missing from release directory ${SOURCE_DIR}"
+    return 1
+  fi
+  if [ ! -f "${SOURCE_DIR}/apps/api/Dockerfile" ]; then
+    CURRENT_POINTER_ERROR="apps/api/Dockerfile missing from release directory ${SOURCE_DIR}"
+    return 1
+  fi
+  if [ ! -f "${SOURCE_DIR}/apps/web/Dockerfile" ]; then
+    CURRENT_POINTER_ERROR="apps/web/Dockerfile missing from release directory ${SOURCE_DIR}"
+    return 1
+  fi
+
+  local tmp_link="${CURRENT_SYMLINK}.tmp-${RELEASE_TIMESTAMP}"
+  if ! ln -sfn "${SOURCE_DIR}" "${tmp_link}"; then
+    CURRENT_POINTER_ERROR="failed to create temporary symlink at ${tmp_link}"
+    return 1
+  fi
+  if ! mv -T "${tmp_link}" "${CURRENT_SYMLINK}"; then
+    rm -f "${tmp_link}" 2>/dev/null || true
+    CURRENT_POINTER_ERROR="failed to atomically move temporary symlink into place at ${CURRENT_SYMLINK}"
+    return 1
+  fi
+
+  local resolved expected
+  resolved="$(readlink -f "${CURRENT_SYMLINK}" 2>/dev/null || true)"
+  expected="$(readlink -f "${SOURCE_DIR}" 2>/dev/null || true)"
+  if [ -z "${resolved}" ] || [ "${resolved}" != "${expected}" ]; then
+    CURRENT_POINTER_ERROR="pointer verification failed: ${CURRENT_SYMLINK} resolves to '${resolved}', expected '${expected}'"
+    return 1
+  fi
+
+  info "Current source pointer verified: ${CURRENT_SYMLINK} -> ${resolved}"
+  CURRENT_POINTER_RESULT="${resolved}"
+  return 0
 }
 
 verify_container_image() {
@@ -888,18 +1139,81 @@ print_header "VERIFICATION"
 if [ "${MODE}" = "api" ] || [ "${MODE}" = "both" ]; then
   info "Verifying database migrations..."
 
+  # Structured, source-aware parsing via the same Dockerized Node helper
+  # used elsewhere — not a whole-file grep/sed. Earlier versions matched
+  # the FIRST line anywhere in the file starting with `name:`, which for
+  # some migrations is an unrelated `name: string;` interface field that
+  # appears (unquoted, so the sed substitution silently no-ops) before
+  # the real quoted migration name — producing garbage like "name:
+  # string;" instead of the actual applied name. This script instead
+  # locates each file's own `export const ...: Migration = { ... }`
+  # object header and reads version/name only from within that slice.
+  read -r -d '' MIGRATION_NAME_PARSE_SCRIPT <<'NODE_EOF' || true
+const fs = require("fs");
+const path = require("path");
+
+const dir = process.argv[2];
+const files = fs.readdirSync(dir).filter((f) => /^[0-9]+.*\.ts$/.test(f));
+
+const HEADER_RE = /export\s+const\s+\w+\s*:\s*Migration\s*=\s*\{/;
+const results = [];
+
+for (const file of files.sort()) {
+  const full = path.join(dir, file);
+  const text = fs.readFileSync(full, "utf8");
+
+  const headerMatch = HEADER_RE.exec(text);
+  if (!headerMatch) {
+    console.error(`No exported ": Migration = {" object found in ${file}`);
+    process.exit(1);
+  }
+
+  const bodyStart = headerMatch.index + headerMatch[0].length;
+  const upIndex = text.indexOf("up(", bodyStart);
+  const headerSlice = upIndex === -1 ? text.slice(bodyStart) : text.slice(bodyStart, upIndex);
+
+  const versionMatch = /version\s*:\s*(\d+)/.exec(headerSlice);
+  const nameMatch = /name\s*:\s*"([^"]*)"/.exec(headerSlice) || /name\s*:\s*'([^']*)'/.exec(headerSlice);
+
+  if (!versionMatch) {
+    console.error(`Could not find a numeric "version:" field in the migration object header of ${file}`);
+    process.exit(1);
+  }
+  if (!nameMatch || !nameMatch[1]) {
+    console.error(`Could not find a quoted, non-empty "name:" field in the migration object header of ${file}`);
+    process.exit(1);
+  }
+
+  results.push({ version: Number(versionMatch[1]), name: nameMatch[1], file });
+}
+
+const seenVersions = new Map();
+for (const r of results) {
+  if (seenVersions.has(r.version)) {
+    console.error(`Duplicate migration version ${r.version} in ${r.file} and ${seenVersions.get(r.version)}`);
+    process.exit(1);
+  }
+  seenVersions.set(r.version, r.file);
+}
+
+results.sort((a, b) => a.version - b.version);
+for (const r of results) {
+  process.stdout.write(`${r.version}\t${r.name}\n`);
+}
+process.exit(0);
+NODE_EOF
+
+  MIGRATION_NAME_PARSE_SCRIPT_FILE="$(new_tmp_file)"
+  printf '%s' "${MIGRATION_NAME_PARSE_SCRIPT}" > "${MIGRATION_NAME_PARSE_SCRIPT_FILE}"
+
+  MIGRATIONS_DIR="${SOURCE_DIR}/apps/api/src/migrations"
   EXPECTED_MIGRATIONS_FILE="$(new_tmp_file)"
-  for migration_file in "${SOURCE_DIR}"/apps/api/src/migrations/[0-9]*.ts; do
-    [ -e "${migration_file}" ] || continue
-    version="$(grep -E '^\s*version:' "${migration_file}" | head -n 1 | sed -E 's/[^0-9]*([0-9]+).*/\1/')"
-    name="$(grep -E '^\s*name:' "${migration_file}" | head -n 1 | sed -E 's/^[^"]*"([^"]*)".*/\1/')"
-    if [ -n "${version}" ] && [ -n "${name}" ]; then
-      printf '%s\t%s\n' "${version}" "${name}" >> "${EXPECTED_MIGRATIONS_FILE}"
-    fi
-  done
+  if ! run_node_helper "${MIGRATION_NAME_PARSE_SCRIPT_FILE}" "${MIGRATIONS_DIR}" > "${EXPECTED_MIGRATIONS_FILE}"; then
+    fail "Could not determine expected migrations from source at ${MIGRATIONS_DIR} (see the runtime-parser error above)."
+  fi
 
   if [ ! -s "${EXPECTED_MIGRATIONS_FILE}" ]; then
-    fail "Could not determine expected migrations from source at ${SOURCE_DIR}/apps/api/src/migrations."
+    fail "Could not determine expected migrations from source at ${MIGRATIONS_DIR}."
   fi
 
   MIGRATION_CHECK_SCRIPT='
@@ -1021,6 +1335,30 @@ ROLLBACK_NAMES=""
 [ -n "${API_ROLLBACK_NAME}" ] && ROLLBACK_NAMES="${ROLLBACK_NAMES}${API_ROLLBACK_NAME} "
 [ -n "${WEB_ROLLBACK_NAME}" ] && ROLLBACK_NAMES="${ROLLBACK_NAMES}${WEB_ROLLBACK_NAME} "
 
+# The current source pointer is the last required success action. The
+# remote script must not emit PASS until it has completed (or was
+# explicitly skipped because no --current-symlink was given) — do not
+# print PASS before this point.
+FINAL_STATUS="PASS"
+if update_current_pointer; then
+  info "Current source pointer: ${CURRENT_POINTER_RESULT}"
+else
+  info "WARNING: current source pointer update did not complete: ${CURRENT_POINTER_ERROR}"
+  info "The deployed containers are already verified and healthy — they are NOT being rolled back for this bookkeeping failure."
+  info "The VPS 'current' pointer still refers to the previous release. Fix manually before the next release, e.g.:"
+  info "  ln -sfn '${SOURCE_DIR}' '${CURRENT_SYMLINK}' && readlink -f '${CURRENT_SYMLINK}'"
+  FINAL_STATUS="PASS_WITH_WARNINGS"
+  CURRENT_POINTER_RESULT="FAILED: ${CURRENT_POINTER_ERROR} (previous pointer left unchanged)"
+fi
+
+# Deployment is now fully complete and verified, including the pointer
+# update above. Disarm the ERR trap before any further bookkeeping
+# (temp-file cleanup, summary emission) so a nonfatal failure there can
+# never be misread as a deployment failure and trigger a destructive
+# rollback of an already-successful, already-verified release.
+DEPLOYMENT_COMPLETE=1
+trap - ERR
+
 info "Deployment completed successfully."
 info "Rollback containers preserved (not removed automatically): ${ROLLBACK_NAMES:-none}"
 if [ -n "${BACKUP_PATH}" ]; then
@@ -1029,4 +1367,5 @@ fi
 info "Release directory (preserved, not deleted): ${SOURCE_DIR}"
 
 emit_summary "${FINAL_NEW_API_IMAGE}" "${FINAL_NEW_WEB_IMAGE}" "${BACKUP_PATH}" "${ROLLBACK_NAMES}" \
-  "HTTP ${RESULT_PANEL}" "HTTP ${RESULT_WIZARD}" "HTTP ${RESULT_SQLITE}" "PASS"
+  "HTTP ${RESULT_PANEL}" "HTTP ${RESULT_WIZARD}" "HTTP ${RESULT_SQLITE}" "${FINAL_STATUS}" \
+  "${FINAL_NEW_API_IMAGE}" "${FINAL_NEW_WEB_IMAGE}" "preserved (not renamed back)" "${CURRENT_POINTER_RESULT}"
