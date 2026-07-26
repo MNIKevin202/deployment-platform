@@ -80,6 +80,14 @@ function createFakeGithubClient(options: FakeGithubOptions = {}): SourceProvider
         throw options.pathExistsFails;
       }
       return options.dockerfileExists ?? true;
+    },
+    async getFileContents() {
+      // Never called by validateAppSource/saveAppSource — inspection is a
+      // separate flow (see repository-inspection-service.test.ts). Throw
+      // rather than return a plausible-looking value so a future caller
+      // that starts relying on this fails loudly instead of silently
+      // reading fake content.
+      throw new Error("getFileContents is not used by these tests");
     }
   };
 }
@@ -256,6 +264,7 @@ describe("saveAppSource / revalidateAppSource / removeAppSource", () => {
         repositoryOwner: "octocat",
         repositoryName: "hello-world",
         branch: "main",
+        subdirectory: "",
         deploymentMode: "dockerfile",
         dockerfilePath: "Dockerfile",
         buildContext: ".",
@@ -285,6 +294,7 @@ describe("saveAppSource / revalidateAppSource / removeAppSource", () => {
         repositoryOwner: "octocat",
         repositoryName: "hello-world",
         branch: "main",
+        subdirectory: "",
         deploymentMode: "dockerfile",
         dockerfilePath: "Dockerfile",
         buildContext: ".",
@@ -310,6 +320,7 @@ describe("saveAppSource / revalidateAppSource / removeAppSource", () => {
       repositoryOwner: "octocat",
       repositoryName: "hello-world",
       branch: "main",
+      subdirectory: "",
       deploymentMode: "dockerfile",
       dockerfilePath: "Dockerfile",
       buildContext: ".",
@@ -322,6 +333,7 @@ describe("saveAppSource / revalidateAppSource / removeAppSource", () => {
       repositoryOwner: "octocat",
       repositoryName: "hello-world",
       branch: "develop",
+      subdirectory: "",
       deploymentMode: "dockerfile",
       dockerfilePath: "Dockerfile",
       buildContext: ".",
@@ -337,6 +349,7 @@ describe("saveAppSource / revalidateAppSource / removeAppSource", () => {
       repositoryOwner: "octocat",
       repositoryName: "hello-world",
       branch: "main",
+      subdirectory: "",
       deploymentMode: "prebuilt-image",
       dockerfilePath: "Dockerfile",
       buildContext: ".",
@@ -355,6 +368,7 @@ describe("saveAppSource / revalidateAppSource / removeAppSource", () => {
       repositoryOwner: "octocat",
       repositoryName: "hello-world",
       branch: "main",
+      subdirectory: "",
       deploymentMode: "dockerfile",
       dockerfilePath: "Dockerfile",
       buildContext: ".",
@@ -390,6 +404,7 @@ describe("saveAppSource / revalidateAppSource / removeAppSource", () => {
       repositoryOwner: "octocat",
       repositoryName: "hello-world",
       branch: "main",
+      subdirectory: "",
       deploymentMode: "prebuilt-image",
       dockerfilePath: "Dockerfile",
       buildContext: ".",
@@ -413,6 +428,7 @@ describe("saveAppSource / revalidateAppSource / removeAppSource", () => {
       repositoryOwner: "octocat",
       repositoryName: "hello-world",
       branch: "main",
+      subdirectory: "",
       deploymentMode: "dockerfile",
       dockerfilePath: "Dockerfile",
       buildContext: ".",

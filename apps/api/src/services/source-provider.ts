@@ -134,4 +134,14 @@ export interface SourceProviderClient {
 
   /** Checks whether `path` exists at `ref` — never returns file content. */
   pathExists(token: string, owner: string, repo: string, ref: string, path: string): Promise<boolean>;
+
+  /**
+   * Returns the UTF-8 text content of a small file (e.g. package.json)
+   * at `ref`. Unlike `pathExists`, this deliberately does read and
+   * return content — used only for repository inspection, and only for
+   * a short list of known manifest files, bounded to a conservative
+   * size so nothing resembling a bulk source download ever happens
+   * through this method.
+   */
+  getFileContents(token: string, owner: string, repo: string, ref: string, path: string): Promise<string>;
 }

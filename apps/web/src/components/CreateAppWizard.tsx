@@ -7,8 +7,13 @@ import type {
   CreateAppWizardPayload,
   CreateAppWizardResponse,
   CreatedAppSummary,
+  GithubBranchesResponse,
+  GithubConnectionInfo,
+  GithubRepositoriesResponse,
   MaskedGlobalEnvVar,
   RestartPolicy,
+  SourceBranch,
+  SourceRepository,
   WizardEnvVarInput,
   WizardVolumeInput
 } from "../types/api";
@@ -29,6 +34,7 @@ interface CreateAppWizardProps {
 }
 
 const STEP_LABELS = [
+  "Source",
   "Basics",
   "Runtime",
   "Environment",
@@ -38,6 +44,13 @@ const STEP_LABELS = [
 ] as const;
 
 const LAST_STEP = STEP_LABELS.length - 1;
+
+// Placeholder used only when the "Deploy from GitHub" path is chosen —
+// app creation still requires a pullable image to exist right away; the
+// real image is built and swapped in by the first GitHub deployment,
+// triggered either immediately (if the operator chooses "Create and
+// deploy") or later from the app's Source tab.
+const GITHUB_PLACEHOLDER_IMAGE = "nginx:alpine";
 
 const RUNTIME_OPTIONS: Array<{ value: BuildBriefRuntime; label: string }> = [
   { value: "nodejs", label: "Node.js" },
@@ -85,12 +98,26 @@ async function readApiError(
   }
 }
 
+type SourceType = "manual" | "github";
+
 export default function CreateAppWizard({
   open,
   onClose,
   onCreated
 }: CreateAppWizardProps) {
   const [step, setStep] = useState(0);
+
+  const [sourceType, setSourceType] = useState<SourceType>("manual");
+
+  const [githubConnection, setGithubConnection] = useState<GithubConnectionInfo | null>(null);
+  const [githubRepos, setGithubRepos] = useState<SourceRepository[]>([]);
+  const [githubReposLoading, setGithubReposLoading] = useState(false);
+  const [githubReposError, setGithubReposError] = useState("");
+  const [githubRepo, setGithubRepo] = useState<SourceRepository | null>(null);
+  const [githubBranches, setGithubBranches] = useState<SourceBranch[]>([]);
+  const [githubBranch, setGithubBranch] = useState("");
+  const [githubSubdirectory, setGithubSubdirectory] = useState(".");
+  const [deployAfterCreate, setDeployAfterCreate] = useState(true);
 
   const [name, setName] = useState("");
   const [image, setImage] = useState("");
@@ -117,9 +144,15 @@ export default function CreateAppWizard({
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
   const [createdApp, setCreatedApp] = useState<CreatedAppSummary | null>(null);
+  const [postCreateNotice, setPostCreateNotice] = useState("");
 
   const resetWizard = useCallback(() => {
     setStep(0);
+    setSourceType("manual");
+    setGithubRepo(null);
+    setGithubBranch("");
+    setGithubSubdirectory(".");
+    setDeployAfterCreate(true);
     setName("");
     setImage("");
     setContainerPort("3000");
@@ -136,6 +169,7 @@ export default function CreateAppWizard({
     setBriefCopied(false);
     setCreateError("");
     setCreatedApp(null);
+    setPostCreateNotice("");
   }, []);
 
   useEffect(() => {
@@ -176,10 +210,81 @@ export default function CreateAppWizard({
     };
   }, [open, globalVarsLoaded]);
 
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/integrations/github");
+        if (!response.ok || cancelled) return;
+        const result = (await response.json()) as GithubConnectionInfo;
+        if (!cancelled) setGithubConnection(result);
+      } catch {
+        // Non-critical here — the Source step shows its own "not
+        // connected" state if this never resolves.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const loadGithubRepos = useCallback(async () => {
+    try {
+      setGithubReposLoading(true);
+      setGithubReposError("");
+
+      const response = await fetch("/api/integrations/github/repositories?page=1&perPage=20");
+
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Unable to load repositories"));
+      }
+
+      const result = (await response.json()) as GithubRepositoriesResponse;
+      setGithubRepos(result.repositories);
+    } catch (error) {
+      setGithubReposError(error instanceof Error ? error.message : "Unable to load repositories");
+    } finally {
+      setGithubReposLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (open && step === 0 && sourceType === "github" && githubConnection?.connected) {
+      void loadGithubRepos();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, step, sourceType, githubConnection?.connected]);
+
+  const selectGithubRepo = async (repo: SourceRepository) => {
+    setGithubRepo(repo);
+    setGithubBranch(repo.defaultBranch);
+    setName((current) => current || repo.name);
+    setImage((current) => current || GITHUB_PLACEHOLDER_IMAGE);
+
+    try {
+      const response = await fetch(
+        `/api/integrations/github/repositories/${repo.owner}/${repo.name}/branches`
+      );
+      if (!response.ok) return;
+      const result = (await response.json()) as GithubBranchesResponse;
+      setGithubBranches(result.branches);
+    } catch {
+      setGithubBranches([]);
+    }
+  };
+
   const trimmedName = name.trim();
   const trimmedImage = image.trim();
   const parsedPort = Number(containerPort);
 
+  const sourceValid =
+    sourceType === "manual" || (githubRepo !== null && githubBranch.trim().length > 0);
   const basicsValid = isValidAppName(trimmedName) && isValidImage(trimmedImage);
   const runtimeValid = isValidPort(parsedPort);
 
@@ -201,6 +306,7 @@ export default function CreateAppWizard({
   const storageValid = storageValidationError === null;
 
   const stepValid = [
+    sourceValid,
     basicsValid,
     runtimeValid,
     environmentValid,
@@ -273,12 +379,13 @@ export default function CreateAppWizard({
   }, [basicsValid, runtimeValid, buildBriefPayload]);
 
   useEffect(() => {
-    if (open && step >= 4 && basicsValid && runtimeValid) {
+    if (open && step >= 5 && basicsValid && runtimeValid) {
       void fetchBrief();
     }
     // fetchBrief's own dependency list already captures every field that
     // should trigger a regeneration; re-running this effect on step/open
-    // change alone is what makes entering step 4 or 5 auto-generate it.
+    // change alone is what makes entering the Domain or Review step
+    // auto-generate it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, open, basicsValid, runtimeValid, fetchBrief]);
 
@@ -323,6 +430,7 @@ export default function CreateAppWizard({
     try {
       setCreating(true);
       setCreateError("");
+      setPostCreateNotice("");
 
       const payload: CreateAppWizardPayload = {
         name: trimmedName,
@@ -357,10 +465,71 @@ export default function CreateAppWizard({
       }
 
       setCreatedApp(result.app);
+
+      if (sourceType === "github" && githubRepo) {
+        await linkAndOptionallyDeployGithubSource(result.app.id);
+      }
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : "Unable to create app");
     } finally {
       setCreating(false);
+    }
+  };
+
+  const linkAndOptionallyDeployGithubSource = async (appId: number) => {
+    if (!githubRepo) {
+      return;
+    }
+
+    try {
+      const sourceResponse = await fetch(`/api/apps/${appId}/source`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          repositoryOwner: githubRepo.owner,
+          repositoryName: githubRepo.name,
+          branch: githubBranch,
+          subdirectory: githubSubdirectory,
+          deploymentMode: "dockerfile",
+          dockerfilePath: "Dockerfile",
+          buildContext: ".",
+          containerPort: parsedPort,
+          autoDeploy: false
+        })
+      });
+
+      if (!sourceResponse.ok) {
+        setPostCreateNotice(
+          "The app was created, but its GitHub source could not be linked automatically. Link it from the Source tab."
+        );
+        return;
+      }
+
+      if (!deployAfterCreate) {
+        setPostCreateNotice(
+          "GitHub source linked. Use the Source tab's \"Deploy from GitHub\" button when you're ready."
+        );
+        return;
+      }
+
+      const deployResponse = await fetch(`/api/apps/${appId}/deploy/github`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+
+      if (!deployResponse.ok) {
+        setPostCreateNotice(
+          "GitHub source linked, but the first deployment could not be started automatically. Start it from the Source tab."
+        );
+        return;
+      }
+
+      setPostCreateNotice("GitHub source linked and the first deployment has started — check the Source tab for progress.");
+    } catch {
+      setPostCreateNotice(
+        "The app was created, but its GitHub source could not be linked automatically. Link it from the Source tab."
+      );
     }
   };
 
@@ -427,6 +596,8 @@ export default function CreateAppWizard({
                   : "No domain was assigned to this app."}
               </p>
 
+              {postCreateNotice && <div className="notice-banner">{postCreateNotice}</div>}
+
               <dl className="wizard-review-grid">
                 <div>
                   <dt>Environment variables</dt>
@@ -468,6 +639,124 @@ export default function CreateAppWizard({
             <div className="wizard-body">
               {step === 0 && (
                 <>
+                  <div className="wizard-row-list">
+                    <button
+                      type="button"
+                      className={`wizard-row repo-select-row ${sourceType === "manual" ? "selected" : ""}`}
+                      onClick={() => setSourceType("manual")}
+                    >
+                      <strong>Configure manually</strong>
+                      <span className="text-faint">Provide a Docker image directly — unchanged from before.</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`wizard-row repo-select-row ${sourceType === "github" ? "selected" : ""}`}
+                      onClick={() => setSourceType("github")}
+                    >
+                      <strong>Deploy from GitHub</strong>
+                      <span className="text-faint">
+                        Build and deploy from a connected repository and branch.
+                      </span>
+                    </button>
+                  </div>
+
+                  {sourceType === "github" && (
+                    <>
+                      {!githubConnection?.connected ? (
+                        <div className="warning-banner">
+                          GitHub is not connected. Connect it from Settings, then reopen this
+                          wizard — your progress on this step will not be lost if you cancel and
+                          come straight back.
+                        </div>
+                      ) : !githubRepo ? (
+                        <>
+                          {githubReposError && <div className="error-banner">{githubReposError}</div>}
+                          {githubReposLoading ? (
+                            <div className="empty-state">Loading repositories...</div>
+                          ) : githubRepos.length === 0 ? (
+                            <div className="empty-state">No accessible repositories were found.</div>
+                          ) : (
+                            <div className="wizard-row-list">
+                              {githubRepos.map((repo) => (
+                                <button
+                                  key={repo.id}
+                                  type="button"
+                                  className="wizard-row repo-select-row"
+                                  onClick={() => void selectGithubRepo(repo)}
+                                >
+                                  <strong>{repo.fullName}</strong>
+                                  <span className="text-faint">
+                                    {repo.private ? "Private" : "Public"} · default: {repo.defaultBranch}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <p className="section-description">
+                            Repository: <strong>{githubRepo.fullName}</strong>{" "}
+                            <button
+                              className="secondary-button compact"
+                              type="button"
+                              onClick={() => {
+                                setGithubRepo(null);
+                                setGithubBranches([]);
+                              }}
+                            >
+                              Change
+                            </button>
+                          </p>
+
+                          <label>
+                            <span>Branch</span>
+                            <select
+                              className="wizard-select"
+                              value={githubBranch}
+                              onChange={(event) => setGithubBranch(event.target.value)}
+                            >
+                              {githubBranches.map((branch) => (
+                                <option key={branch.name} value={branch.name}>
+                                  {branch.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label>
+                            <span>Subdirectory (optional)</span>
+                            <input
+                              value={githubSubdirectory}
+                              onChange={(event) => setGithubSubdirectory(event.target.value)}
+                              placeholder="."
+                            />
+                          </label>
+
+                          <label className="checkbox-field">
+                            <input
+                              type="checkbox"
+                              checked={deployAfterCreate}
+                              onChange={(event) => setDeployAfterCreate(event.target.checked)}
+                            />
+                            <span>Create and deploy immediately (uncheck to just save the app and deploy later)</span>
+                          </label>
+
+                          <p className="section-description">
+                            Continuing will use a temporary placeholder image (
+                            <code>{GITHUB_PLACEHOLDER_IMAGE}</code>) until the first GitHub
+                            deployment replaces it. Repository inspection and build strategy
+                            selection happen from the Source tab after this app is created.
+                          </p>
+                        </>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+
+              {step === 1 && (
+                <>
                   <label>
                     <span>App name</span>
                     <input
@@ -488,8 +777,13 @@ export default function CreateAppWizard({
                       value={image}
                       onChange={(event) => setImage(event.target.value)}
                       placeholder="nginx:alpine"
+                      disabled={sourceType === "github"}
                     />
-                    <small>Include a tag when possible, such as nginx:alpine.</small>
+                    <small>
+                      {sourceType === "github"
+                        ? "Set automatically until the first GitHub deployment replaces it."
+                        : "Include a tag when possible, such as nginx:alpine."}
+                    </small>
                   </label>
 
                   <label>
@@ -514,7 +808,7 @@ export default function CreateAppWizard({
                 </>
               )}
 
-              {step === 1 && (
+              {step === 2 && (
                 <>
                   <label>
                     <span>Container port</span>
@@ -593,7 +887,7 @@ export default function CreateAppWizard({
                 </>
               )}
 
-              {step === 2 && (
+              {step === 3 && (
                 <>
                   <div className="env-scope-block">
                     <div className="env-scope-heading">
@@ -739,7 +1033,7 @@ export default function CreateAppWizard({
                 </>
               )}
 
-              {step === 3 && (
+              {step === 4 && (
                 <div className="env-scope-block">
                   <div className="env-scope-heading">
                     <h3>Persistent Storage</h3>
@@ -841,7 +1135,7 @@ export default function CreateAppWizard({
                 </div>
               )}
 
-              {step === 4 && (
+              {step === 5 && (
                 <>
                   <dl className="wizard-review-grid">
                     <div>
@@ -868,9 +1162,19 @@ export default function CreateAppWizard({
                 </>
               )}
 
-              {step === 5 && (
+              {step === 6 && (
                 <>
                   <dl className="wizard-review-grid">
+                    <div>
+                      <dt>Source</dt>
+                      <dd>{sourceType === "github" && githubRepo ? githubRepo.fullName : "Manual"}</dd>
+                    </div>
+                    {sourceType === "github" && githubRepo && (
+                      <div>
+                        <dt>Branch</dt>
+                        <dd>{githubBranch}</dd>
+                      </div>
+                    )}
                     <div>
                       <dt>App name</dt>
                       <dd>{trimmedName}</dd>
@@ -987,10 +1291,14 @@ export default function CreateAppWizard({
                   <button
                     className="primary-button"
                     type="button"
-                    disabled={creating || !basicsValid || !runtimeValid}
+                    disabled={creating || !basicsValid || !runtimeValid || !sourceValid}
                     onClick={() => void submitCreate()}
                   >
-                    {creating ? "Creating..." : "Create App"}
+                    {creating
+                      ? "Creating..."
+                      : sourceType === "github" && deployAfterCreate
+                        ? "Create and Deploy"
+                        : "Create App"}
                   </button>
                 )}
               </div>

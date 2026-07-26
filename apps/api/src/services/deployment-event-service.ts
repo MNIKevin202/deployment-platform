@@ -26,6 +26,19 @@ export type EventType =
   | "source-validation-succeeded"
   | "source-validation-failed"
   /**
+   * One event per GitHub-deploy stage (Phase 11) — coarse-grained
+   * (not one per log line) so the event log stays a readable timeline
+   * rather than a firehose. "github-deploy-progress" carries the
+   * specific stage name/detail in metadata rather than being one type
+   * per stage, so this union doesn't need to grow every time a stage is
+   * renamed or reordered.
+   */
+  | "github-deploy-started"
+  | "github-deploy-progress"
+  | "github-deploy-succeeded"
+  | "github-deploy-failed"
+  | "github-deploy-rolled-back"
+  /**
    * GitHub connect/disconnect is a global integration event, not tied to
    * any one app. app_deployment_events requires an app_id (FK, NOT NULL),
    * so these two types are never actually written to that table in this

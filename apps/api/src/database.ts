@@ -47,8 +47,11 @@ export type {
   StoredAppSource,
   DeploymentMode,
   SourceValidationStatus,
+  BuildStrategy,
   UpsertAppSourceInput,
-  UpdateAppSourceValidationInput
+  UpdateAppSourceValidationInput,
+  UpdateInspectionResultInput,
+  UpdateDeployedCommitInput
 } from "./app-source-database.js";
 
 export interface StoredApp {

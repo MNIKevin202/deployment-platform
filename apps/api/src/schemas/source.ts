@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { containerPortSchema } from "./app.js";
 
 // GitHub-compatible owner (user/org) rules: alphanumeric and single
 // hyphens, no leading/trailing hyphen, 1-39 characters, no slash.
@@ -137,19 +138,59 @@ export const buildContextSchema = baseRepoRelativePathSchema("Build context")
     'Build context must not contain a "." segment except as the whole value'
   );
 
+// Subdirectory shares every rule with build context (repo-relative
+// directory, "." meaning the repo root) — deliberately the same schema
+// under a distinct exported name so call sites read clearly and so the
+// two can diverge later without a breaking rename.
+export const subdirectorySchema = buildContextSchema;
+
 export const DEFAULT_DOCKERFILE_PATH = "Dockerfile";
 export const DEFAULT_BUILD_CONTEXT = ".";
+export const DEFAULT_SUBDIRECTORY = ".";
+
+// User-selectable build strategies for Phase 11 GitHub deployment.
+// "unsupported" is deliberately not selectable here — it is only ever a
+// detection *result* (e.g. a Docker Compose project), never a value a
+// user can request.
+export const buildStrategySchema = z.enum(["dockerfile", "nodejs", "static"]);
 
 export const appSourceConfigSchema = z
   .object({
     repositoryOwner: repositoryOwnerSchema,
     repositoryName: repositoryNameSchema,
     branch: branchNameSchema,
+    subdirectory: subdirectorySchema.optional().default(DEFAULT_SUBDIRECTORY),
     deploymentMode: deploymentModeSchema,
     dockerfilePath: dockerfilePathSchema.optional().default(DEFAULT_DOCKERFILE_PATH),
     buildContext: buildContextSchema.optional().default(DEFAULT_BUILD_CONTEXT),
+    containerPort: containerPortSchema.optional(),
     autoDeploy: z.boolean().optional().default(false)
   })
   .strict();
 
 export type AppSourceConfigInput = z.infer<typeof appSourceConfigSchema>;
+
+export const repositoryInspectionRequestSchema = z
+  .object({
+    repositoryOwner: repositoryOwnerSchema,
+    repositoryName: repositoryNameSchema,
+    branch: branchNameSchema,
+    subdirectory: subdirectorySchema.optional().default(DEFAULT_SUBDIRECTORY)
+  })
+  .strict();
+
+export type RepositoryInspectionRequestInput = z.infer<typeof repositoryInspectionRequestSchema>;
+
+export const githubDeployRequestSchema = z
+  .object({
+    /** Optional confirmation of the commit the operator saw in the UI —
+     * if provided and it no longer matches the branch tip, the deploy is
+     * rejected rather than silently deploying a different commit. */
+    expectedCommitSha: z
+      .string()
+      .regex(/^[0-9a-f]{7,40}$/i, "Expected commit SHA must look like a Git SHA")
+      .optional()
+  })
+  .strict();
+
+export type GithubDeployRequestInput = z.infer<typeof githubDeployRequestSchema>;

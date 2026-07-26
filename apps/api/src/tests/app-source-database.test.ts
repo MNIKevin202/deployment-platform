@@ -35,12 +35,16 @@ describe("app sources (database layer)", () => {
       provider: "github",
       repositoryOwner: "octocat",
       repositoryName: "hello-world",
+      repositoryFullName: "octocat/hello-world",
+      repositoryCloneUrl: "https://github.com/octocat/hello-world.git",
       repositoryId: null,
       repositoryVisibility: null,
       branch: "main",
+      subdirectory: ".",
       deploymentMode: "dockerfile" as const,
       dockerfilePath: "Dockerfile",
       buildContext: ".",
+      containerPort: null,
       autoDeploy: false
     };
   }
@@ -221,6 +225,132 @@ describe("app sources (database layer)", () => {
     assert.equal(appDatabase.getAppSource(appTwo.id), null);
     assert.ok(appDatabase.getAppSource(appOne.id));
 
+    cleanup();
+  });
+
+  test("persists the Phase 11 deployment fields (subdirectory, port, clone URL)", () => {
+    const app = makeApp("app-thirteen");
+
+    const created = appDatabase.upsertAppSource(app.id, {
+      ...baseInput(),
+      subdirectory: "services/api",
+      containerPort: 4000
+    });
+
+    assert.equal(created.subdirectory, "services/api");
+    assert.equal(created.containerPort, 4000);
+    assert.equal(created.repositoryFullName, "octocat/hello-world");
+    assert.equal(created.repositoryCloneUrl, "https://github.com/octocat/hello-world.git");
+    assert.equal(created.buildStrategy, null);
+    assert.equal(created.detectedProjectType, null);
+    assert.equal(created.latestDeployedCommitSha, null);
+
+    cleanup();
+  });
+
+  test("updateInspectionResult persists the detected strategy and remote commit", () => {
+    const app = makeApp("app-fourteen");
+    appDatabase.upsertAppSource(app.id, baseInput());
+
+    appDatabase.updateInspectionResult(app.id, {
+      buildStrategy: "nodejs",
+      detectedProjectType: "nodejs",
+      latestRemoteCommitSha: "abc1234"
+    });
+
+    const result = appDatabase.getAppSource(app.id);
+    assert.equal(result?.buildStrategy, "nodejs");
+    assert.equal(result?.detectedProjectType, "nodejs");
+    assert.equal(result?.latestRemoteCommitSha, "abc1234");
+
+    cleanup();
+  });
+
+  test("updateInspectionResult throws when no source is linked", () => {
+    const app = makeApp("app-fifteen");
+    assert.throws(() =>
+      appDatabase.updateInspectionResult(app.id, {
+        buildStrategy: "nodejs",
+        detectedProjectType: "nodejs",
+        latestRemoteCommitSha: "abc1234"
+      })
+    );
+    cleanup();
+  });
+
+  test("a config change resets the inspection result back to null", () => {
+    const app = makeApp("app-sixteen");
+    appDatabase.upsertAppSource(app.id, baseInput());
+    appDatabase.updateInspectionResult(app.id, {
+      buildStrategy: "nodejs",
+      detectedProjectType: "nodejs",
+      latestRemoteCommitSha: "abc1234"
+    });
+
+    const afterEdit = appDatabase.upsertAppSource(app.id, { ...baseInput(), branch: "develop" });
+
+    assert.equal(afterEdit.buildStrategy, null);
+    assert.equal(afterEdit.detectedProjectType, null);
+    assert.equal(afterEdit.latestRemoteCommitSha, null);
+
+    cleanup();
+  });
+
+  test("updateDeployedCommit records what was actually deployed", () => {
+    const app = makeApp("app-seventeen");
+    appDatabase.upsertAppSource(app.id, baseInput());
+
+    appDatabase.updateDeployedCommit(app.id, {
+      commitSha: "deadbeef1234",
+      commitMessage: "Fix the thing",
+      deployedAt: "2026-01-02T00:00:00.000Z"
+    });
+
+    const result = appDatabase.getAppSource(app.id);
+    assert.equal(result?.latestDeployedCommitSha, "deadbeef1234");
+    assert.equal(result?.latestDeployedCommitMessage, "Fix the thing");
+    assert.equal(result?.latestDeployedAt, "2026-01-02T00:00:00.000Z");
+
+    cleanup();
+  });
+
+  test("a config change does NOT erase deployment history", () => {
+    const app = makeApp("app-eighteen");
+    appDatabase.upsertAppSource(app.id, baseInput());
+    appDatabase.updateDeployedCommit(app.id, {
+      commitSha: "deadbeef1234",
+      commitMessage: "Fix the thing",
+      deployedAt: "2026-01-02T00:00:00.000Z"
+    });
+
+    const afterEdit = appDatabase.upsertAppSource(app.id, { ...baseInput(), branch: "develop" });
+
+    assert.equal(afterEdit.latestDeployedCommitSha, "deadbeef1234");
+    assert.equal(afterEdit.latestDeployedCommitMessage, "Fix the thing");
+
+    cleanup();
+  });
+
+  test("the deployment lock is durable, per-app, and cannot be double-acquired", () => {
+    const appOne = makeApp("app-nineteen");
+    const appTwo = makeApp("app-twenty");
+
+    assert.equal(appDatabase.acquireDeploymentLock(appOne.id), true);
+    assert.equal(appDatabase.isDeploymentLocked(appOne.id), true);
+    assert.equal(appDatabase.acquireDeploymentLock(appOne.id), false, "a second acquire for the same app must fail");
+
+    assert.equal(appDatabase.acquireDeploymentLock(appTwo.id), true, "locks are scoped per app");
+
+    appDatabase.releaseDeploymentLock(appOne.id);
+    assert.equal(appDatabase.isDeploymentLocked(appOne.id), false);
+    assert.equal(appDatabase.acquireDeploymentLock(appOne.id), true, "released locks can be re-acquired");
+
+    cleanup();
+  });
+
+  test("releasing a lock that was never acquired is a harmless no-op", () => {
+    const app = makeApp("app-twenty-one");
+    assert.doesNotThrow(() => appDatabase.releaseDeploymentLock(app.id));
     cleanup();
   });
 });

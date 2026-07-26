@@ -4,9 +4,13 @@ import {
   appSourceConfigSchema,
   branchNameSchema,
   buildContextSchema,
+  buildStrategySchema,
   dockerfilePathSchema,
+  githubDeployRequestSchema,
+  repositoryInspectionRequestSchema,
   repositoryNameSchema,
-  repositoryOwnerSchema
+  repositoryOwnerSchema,
+  subdirectorySchema
 } from "../schemas/source.js";
 import { githubTokenSchema } from "../schemas/github.js";
 
@@ -234,5 +238,105 @@ describe("githubTokenSchema", () => {
   test("rejects a token containing whitespace or unexpected characters", () => {
     assert.equal(githubTokenSchema.safeParse({ token: "abc def ghi jkl" }).success, false);
     assert.equal(githubTokenSchema.safeParse({ token: "abc<script>def</script>" }).success, false);
+  });
+});
+
+describe("subdirectorySchema (Phase 11)", () => {
+  test('accepts "." and safe nested subdirectories', () => {
+    assert.equal(subdirectorySchema.safeParse(".").success, true);
+    assert.equal(subdirectorySchema.safeParse("apps/web").success, true);
+  });
+
+  test("rejects traversal and absolute paths", () => {
+    assert.equal(subdirectorySchema.safeParse("../etc").success, false);
+    assert.equal(subdirectorySchema.safeParse("/etc").success, false);
+  });
+});
+
+describe("buildStrategySchema (Phase 11)", () => {
+  test("accepts the three buildable strategies", () => {
+    assert.equal(buildStrategySchema.safeParse("dockerfile").success, true);
+    assert.equal(buildStrategySchema.safeParse("nodejs").success, true);
+    assert.equal(buildStrategySchema.safeParse("static").success, true);
+  });
+
+  test('rejects "unsupported" — that value is only ever a detection result', () => {
+    assert.equal(buildStrategySchema.safeParse("unsupported").success, false);
+  });
+});
+
+describe("appSourceConfigSchema — Phase 11 fields", () => {
+  test("defaults subdirectory to '.' and containerPort to undefined", () => {
+    const result = appSourceConfigSchema.safeParse(validConfig());
+    assert.equal(result.success, true);
+    if (result.success) {
+      assert.equal(result.data.subdirectory, ".");
+      assert.equal(result.data.containerPort, undefined);
+    }
+  });
+
+  test("accepts an explicit subdirectory and containerPort", () => {
+    const result = appSourceConfigSchema.safeParse(
+      validConfig({ subdirectory: "services/api", containerPort: 3000 })
+    );
+    assert.equal(result.success, true);
+    if (result.success) {
+      assert.equal(result.data.subdirectory, "services/api");
+      assert.equal(result.data.containerPort, 3000);
+    }
+  });
+
+  test("rejects a subdirectory that attempts path traversal", () => {
+    const result = appSourceConfigSchema.safeParse(validConfig({ subdirectory: "../../etc" }));
+    assert.equal(result.success, false);
+  });
+
+  test("rejects an out-of-range containerPort", () => {
+    assert.equal(appSourceConfigSchema.safeParse(validConfig({ containerPort: 0 })).success, false);
+    assert.equal(appSourceConfigSchema.safeParse(validConfig({ containerPort: 70000 })).success, false);
+  });
+});
+
+describe("repositoryInspectionRequestSchema (Phase 11)", () => {
+  test("accepts a minimal valid request and defaults subdirectory", () => {
+    const result = repositoryInspectionRequestSchema.safeParse({
+      repositoryOwner: "octocat",
+      repositoryName: "hello-world",
+      branch: "main"
+    });
+    assert.equal(result.success, true);
+    if (result.success) {
+      assert.equal(result.data.subdirectory, ".");
+    }
+  });
+
+  test("rejects an invalid branch the same way appSourceConfigSchema does", () => {
+    const result = repositoryInspectionRequestSchema.safeParse({
+      repositoryOwner: "octocat",
+      repositoryName: "hello-world",
+      branch: "../../etc"
+    });
+    assert.equal(result.success, false);
+  });
+});
+
+describe("githubDeployRequestSchema (Phase 11)", () => {
+  test("accepts an empty body", () => {
+    assert.equal(githubDeployRequestSchema.safeParse({}).success, true);
+  });
+
+  test("accepts a plausible commit SHA", () => {
+    const result = githubDeployRequestSchema.safeParse({ expectedCommitSha: "a1b2c3d" });
+    assert.equal(result.success, true);
+  });
+
+  test("rejects a value that doesn't look like a commit SHA", () => {
+    const result = githubDeployRequestSchema.safeParse({ expectedCommitSha: "not-a-sha!" });
+    assert.equal(result.success, false);
+  });
+
+  test("rejects unknown fields", () => {
+    const result = githubDeployRequestSchema.safeParse({ force: true });
+    assert.equal(result.success, false);
   });
 });

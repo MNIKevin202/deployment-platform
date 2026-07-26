@@ -1,0 +1,585 @@
+import { randomBytes } from "node:crypto";
+import { relative } from "node:path";
+import type { AppDatabase } from "../database.js";
+import { buildContainerEnvArray } from "./environment-service.js";
+import { buildVolumeMounts } from "./storage-service.js";
+import type { RedeployDockerOps } from "./redeploy-service.js";
+import type { GithubBuildDockerOps } from "./github-deploy-docker-ops.js";
+import { BuildImageError } from "./github-deploy-docker-ops.js";
+import type { RecordEventFn } from "./deployment-event-service.js";
+import { SourceClientError, type SourceProviderClient } from "./source-provider.js";
+import type { DecryptedTokenResult } from "./github-credential-service.js";
+import { cloneRepositoryBranch, cleanupCheckout, CloneError } from "./github-clone-service.js";
+import { inspectCheckoutDirectory } from "./repository-inspection-service.js";
+import { prepareBuildPlan, BuildPlanError } from "./build-strategy.js";
+import { sanitizeProcessOutput } from "./process-runner.js";
+import type { HealthCheckDependencies } from "./health-check-service.js";
+import { performHealthCheck } from "./health-check-service.js";
+
+const PROTECTED_CONTAINER_NAMES = new Set([
+  "deployment-platform-api",
+  "deployment-platform-web"
+]);
+
+const DEFAULT_CLONE_TIMEOUT_MS = 2 * 60 * 1000;
+const DEFAULT_BUILD_TIMEOUT_MS = 6 * 60 * 1000;
+const DEFAULT_MAX_LOG_BYTES = 256 * 1024;
+const MAX_CONCURRENT_DEPLOYMENTS = 2;
+
+/** Coarse, in-memory-only global throttle — not a correctness lock (that's the per-app DB lock below), just a resource guard against many builds running at once. */
+let activeDeploymentCount = 0;
+
+export type DeployStage =
+  | "resolving-repository"
+  | "resolving-branch"
+  | "reading-commit-metadata"
+  | "preparing-checkout"
+  | "cloning-repository"
+  | "inspecting-project"
+  | "preparing-build"
+  | "building-image"
+  | "preserving-current-container"
+  | "starting-replacement"
+  | "verifying-health"
+  | "updating-route"
+  | "cleaning-temporary-files"
+  | "deployment-complete";
+
+export class GithubDeployError extends Error {
+  readonly stage: DeployStage;
+
+  constructor(message: string, stage: DeployStage) {
+    super(message);
+    this.name = "GithubDeployError";
+    this.stage = stage;
+  }
+}
+
+export interface GithubDeployResult {
+  success: boolean;
+  rolledBack: boolean;
+  message: string;
+  stage?: DeployStage;
+  containerId?: string;
+  imageTag?: string;
+  commitSha?: string;
+}
+
+export interface GithubDeployDockerOps extends RedeployDockerOps, GithubBuildDockerOps {}
+
+export interface GithubDeployDependencies {
+  appDatabase: AppDatabase;
+  dockerOps: GithubDeployDockerOps;
+  githubClient: SourceProviderClient;
+  resolveCredential: () => DecryptedTokenResult;
+  reconcileRouting: (appDatabase: AppDatabase) => Promise<{ lastReconcileSucceeded: boolean | null; lastError: string | null }>;
+  recordEvent: RecordEventFn;
+  /** Only constructed/used when the app actually has a health check configured. */
+  healthCheckDeps?: Pick<HealthCheckDependencies, "httpClient" | "isContainerRunning" | "logger">;
+  now?: () => Date;
+  cloneTimeoutMs?: number;
+  buildTimeoutMs?: number;
+  maxLogBytes?: number;
+}
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unknown error";
+}
+
+function isLockfile(fileName: string): boolean {
+  return (
+    fileName === "package-lock.json" ||
+    fileName === "npm-shrinkwrap.json" ||
+    fileName === "pnpm-lock.yaml" ||
+    fileName === "yarn.lock" ||
+    fileName === "bun.lock" ||
+    fileName === "bun.lockb"
+  );
+}
+
+function sanitizeImageComponent(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
+}
+
+function describeGithubClientError(error: unknown): string {
+  if (error instanceof SourceClientError) {
+    switch (error.kind) {
+      case "invalid-token":
+        return "GitHub token is invalid or expired.";
+      case "insufficient-permissions":
+        return "The connected GitHub token does not have permission to access this repository.";
+      case "rate-limited":
+        return "GitHub rate limit reached. Try again shortly.";
+      case "not-found":
+        return "Repository or branch could not be found.";
+      case "network-timeout":
+        return "Timed out while contacting GitHub.";
+      default:
+        return "Unable to reach GitHub right now.";
+    }
+  }
+  return "Unable to reach GitHub right now.";
+}
+
+/**
+ * Deploys an app from its configured GitHub source: resolves the branch
+ * tip, clones it, inspects and builds it, then hands off to the same
+ * "preserve the running container, swap, verify, roll back on failure"
+ * shape as `redeployApp` — reusing `RedeployDockerOps` directly rather
+ * than a second container-management implementation. Concurrency is
+ * bounded per-app by a durable database lock (never two deployments for
+ * the same app at once, even across a process restart) and globally by
+ * an in-memory build-resource throttle.
+ */
+export async function deployFromGithub(
+  deps: GithubDeployDependencies,
+  appId: number,
+  options: { expectedCommitSha?: string } = {}
+): Promise<GithubDeployResult> {
+  const { appDatabase, dockerOps, githubClient, resolveCredential, recordEvent } = deps;
+  const now = deps.now ?? (() => new Date());
+  const cloneTimeoutMs = deps.cloneTimeoutMs ?? DEFAULT_CLONE_TIMEOUT_MS;
+  const buildTimeoutMs = deps.buildTimeoutMs ?? DEFAULT_BUILD_TIMEOUT_MS;
+  const maxLogBytes = deps.maxLogBytes ?? DEFAULT_MAX_LOG_BYTES;
+
+  const app = appDatabase.getAppById(appId);
+  if (!app) {
+    return { success: false, rolledBack: false, message: "App not found" };
+  }
+
+  if (!app.containerName || PROTECTED_CONTAINER_NAMES.has(app.containerName)) {
+    return { success: false, rolledBack: false, message: "This app cannot be deployed from GitHub" };
+  }
+
+  const source = appDatabase.getAppSource(appId);
+  if (!source) {
+    return { success: false, rolledBack: false, message: "No GitHub source is configured for this app" };
+  }
+
+  if (!appDatabase.acquireDeploymentLock(appId)) {
+    return {
+      success: false,
+      rolledBack: false,
+      message: "A deployment for this app is already in progress"
+    };
+  }
+
+  if (activeDeploymentCount >= MAX_CONCURRENT_DEPLOYMENTS) {
+    appDatabase.releaseDeploymentLock(appId);
+    return {
+      success: false,
+      rolledBack: false,
+      message: "Too many GitHub deployments are running right now. Try again shortly."
+    };
+  }
+
+  activeDeploymentCount += 1;
+
+  recordEvent({
+    appId,
+    eventType: "github-deploy-started",
+    severity: "info",
+    message: `GitHub deployment started for "${app.name}" (${source.repositoryOwner}/${source.repositoryName}@${source.branch})`
+  });
+
+  function progress(stage: DeployStage, detail?: string) {
+    recordEvent({
+      appId,
+      eventType: "github-deploy-progress",
+      severity: "info",
+      message: detail ? `${stageLabel(stage)}: ${detail}` : stageLabel(stage),
+      metadata: { stage }
+    });
+  }
+
+  let workDir: string | null = null;
+  let rollbackContainerName: string | null = null;
+  let replacementContainerId: string | null = null;
+  /** Whatever name the replacement container currently sits under — the temp name until the swap rename succeeds, then the app's real container name. */
+  let replacementCurrentName: string | null = null;
+  let replacementStarted = false;
+  let anySwapPerformed = false;
+
+  try {
+    progress("resolving-repository");
+
+    const credential = resolveCredential();
+    if (!credential.success) {
+      throw new GithubDeployError("GitHub is not connected. Connect GitHub in Settings before deploying.", "resolving-repository");
+    }
+
+    progress("resolving-branch");
+
+    let commitSha: string;
+    try {
+      commitSha = await githubClient.resolveBranchCommit(
+        credential.token,
+        source.repositoryOwner,
+        source.repositoryName,
+        source.branch
+      );
+    } catch (error) {
+      throw new GithubDeployError(describeGithubClientError(error), "resolving-branch");
+    }
+
+    if (options.expectedCommitSha && options.expectedCommitSha !== commitSha) {
+      throw new GithubDeployError(
+        "The source configuration changed and requires reinspection before deploying.",
+        "resolving-branch"
+      );
+    }
+
+    progress("reading-commit-metadata");
+
+    let commitMessage: string | null = null;
+    try {
+      const commits = await githubClient.listCommits(
+        credential.token,
+        source.repositoryOwner,
+        source.repositoryName,
+        source.branch,
+        { perPage: 1, page: 1 }
+      );
+      commitMessage = commits.items[0]?.message ?? null;
+    } catch {
+      // Commit metadata is informational only — deployment can proceed
+      // without it.
+      commitMessage = null;
+    }
+
+    progress("preparing-checkout");
+
+    const cloneResult = await cloneRepositoryBranch({
+      repositoryOwner: source.repositoryOwner,
+      repositoryName: source.repositoryName,
+      branch: source.branch,
+      token: credential.token,
+      timeoutMs: cloneTimeoutMs,
+      maxOutputBytes: maxLogBytes
+    }).catch((error) => {
+      if (error instanceof CloneError) {
+        throw new GithubDeployError(error.message, error.stage as DeployStage);
+      }
+      throw new GithubDeployError(errorMessage(error), "cloning-repository");
+    });
+
+    workDir = cloneResult.workDir;
+    progress("cloning-repository", `checked out ${commitSha.slice(0, 12)}`);
+
+    progress("inspecting-project");
+
+    const detection = inspectCheckoutDirectory(cloneResult.checkoutDir, source.subdirectory);
+    appDatabase.updateInspectionResult(appId, {
+      buildStrategy: detection.recommendedStrategy,
+      detectedProjectType: detection.detectedProjectType,
+      latestRemoteCommitSha: commitSha
+    });
+
+    if (!detection.supported) {
+      throw new GithubDeployError(
+        detection.unsupportedReason ?? "This repository's project type is not supported for deployment.",
+        "inspecting-project"
+      );
+    }
+
+    progress("preparing-build");
+
+    const containerPort = source.containerPort ?? app.containerPort;
+    const hasLockfile = detection.presentFiles.some(isLockfile);
+
+    let buildPlan;
+    try {
+      buildPlan = prepareBuildPlan({
+        strategy: detection.recommendedStrategy,
+        checkoutDir: cloneResult.checkoutDir,
+        subdirectory: source.subdirectory,
+        dockerfilePath: source.dockerfilePath,
+        buildContext: source.buildContext,
+        nodejs: detection.packageJson
+          ? {
+              packageManager: detection.packageJson.packageManager,
+              hasLockfile,
+              hasBuildScript: detection.packageJson.hasBuildScript,
+              hasStartScript: detection.packageJson.hasStartScript,
+              containerPort
+            }
+          : undefined
+      });
+    } catch (error) {
+      if (error instanceof BuildPlanError) {
+        throw new GithubDeployError(error.message, "preparing-build");
+      }
+      throw error;
+    }
+
+    progress("building-image");
+
+    const shortSha = commitSha.slice(0, 12);
+    const imageTag = `deployment-app-${appId}:${shortSha}`;
+    const alreadyBuilt = await dockerOps.imageExists(imageTag);
+
+    if (alreadyBuilt) {
+      progress("building-image", `reusing existing image for commit ${shortSha} (already built)`);
+    } else {
+      try {
+        await dockerOps.buildImage({
+          contextPath: buildPlan.buildContextPath,
+          dockerfileRelativePath: relative(buildPlan.buildContextPath, buildPlan.dockerfilePath),
+          tag: imageTag,
+          timeoutMs: buildTimeoutMs,
+          maxLogBytes
+        });
+      } catch (error) {
+        if (error instanceof BuildImageError) {
+          throw new GithubDeployError(
+            `Build failed: ${sanitizeProcessOutput(error.message)}`,
+            "building-image"
+          );
+        }
+        throw new GithubDeployError(`Build failed: ${errorMessage(error)}`, "building-image");
+      }
+      progress("building-image", `built ${imageTag}`);
+    }
+
+    // Everything above this point only ever touched a scratch checkout
+    // and, at most, created a *new* Docker image — the running
+    // container has not been touched. From here on, a failure means
+    // ROLLED_BACK once a swap has actually started, not FAILED.
+
+    progress("preserving-current-container");
+
+    const containerName = app.containerName;
+    const exposedPort = `${containerPort}/tcp`;
+    const tempContainerName = `${containerName}-github-deploy-${randomBytes(4).toString("hex")}`;
+    rollbackContainerName = `${containerName}-rollback-${sanitizeImageComponent(now().toISOString())}`;
+
+    const volumes = appDatabase.listAppVolumes(app.id);
+    for (const volume of volumes) {
+      await dockerOps.ensureVolume(volume.volumeName, app.name);
+    }
+
+    const envArray = buildContainerEnvArray(appDatabase.listGlobalEnvVars(), appDatabase.listAppEnvVars(app.id));
+
+    const created = await dockerOps.createContainer({
+      name: tempContainerName,
+      Image: imageTag,
+      Env: envArray,
+      Labels: {
+        "com.deployment-platform.managed": "true",
+        "com.deployment-platform.app-name": app.name
+      },
+      ExposedPorts: { [exposedPort]: {} },
+      HostConfig: {
+        NetworkMode: "deployment-apps",
+        RestartPolicy: { Name: app.restartPolicy || "unless-stopped" },
+        Mounts: buildVolumeMounts(volumes)
+        // Deliberately no Privileged, no CapAdd, no Binds against the
+        // Docker socket or any host path — a repository's own
+        // configuration can never request any of those.
+      }
+    });
+    replacementContainerId = created.id;
+    replacementCurrentName = tempContainerName;
+
+    progress("starting-replacement");
+    await dockerOps.startContainer(replacementContainerId);
+    replacementStarted = true;
+
+    const inspected = await dockerOps.inspectContainer(replacementContainerId);
+    if (!inspected.running) {
+      throw new GithubDeployError(
+        `New container failed to reach a running state (status: ${inspected.status})`,
+        "starting-replacement"
+      );
+    }
+
+    // Destructive boundary: swap the running container for the
+    // replacement we just confirmed is up.
+    await dockerOps.removeContainer(containerName);
+    anySwapPerformed = true;
+    await dockerOps.renameContainer(replacementContainerId, containerName);
+    replacementCurrentName = containerName;
+
+    progress("verifying-health");
+
+    const healthConfig = appDatabase.getAppHealthCheck(appId);
+    if (healthConfig && deps.healthCheckDeps) {
+      const healthOutcome = await performHealthCheck(
+        {
+          appDatabase,
+          httpClient: deps.healthCheckDeps.httpClient,
+          isContainerRunning: deps.healthCheckDeps.isContainerRunning,
+          recordEvent,
+          logger: deps.healthCheckDeps.logger,
+          now
+        },
+        appId
+      );
+
+      if (healthOutcome.state === "unhealthy" || healthOutcome.state === "error") {
+        throw new GithubDeployError(
+          `Health verification failed after deployment${healthOutcome.errorMessage ? `: ${healthOutcome.errorMessage}` : "."}`,
+          "verifying-health"
+        );
+      }
+    }
+
+    const finalInspection = await dockerOps.inspectContainer(replacementContainerId);
+    appDatabase.updateAppContainer(app.id, {
+      containerId: finalInspection.id,
+      status: finalInspection.status
+    });
+
+    appDatabase.updateDeployedCommit(appId, {
+      commitSha,
+      commitMessage,
+      deployedAt: now().toISOString()
+    });
+
+    progress("updating-route");
+    let routingWarning: string | null = null;
+    try {
+      const routingStatus = await deps.reconcileRouting(appDatabase);
+      if (routingStatus.lastReconcileSucceeded === false) {
+        routingWarning = routingStatus.lastError ?? "unknown routing error";
+      }
+    } catch (error) {
+      routingWarning = errorMessage(error);
+    }
+
+    progress("cleaning-temporary-files");
+    cleanupCheckout(cloneResult.workDir);
+    workDir = null;
+
+    recordEvent({
+      appId,
+      eventType: "github-deploy-succeeded",
+      severity: "info",
+      message: `GitHub deployment succeeded for "${app.name}" at commit ${shortSha}`,
+      metadata: { commitShortSha: shortSha, imageTag }
+    });
+
+    if (routingWarning) {
+      recordEvent({
+        appId,
+        eventType: "routing-warning",
+        severity: "warning",
+        message: `Routing warning after deploying "${app.name}" from GitHub: ${routingWarning}`
+      });
+    }
+
+    return {
+      success: true,
+      rolledBack: false,
+      message: "Deployment succeeded.",
+      containerId: finalInspection.id,
+      imageTag,
+      commitSha
+    };
+  } catch (error) {
+    const stage = error instanceof GithubDeployError ? error.stage : "deployment-complete";
+    const message = error instanceof GithubDeployError ? error.message : errorMessage(error);
+
+    if (!anySwapPerformed) {
+      // Nothing live was ever touched — clean up any replacement
+      // container we may have created/started but never swapped in.
+      if (replacementContainerId) {
+        await dockerOps.removeContainer(replacementContainerId).catch(() => undefined);
+      }
+
+      recordEvent({
+        appId,
+        eventType: "github-deploy-failed",
+        severity: "error",
+        message: `GitHub deployment failed for "${app.name}" (stage: ${stage}): ${message}`,
+        metadata: { stage }
+      });
+
+      return { success: false, rolledBack: false, message, stage };
+    }
+
+    // A swap was already performed — the old container is gone. Restore
+    // it from its rollback name.
+    let restored = false;
+    let restoreError: string | null = null;
+
+    try {
+      if (replacementStarted && replacementCurrentName) {
+        await dockerOps.removeContainer(replacementCurrentName).catch(() => undefined);
+      }
+      if (rollbackContainerName) {
+        await dockerOps.renameContainer(rollbackContainerName, app.containerName as string);
+        await dockerOps.startContainer(app.containerName as string);
+        const restoredInspection = await dockerOps.inspectContainer(app.containerName as string);
+        restored = restoredInspection.running;
+        if (restored) {
+          appDatabase.updateAppContainer(app.id, {
+            containerId: restoredInspection.id,
+            status: restoredInspection.status
+          });
+        }
+      }
+    } catch (restoreErr) {
+      restoreError = errorMessage(restoreErr);
+    }
+
+    recordEvent({
+      appId,
+      eventType: "github-deploy-rolled-back",
+      severity: "error",
+      message: restored
+        ? `GitHub deployment for "${app.name}" failed at stage "${stage}" (${message}); the previous version was restored.`
+        : `GitHub deployment for "${app.name}" failed at stage "${stage}" (${message}); automatic rollback ALSO failed${restoreError ? `: ${restoreError}` : ""}. Manual attention required.`,
+      metadata: { stage }
+    });
+
+    return {
+      success: false,
+      rolledBack: restored,
+      message: restored
+        ? `Deployment failed and the previous version was restored. (${message})`
+        : `Deployment failed and automatic rollback also failed — manual attention required. (${message})`,
+      stage
+    };
+  } finally {
+    if (workDir) {
+      cleanupCheckout(workDir);
+    }
+    appDatabase.releaseDeploymentLock(appId);
+    activeDeploymentCount = Math.max(0, activeDeploymentCount - 1);
+  }
+}
+
+function stageLabel(stage: DeployStage): string {
+  switch (stage) {
+    case "resolving-repository":
+      return "Resolving repository";
+    case "resolving-branch":
+      return "Resolving branch";
+    case "reading-commit-metadata":
+      return "Reading commit metadata";
+    case "preparing-checkout":
+      return "Preparing checkout";
+    case "cloning-repository":
+      return "Cloning repository";
+    case "inspecting-project":
+      return "Inspecting project";
+    case "preparing-build":
+      return "Preparing build";
+    case "building-image":
+      return "Building image";
+    case "preserving-current-container":
+      return "Preserving current container";
+    case "starting-replacement":
+      return "Starting replacement";
+    case "verifying-health":
+      return "Verifying health";
+    case "updating-route":
+      return "Updating route";
+    case "cleaning-temporary-files":
+      return "Cleaning temporary files";
+    case "deployment-complete":
+    default:
+      return "Deployment complete";
+  }
+}

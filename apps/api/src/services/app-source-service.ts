@@ -6,7 +6,11 @@ import type { CredentialStatus, DecryptedTokenResult } from "./github-credential
 
 type AppSourceDatabase = Pick<
   AppDatabase,
-  "getAppById" | "getAppSource" | "upsertAppSource" | "updateAppSourceValidation" | "deleteAppSource"
+  | "getAppById"
+  | "getAppSource"
+  | "upsertAppSource"
+  | "updateAppSourceValidation"
+  | "deleteAppSource"
 >;
 
 export interface AppSourceLogger {
@@ -186,12 +190,18 @@ export async function saveAppSource(
     provider: "github",
     repositoryOwner: input.repositoryOwner,
     repositoryName: input.repositoryName,
+    // GitHub's full name and HTTPS clone URL are both deterministic from
+    // owner/name — no extra API call needed to derive them.
+    repositoryFullName: `${input.repositoryOwner}/${input.repositoryName}`,
+    repositoryCloneUrl: `https://github.com/${input.repositoryOwner}/${input.repositoryName}.git`,
     repositoryId: null,
     repositoryVisibility: null,
     branch: input.branch,
+    subdirectory: input.subdirectory,
     deploymentMode: input.deploymentMode,
     dockerfilePath: input.dockerfilePath,
     buildContext: input.buildContext,
+    containerPort: input.containerPort ?? null,
     autoDeploy: input.autoDeploy
   });
 

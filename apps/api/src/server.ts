@@ -39,6 +39,9 @@ import { createGithubClient } from "./services/github-client.js";
 import { getDecryptedGithubToken } from "./services/github-credential-service.js";
 import { registerGithubRoutes } from "./routes/github.js";
 import { registerSourceRoutes } from "./routes/source.js";
+import { createGithubBuildDockerOps } from "./services/github-deploy-docker-ops.js";
+import type { GithubDeployDependencies } from "./services/github-deploy-service.js";
+import { registerGithubDeployRoutes } from "./routes/github-deploy.js";
 
 const dockerOps = createDockerOps(docker);
 
@@ -137,16 +140,51 @@ const githubCredentialDeps = {
   logger: app.log
 };
 
+const resolveGithubCredential = () => getDecryptedGithubToken({ appDatabase });
+
 const appSourceServiceDeps = {
   appDatabase,
   githubClient,
-  resolveCredential: () => getDecryptedGithubToken({ appDatabase }),
+  resolveCredential: resolveGithubCredential,
   recordEvent,
   logger: app.log
 };
 
 await registerGithubRoutes(app, { credentialDeps: githubCredentialDeps, githubClient });
-await registerSourceRoutes(app, { appDatabase, sourceServiceDeps: appSourceServiceDeps });
+await registerSourceRoutes(app, {
+  appDatabase,
+  sourceServiceDeps: appSourceServiceDeps,
+  githubClient,
+  resolveCredential: resolveGithubCredential
+});
+
+/**
+ * Phase 11: GitHub deployment reuses the exact same `RedeployDockerOps`
+ * instance (container create/start/inspect/remove/rename/volume-ensure)
+ * as manual redeploys — only the image-build half is new. `isContainerRunning`
+ * is the same closure the health-check scheduler already uses, resolving
+ * strictly by the app's own stored container name.
+ */
+const githubBuildDockerOps = createGithubBuildDockerOps(docker);
+
+const deployDeps: GithubDeployDependencies = {
+  appDatabase,
+  dockerOps: { ...dockerOps, ...githubBuildDockerOps },
+  githubClient,
+  resolveCredential: resolveGithubCredential,
+  reconcileRouting: (db) => routingService.reconcile(db),
+  recordEvent,
+  healthCheckDeps: {
+    httpClient: createHttpHealthCheckClient(),
+    isContainerRunning: async (containerName: string) => {
+      const inspection = await inspectManagedContainer(containerName);
+      return inspection?.state.running ?? false;
+    },
+    logger: app.log
+  }
+};
+
+await registerGithubDeployRoutes(app, { appDatabase, deployDeps });
 
 interface ContainerParams {
   id: string;

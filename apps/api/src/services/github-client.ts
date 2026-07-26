@@ -13,6 +13,8 @@ import {
 } from "./source-provider.js";
 
 const GITHUB_API_BASE = "https://api.github.com";
+/** Conservative cap for getFileContents — this is for inspecting small manifest files, never bulk source. */
+const MAX_INSPECTABLE_FILE_BYTES = 200_000;
 const USER_AGENT = "DeploymentPlatform-Integration/1.0";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_PER_PAGE = 20;
@@ -563,6 +565,44 @@ export function createGithubClient(logger?: SourceClientLogger): SourceProviderC
 
         throw error;
       }
+    },
+
+    async getFileContents(
+      token: string,
+      owner: string,
+      repo: string,
+      ref: string,
+      path: string
+    ): Promise<string> {
+      const result = await githubRequestJson(
+        token,
+        `${repoBasePath(owner, repo)}/contents/${encodePathSegments(path)}`,
+        { ref },
+        logger
+      );
+
+      const obj = result.json;
+
+      if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
+        throw new SourceClientError("malformed-response", "GitHub returned an unexpected file response");
+      }
+
+      const record = obj as Record<string, unknown>;
+
+      if (record.type !== "file") {
+        throw new SourceClientError("malformed-response", "Requested path is not a file");
+      }
+
+      const size = typeof record.size === "number" ? record.size : null;
+      if (size !== null && size > MAX_INSPECTABLE_FILE_BYTES) {
+        throw new SourceClientError("malformed-response", "File is too large to inspect");
+      }
+
+      if (record.encoding !== "base64" || typeof record.content !== "string") {
+        throw new SourceClientError("malformed-response", "GitHub did not return inline file content");
+      }
+
+      return Buffer.from(record.content, "base64").toString("utf8");
     }
   };
 }

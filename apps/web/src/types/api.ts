@@ -462,22 +462,89 @@ export interface GithubCommitsResponse {
 export type DeploymentMode = "prebuilt-image" | "dockerfile";
 export type SourceValidationStatus = "unknown" | "valid" | "invalid";
 
+// ---------- GitHub deployment (Phase 11) ----------
+
+export type BuildStrategy = "dockerfile" | "nodejs" | "static" | "unsupported";
+
+export type DetectedProjectType =
+  | "dockerfile"
+  | "nodejs"
+  | "static"
+  | "docker-compose"
+  | "python"
+  | "go"
+  | "rust"
+  | "php"
+  | "ruby"
+  | "java"
+  | "unknown";
+
+export type PackageManager = "npm" | "pnpm" | "yarn" | "bun";
+
+export interface PackageJsonSummary {
+  packageManager: PackageManager;
+  hasBuildScript: boolean;
+  hasStartScript: boolean;
+}
+
+export interface RepositoryInspectionResult {
+  detectedProjectType: DetectedProjectType;
+  recommendedStrategy: BuildStrategy;
+  presentFiles: string[];
+  packageJson: PackageJsonSummary | null;
+  warnings: string[];
+  supported: boolean;
+  unsupportedReason: string | null;
+}
+
+export interface InspectSourceResponse {
+  success: boolean;
+  commitSha?: string;
+  inspection?: RepositoryInspectionResult;
+  message?: string;
+}
+
+export interface GithubDeployResponse {
+  success: boolean;
+  message: string;
+  stage?: string;
+  rolledBack?: boolean;
+  containerId?: string;
+  imageTag?: string;
+  commitSha?: string;
+}
+
+export interface GithubDeployStatusResponse {
+  success: boolean;
+  inProgress: boolean;
+  message?: string;
+}
+
 export interface AppSourceInfo {
   appId: number;
   provider: SourceProviderName;
   repositoryOwner: string;
   repositoryName: string;
+  repositoryFullName: string | null;
   repositoryId: string | null;
   repositoryVisibility: "public" | "private" | null;
   branch: string;
+  subdirectory: string;
   deploymentMode: DeploymentMode;
   dockerfilePath: string;
   buildContext: string;
+  buildStrategy: BuildStrategy | null;
+  detectedProjectType: DetectedProjectType | null;
+  containerPort: number | null;
   autoDeploy: boolean;
   lastValidatedCommitSha: string | null;
   lastValidatedAt: string | null;
   validationStatus: SourceValidationStatus;
   validationError: string | null;
+  latestRemoteCommitSha: string | null;
+  latestDeployedCommitSha: string | null;
+  latestDeployedCommitMessage: string | null;
+  latestDeployedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -492,8 +559,10 @@ export interface AppSourceConfigFormValues {
   repositoryOwner: string;
   repositoryName: string;
   branch: string;
+  subdirectory: string;
   deploymentMode: DeploymentMode;
   dockerfilePath: string;
   buildContext: string;
+  containerPort: number | null;
   autoDeploy: boolean;
 }

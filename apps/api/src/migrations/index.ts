@@ -7,6 +7,7 @@ import { migration005AppHealthChecks } from "./005_app_health_checks.js";
 import { migration006AppDeploymentEvents } from "./006_app_deployment_events.js";
 import { migration007ProviderCredentials } from "./007_provider_credentials.js";
 import { migration008AppSources } from "./008_app_sources.js";
+import { migration009AppSourceDeploymentMetadata } from "./009_app_source_deployment_metadata.js";
 import type { Migration } from "./types.js";
 
 export type { Migration } from "./types.js";
@@ -19,7 +20,8 @@ const migrations: Migration[] = [
   migration005AppHealthChecks,
   migration006AppDeploymentEvents,
   migration007ProviderCredentials,
-  migration008AppSources
+  migration008AppSources,
+  migration009AppSourceDeploymentMetadata
 ];
 
 interface SchemaMigrationRow {
