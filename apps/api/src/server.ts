@@ -3,18 +3,57 @@ import cors from "@fastify/cors";
 import { z } from "zod";
 import { docker } from "./docker.js";
 import { registerAuthentication } from "./auth.js";
-import {
-  createStoredApp,
-  database,
-  deleteStoredApp,
-  getStoredAppByName,
-  listStoredApps,
-  updateStoredAppContainer
-} from "./database.js";
+import { createAppDatabase } from "./database.js";
+import { buildAppDomain } from "./domain.js";
+import { createRoutingService } from "./services/routing-service.js";
+
+const appDatabase = createAppDatabase(
+  process.env.DATABASE_PATH ?? "/data/deployment-platform.sqlite"
+);
+
+const routingService = createRoutingService({
+  enabled: process.env.ROUTING_ENABLED === "true",
+  docker,
+  routesDirInApi: process.env.CADDY_ROUTES_DIR ?? "/caddy-routes",
+  routesDirInCaddy: process.env.CADDY_ROUTES_DIR_IN_CADDY ?? "/etc/caddy",
+  caddyContainerName:
+    process.env.CADDY_CONTAINER_NAME ?? "deployment-platform-caddy",
+  mainCaddyfilePathInCaddy:
+    process.env.CADDY_MAIN_CONFIG_PATH ?? "/etc/caddy/Caddyfile",
+  appsFilename: "apps.caddy"
+});
 
 const app = Fastify({
   logger: true
 });
+
+/**
+ * Apps created before automatic domains existed (Phase 2) have a NULL
+ * domain. Assign one deterministically on every boot so pre-existing apps
+ * such as sqlite-test become routable without a manual repair step.
+ */
+function backfillMissingAppDomains(): void {
+  const appsWithoutDomain = appDatabase
+    .listApps()
+    .filter((storedApp) => storedApp.domain === null);
+
+  for (const storedApp of appsWithoutDomain) {
+    const domain = buildAppDomain(storedApp.name);
+    const conflictingApp = appDatabase.getAppByDomain(domain);
+
+    if (conflictingApp && conflictingApp.id !== storedApp.id) {
+      app.log.warn(
+        { appId: storedApp.id, appName: storedApp.name, domain },
+        "Skipped domain backfill: domain already assigned to a different app"
+      );
+      continue;
+    }
+
+    appDatabase.updateAppDomain(storedApp.id, domain);
+  }
+}
+
+backfillMissingAppDomains();
 
 await app.register(cors, {
   origin: true
@@ -147,21 +186,54 @@ app.get("/health", async () => {
 });
 
 app.get("/database/health", async () => {
-  const result = database
-    .prepare("SELECT 1 AS healthy")
-    .get() as { healthy: number };
-
   return {
-    healthy: result.healthy === 1,
-    storedApps: listStoredApps().length
+    healthy: appDatabase.healthCheck(),
+    storedApps: appDatabase.listApps().length
   };
 });
+
+function isRoutingReady(hasDomain: boolean): boolean {
+  const routingStatus = routingService.getStatus();
+
+  return (
+    hasDomain &&
+    routingStatus.enabled &&
+    routingStatus.lastReconcileSucceeded === true
+  );
+}
 
 app.get("/apps", async () => {
   return {
-    apps: listStoredApps()
+    apps: appDatabase.listApps().map((storedApp) => ({
+      ...storedApp,
+      routingReady: isRoutingReady(storedApp.domain !== null)
+    }))
   };
 });
+
+app.get("/routing/status", async () => {
+  return routingService.getStatus();
+});
+
+app.post(
+  "/routing/reconcile",
+  {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: "1 minute"
+      }
+    }
+  },
+  async () => {
+    const status = await routingService.reconcile(appDatabase);
+
+    return {
+      success: status.lastReconcileSucceeded === true,
+      status
+    };
+  }
+);
 
 app.get("/docker/info", async (_request, reply) => {
   try {
@@ -245,14 +317,24 @@ app.post("/apps", async (request, reply) => {
   const { name, image, containerPort } = parsedBody.data;
   const containerName = `app-${name}`;
   const exposedPort = `${containerPort}/tcp`;
+  const domain = buildAppDomain(name);
 
   try {
-    const storedApp = getStoredAppByName(name);
+    const storedApp = appDatabase.getAppByName(name);
 
     if (storedApp) {
       return reply.code(409).send({
         success: false,
         message: `An app named "${name}" already exists`
+      });
+    }
+
+    const existingDomainApp = appDatabase.getAppByDomain(domain);
+
+    if (existingDomainApp) {
+      return reply.code(409).send({
+        success: false,
+        message: `Domain "${domain}" is already assigned to another app`
       });
     }
 
@@ -272,10 +354,12 @@ app.post("/apps", async (request, reply) => {
       });
     }
 
-    createStoredApp({
+    const createdApp = appDatabase.createApp({
       name,
       image,
-      containerPort
+      containerPort,
+      containerName,
+      domain
     });
 
     try {
@@ -303,15 +387,19 @@ app.post("/apps", async (request, reply) => {
 
       const details = await container.inspect();
 
-      updateStoredAppContainer({
-        name,
+      appDatabase.updateAppContainer(createdApp.id, {
         containerId: details.Id,
         status: details.State.Status
       });
 
+      const routingStatus = await routingService.reconcile(appDatabase);
+
       return reply.code(201).send({
         success: true,
-        message: "App deployed successfully",
+        message:
+          routingStatus.lastReconcileSucceeded === false
+            ? `App deployed successfully, but routing could not be updated: ${routingStatus.lastError}`
+            : "App deployed successfully",
         app: {
           id: details.Id,
           shortId: details.Id.slice(0, 12),
@@ -319,11 +407,13 @@ app.post("/apps", async (request, reply) => {
           containerName,
           image,
           containerPort,
+          domain,
+          routingReady: isRoutingReady(true),
           state: details.State.Status
         }
       });
     } catch (deploymentError) {
-      deleteStoredApp(name);
+      appDatabase.deleteApp(createdApp.id);
       throw deploymentError;
     }
   } catch (error) {
@@ -493,7 +583,15 @@ app.delete<{ Params: ContainerParams }>(
       });
 
       if (appName) {
-        deleteStoredApp(appName);
+        const storedApp = appDatabase.getAppByName(appName);
+
+        if (storedApp) {
+          appDatabase.deleteApp(storedApp.id);
+
+          if (storedApp.domain) {
+            await routingService.reconcile(appDatabase);
+          }
+        }
       }
 
       return {
@@ -522,6 +620,15 @@ const start = async (): Promise<void> => {
   } catch (error) {
     app.log.error(error);
     process.exit(1);
+  }
+
+  const startupRoutingStatus = await routingService.reconcile(appDatabase);
+
+  if (startupRoutingStatus.enabled && !startupRoutingStatus.lastReconcileSucceeded) {
+    app.log.error(
+      { routingStatus: startupRoutingStatus },
+      "Failed to reconcile routing on startup"
+    );
   }
 };
 

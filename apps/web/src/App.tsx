@@ -39,6 +39,27 @@ interface LogsResponse {
   logs: string;
 }
 
+interface StoredApp {
+  id: number;
+  name: string;
+  containerId: string | null;
+  containerName: string | null;
+  image: string;
+  containerPort: number;
+  domain: string | null;
+  status: string;
+  desiredStatus: string;
+  restartPolicy: string;
+  createdAt: string;
+  updatedAt: string;
+  lastDeployedAt: string | null;
+  routingReady: boolean;
+}
+
+interface StoredAppsResponse {
+  apps: StoredApp[];
+}
+
 interface ApiError {
   message?: string;
 }
@@ -64,6 +85,7 @@ function App() {
 
   const [dockerInfo, setDockerInfo] = useState<DockerInfo | null>(null);
   const [containers, setContainers] = useState<ContainerSummary[]>([]);
+  const [storedApps, setStoredApps] = useState<StoredApp[]>([]);
   const [selectedContainer, setSelectedContainer] =
     useState<ContainerSummary | null>(null);
   const [logs, setLogs] = useState("");
@@ -97,23 +119,38 @@ function App() {
     [containers]
   );
 
+  const storedAppsByName = useMemo(() => {
+    const map = new Map<string, StoredApp>();
+
+    for (const storedApp of storedApps) {
+      map.set(storedApp.name, storedApp);
+    }
+
+    return map;
+  }, [storedApps]);
+
   const loadDashboard = useCallback(async () => {
     try {
-      const [infoResponse, containersResponse] = await Promise.all([
-        fetch("/api/docker/info"),
-        fetch("/api/containers")
-      ]);
+      const [infoResponse, containersResponse, appsResponse] =
+        await Promise.all([
+          fetch("/api/docker/info"),
+          fetch("/api/containers"),
+          fetch("/api/apps")
+        ]);
 
-      if (!infoResponse.ok || !containersResponse.ok) {
+      if (!infoResponse.ok || !containersResponse.ok || !appsResponse.ok) {
         throw new Error("Unable to load Docker information");
       }
 
       const info = (await infoResponse.json()) as DockerInfo;
       const containerList =
         (await containersResponse.json()) as ContainerSummary[];
+      const appsResult =
+        (await appsResponse.json()) as StoredAppsResponse;
 
       setDockerInfo(info);
       setContainers(containerList);
+      setStoredApps(appsResult.apps ?? []);
 
       setSelectedContainer((currentSelection) => {
         if (!currentSelection) {
@@ -342,6 +379,12 @@ function App() {
     const containerName =
       container.names[0] ?? container.shortId;
 
+    const appName =
+      container.labels["com.deployment-platform.app-name"];
+    const storedApp = container.isManagedApp && appName
+      ? storedAppsByName.get(appName)
+      : undefined;
+
     return (
       <article className="container-card" key={container.id}>
         <div className="container-card-header">
@@ -385,9 +428,34 @@ function App() {
             <dt>Ports</dt>
             <dd>{formatPorts(container.ports)}</dd>
           </div>
+
+          {storedApp?.domain && (
+            <div>
+              <dt>Domain</dt>
+              <dd>
+                {storedApp.domain}
+                {!storedApp.routingReady && (
+                  <span className="routing-badge not-ready">
+                    Routing not yet active
+                  </span>
+                )}
+              </dd>
+            </div>
+          )}
         </dl>
 
         <div className="container-actions">
+          {storedApp?.domain && (
+            <a
+              className="secondary-button open-app-button"
+              href={`https://${storedApp.domain}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open App
+            </a>
+          )}
+
           {!container.isSystemContainer && !isRunning && (
             <button
               onClick={() => void runAction(container, "start")}
