@@ -6,7 +6,8 @@ import type {
   EffectiveEnvVar,
   EnvVarFormValues,
   MaskedAppEnvVar,
-  MaskedGlobalEnvVar
+  MaskedGlobalEnvVar,
+  RedeployResponse
 } from "../types/api";
 import StatusBadge from "./StatusBadge";
 import ConfirmationDialog from "./ConfirmationDialog";
@@ -63,11 +64,12 @@ export default function AppDetail({
   const [notFound, setNotFound] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [actionLoading, setActionLoading] = useState<
-    ContainerAction | "delete" | null
+    ContainerAction | "delete" | "redeploy" | null
   >(null);
   const [actionError, setActionError] = useState("");
   const [notice, setNotice] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showRedeployConfirm, setShowRedeployConfirm] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTab>("overview");
 
   const [appVars, setAppVars] = useState<MaskedAppEnvVar[]>([]);
@@ -225,6 +227,41 @@ export default function AppDetail({
       setActionError(
         error instanceof Error ? error.message : "Unable to delete app"
       );
+      setActionLoading(null);
+    }
+  };
+
+  const confirmRedeploy = async () => {
+    if (actionLoading) {
+      return;
+    }
+
+    try {
+      setActionError("");
+      setNotice("");
+      setActionLoading("redeploy");
+
+      const response = await fetch(`/api/apps/${appId}/redeploy`, {
+        method: "POST"
+      });
+
+      const result = (await response
+        .json()
+        .catch(() => ({}))) as Partial<RedeployResponse>;
+
+      if (!response.ok) {
+        throw new Error(result.message || "Unable to redeploy app");
+      }
+
+      setShowRedeployConfirm(false);
+      setNotice(result.message || "App redeployed successfully.");
+      await loadDetail();
+      onAppChanged();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "Unable to redeploy app"
+      );
+    } finally {
       setActionLoading(null);
     }
   };
@@ -428,6 +465,15 @@ export default function AppDetail({
             </a>
           )}
 
+          <button
+            className={isEnvPending ? "primary-button" : "secondary-button"}
+            type="button"
+            onClick={() => setShowRedeployConfirm(true)}
+            disabled={actionLoading !== null}
+          >
+            {actionLoading === "redeploy" ? "Redeploying..." : "Redeploy"}
+          </button>
+
           {detail.containerExists && (
             <button
               type="button"
@@ -476,8 +522,9 @@ export default function AppDetail({
 
       {!detail.containerExists && (
         <div className="error-banner">
-          The Docker container for this app is missing. Actions are disabled
-          until it is redeployed or the record is repaired.
+          The Docker container for this app is missing. Start, Stop,
+          Restart, and Logs are unavailable until it exists again — use
+          Redeploy below to recreate it.
         </div>
       )}
 
@@ -568,7 +615,7 @@ export default function AppDetail({
             </div>
             <p className="section-description">
               {isEnvPending
-                ? "Saved, but not active in the running container yet. Restarting will not apply these changes — the app must be redeployed or recreated, which isn't available yet in this version of the platform."
+                ? "Saved, but not active in the running container yet. Restarting will not apply these changes — use the Redeploy button above to recreate the container with the current variables."
                 : "The running container reflects the variables below."}
             </p>
           </div>
@@ -754,6 +801,24 @@ export default function AppDetail({
         confirming={envDeleting}
         onConfirm={() => void confirmEnvDelete()}
         onCancel={() => setEnvDeleteTarget(null)}
+      />
+
+      <ConfirmationDialog
+        open={showRedeployConfirm}
+        title={`Redeploy ${detail.name}?`}
+        message={
+          <p>
+            This pulls <strong>{detail.image}</strong> and replaces the
+            running container with a new one using the current environment
+            variables. The new container is started and verified before the
+            old one is removed, but the app will briefly restart. This
+            cannot be undone.
+          </p>
+        }
+        confirmLabel="Redeploy app"
+        confirming={actionLoading === "redeploy"}
+        onConfirm={() => void confirmRedeploy()}
+        onCancel={() => setShowRedeployConfirm(false)}
       />
 
       <ConfirmationDialog

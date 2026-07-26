@@ -15,6 +15,13 @@ import {
   computeEnvironmentStatus
 } from "./services/environment-service.js";
 import { registerEnvironmentRoutes } from "./routes/environment.js";
+import {
+  createDockerOps,
+  redeployApp
+} from "./services/redeploy-service.js";
+import { getErrorStatusCode } from "./docker-errors.js";
+
+const dockerOps = createDockerOps(docker);
 
 const appDatabase = createAppDatabase(
   process.env.DATABASE_PATH ?? "/data/deployment-platform.sqlite"
@@ -159,15 +166,6 @@ async function pullImage(image: string): Promise<void> {
   });
 }
 
-function getErrorStatusCode(error: unknown): number | null {
-  return typeof error === "object" &&
-    error !== null &&
-    "statusCode" in error &&
-    typeof error.statusCode === "number"
-    ? error.statusCode
-    : null;
-}
-
 function sendDockerError(
   reply: FastifyReply,
   error: unknown,
@@ -297,6 +295,64 @@ app.get<{ Params: AppIdParams }>("/apps/:id", async (request, reply) => {
     );
   }
 });
+
+app.post<{ Params: AppIdParams }>(
+  "/apps/:id/redeploy",
+  {
+    config: {
+      rateLimit: {
+        max: 5,
+        timeWindow: "1 minute"
+      }
+    }
+  },
+  async (request, reply) => {
+    const parsedParams = appIdParamSchema.safeParse(request.params);
+
+    if (!parsedParams.success) {
+      return reply.code(400).send({
+        success: false,
+        message: "Invalid app id"
+      });
+    }
+
+    const storedApp = appDatabase.getAppById(parsedParams.data.id);
+
+    if (!storedApp) {
+      return reply.code(404).send({
+        success: false,
+        message: "App not found"
+      });
+    }
+
+    const result = await redeployApp(
+      {
+        appDatabase,
+        dockerOps,
+        reconcileRouting: (db) => routingService.reconcile(db)
+      },
+      storedApp.id
+    );
+
+    if (!result.success) {
+      app.log.error(
+        { appId: storedApp.id, message: result.message },
+        "App redeploy failed"
+      );
+
+      return reply.code(502).send({
+        success: false,
+        message: result.message
+      });
+    }
+
+    return reply.send({
+      success: true,
+      message: result.message,
+      containerId: result.containerId
+    });
+  }
+);
 
 app.get("/routing/status", async () => {
   return routingService.getStatus();

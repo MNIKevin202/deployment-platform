@@ -146,4 +146,10 @@ export interface CreateAppResponse {
   };
 }
 
+export interface RedeployResponse {
+  success: boolean;
+  message: string;
+  containerId?: string;
+}
+
 export type ContainerAction = "start" | "stop" | "restart";
