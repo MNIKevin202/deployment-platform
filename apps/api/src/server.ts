@@ -5,22 +5,25 @@ import { docker } from "./docker.js";
 import { registerAuthentication } from "./auth.js";
 import { createAppDatabase } from "./database.js";
 import { buildAppDomain } from "./domain.js";
+import { createAppSchema } from "./schemas/app.js";
+import {
+  createAppWizardSchema,
+  buildBriefRequestSchema
+} from "./schemas/app-wizard.js";
 import { createRoutingService } from "./services/routing-service.js";
 import {
   buildAppDetail,
   type ContainerInspection
 } from "./services/app-detail-service.js";
-import {
-  buildContainerEnvArray,
-  computeEnvironmentStatus
-} from "./services/environment-service.js";
+import { computeEnvironmentStatus } from "./services/environment-service.js";
 import { registerEnvironmentRoutes } from "./routes/environment.js";
 import { registerStorageRoutes } from "./routes/storage.js";
 import {
   createDockerOps,
   redeployApp
 } from "./services/redeploy-service.js";
-import { buildVolumeMounts } from "./services/storage-service.js";
+import { createAppWithConfig } from "./services/app-creation-service.js";
+import { generateBuildBrief } from "./services/build-brief-service.js";
 import { getErrorStatusCode } from "./docker-errors.js";
 
 const dockerOps = createDockerOps(docker);
@@ -85,19 +88,6 @@ interface ContainerParams {
   id: string;
 }
 
-const createAppSchema = z.object({
-  name: z
-    .string()
-    .min(2)
-    .max(40)
-    .regex(
-      /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
-      "Name must contain lowercase letters, numbers, and hyphens only"
-    ),
-  image: z.string().min(1).max(200),
-  containerPort: z.number().int().min(1).max(65535)
-});
-
 const protectedContainerNames = new Set([
   "deployment-platform-api",
   "deployment-platform-web"
@@ -152,21 +142,6 @@ async function getContainerProtection(id: string) {
     isSystemContainer,
     isManagedApp
   };
-}
-
-async function pullImage(image: string): Promise<void> {
-  const stream = await docker.pull(image);
-
-  await new Promise<void>((resolve, reject) => {
-    docker.modem.followProgress(stream, (error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-
-      resolve();
-    });
-  });
 }
 
 function sendDockerError(
@@ -451,145 +426,178 @@ app.get("/containers", async (_request, reply) => {
   }
 });
 
-app.post("/apps", async (request, reply) => {
-  const parsedBody = createAppSchema.safeParse(request.body);
+const creationServiceDeps = {
+  appDatabase,
+  dockerOps,
+  buildDomain: buildAppDomain,
+  reconcileRouting: (db: typeof appDatabase) => routingService.reconcile(db),
+  isRoutingReady
+};
 
-  if (!parsedBody.success) {
-    return reply.code(400).send({
-      success: false,
-      message: "Invalid app configuration",
-      errors: parsedBody.error.flatten()
-    });
-  }
-
-  const { name, image, containerPort } = parsedBody.data;
-  const containerName = `app-${name}`;
-  const exposedPort = `${containerPort}/tcp`;
-  const domain = buildAppDomain(name);
-
-  try {
-    const storedApp = appDatabase.getAppByName(name);
-
-    if (storedApp) {
-      return reply.code(409).send({
-        success: false,
-        message: `An app named "${name}" already exists`
-      });
-    }
-
-    const existingDomainApp = appDatabase.getAppByDomain(domain);
-
-    if (existingDomainApp) {
-      return reply.code(409).send({
-        success: false,
-        message: `Domain "${domain}" is already assigned to another app`
-      });
-    }
-
-    const existingContainers = await docker.listContainers({
-      all: true
-    });
-
-    const nameAlreadyExists = existingContainers.some(
-      (container) =>
-        container.Names.includes(`/${containerName}`)
-    );
-
-    if (nameAlreadyExists) {
-      return reply.code(409).send({
-        success: false,
-        message: `A container named "${containerName}" already exists`
-      });
-    }
-
-    const createdApp = appDatabase.createApp({
-      name,
-      image,
-      containerPort,
-      containerName,
-      domain
-    });
-
-    try {
-      await pullImage(image);
-
-      // A brand-new app has no app-specific variables or storage mounts
-      // yet (its row didn't exist until createApp() above), so only global
-      // variables apply at creation time. Anything added afterward is
-      // "pending" until redeploy — this call is here for correctness and
-      // consistency with the redeploy path rather than doing anything today.
-      const volumes = appDatabase.listAppVolumes(createdApp.id);
-
-      for (const volume of volumes) {
-        await dockerOps.ensureVolume(volume.volumeName, name);
+/**
+ * The original, minimal creation endpoint. Kept for backward compatibility
+ * with any existing caller of this exact contract — it delegates to the
+ * same createAppWithConfig() service the wizard endpoint uses (with empty
+ * environment/storage arrays), so there is one authoritative creation
+ * implementation, not two that could drift apart. The response shape here
+ * is intentionally mapped back to the pre-wizard field names
+ * (Docker container id as "id", "state" instead of "status").
+ */
+app.post(
+  "/apps",
+  {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: "1 minute"
       }
-
-      const envArray = buildContainerEnvArray(
-        appDatabase.listGlobalEnvVars(),
-        []
-      );
-
-      const container = await docker.createContainer({
-        name: containerName,
-        Image: image,
-        Env: envArray,
-        Labels: {
-          "com.deployment-platform.managed": "true",
-          "com.deployment-platform.app-name": name
-        },
-        ExposedPorts: {
-          [exposedPort]: {}
-        },
-        HostConfig: {
-          NetworkMode: "deployment-apps",
-          RestartPolicy: {
-            Name: "unless-stopped"
-          },
-          Mounts: buildVolumeMounts(volumes)
-        }
-      });
-
-      await container.start();
-
-      const details = await container.inspect();
-
-      appDatabase.updateAppContainer(createdApp.id, {
-        containerId: details.Id,
-        status: details.State.Status
-      });
-
-      const routingStatus = await routingService.reconcile(appDatabase);
-
-      return reply.code(201).send({
-        success: true,
-        message:
-          routingStatus.lastReconcileSucceeded === false
-            ? `App deployed successfully, but routing could not be updated: ${routingStatus.lastError}`
-            : "App deployed successfully",
-        app: {
-          id: details.Id,
-          shortId: details.Id.slice(0, 12),
-          name,
-          containerName,
-          image,
-          containerPort,
-          domain,
-          routingReady: isRoutingReady(true),
-          state: details.State.Status
-        }
-      });
-    } catch (deploymentError) {
-      appDatabase.deleteApp(createdApp.id);
-      throw deploymentError;
     }
-  } catch (error) {
-    return sendDockerError(
-      reply,
-      error,
-      "Unable to deploy app"
-    );
+  },
+  async (request, reply) => {
+    const parsedBody = createAppSchema.safeParse(request.body);
+
+    if (!parsedBody.success) {
+      return reply.code(400).send({
+        success: false,
+        message: "Invalid app configuration",
+        errors: parsedBody.error.flatten()
+      });
+    }
+
+    const result = await createAppWithConfig(creationServiceDeps, {
+      name: parsedBody.data.name,
+      image: parsedBody.data.image,
+      containerPort: parsedBody.data.containerPort
+    });
+
+    if (!result.success || !result.app) {
+      app.log.error({ message: result.message }, "App creation failed");
+
+      return reply.code(result.statusCode ?? 502).send({
+        success: false,
+        message: result.message
+      });
+    }
+
+    return reply.code(201).send({
+      success: true,
+      message: result.message,
+      app: {
+        id: result.app.containerId ?? "",
+        shortId: (result.app.containerId ?? "").slice(0, 12),
+        name: result.app.name,
+        containerName: result.app.containerName,
+        image: result.app.image,
+        containerPort: result.app.containerPort,
+        domain: result.app.domain,
+        routingReady: result.app.routingReady,
+        state: result.app.status
+      }
+    });
   }
-});
+);
+
+/**
+ * The wizard creation endpoint: accepts the full validated payload
+ * (environment variables, storage mounts, restart policy) and coordinates
+ * app + environment + storage + Docker creation through the same
+ * createAppWithConfig() service as POST /apps above.
+ */
+app.post(
+  "/apps/wizard",
+  {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: "1 minute"
+      }
+    }
+  },
+  async (request, reply) => {
+    const parsedBody = createAppWizardSchema.safeParse(request.body);
+
+    if (!parsedBody.success) {
+      return reply.code(400).send({
+        success: false,
+        message: "Invalid app configuration",
+        errors: parsedBody.error.flatten()
+      });
+    }
+
+    const result = await createAppWithConfig(creationServiceDeps, {
+      name: parsedBody.data.name,
+      image: parsedBody.data.image,
+      containerPort: parsedBody.data.containerPort,
+      restartPolicy: parsedBody.data.restartPolicy,
+      environmentVariables: parsedBody.data.environmentVariables,
+      storageMounts: parsedBody.data.storageMounts
+    });
+
+    if (!result.success || !result.app) {
+      app.log.error({ message: result.message }, "Wizard app creation failed");
+
+      return reply.code(result.statusCode ?? 502).send({
+        success: false,
+        message: result.message
+      });
+    }
+
+    return reply.code(201).send({
+      success: true,
+      message: result.message,
+      app: result.app
+    });
+  }
+);
+
+/**
+ * Deterministic, side-effect-free build-brief generation. No app is
+ * created or touched — this only assembles text from the request body, so
+ * it's safe to call repeatedly as the wizard's fields change.
+ */
+app.post(
+  "/apps/wizard/brief",
+  {
+    config: {
+      rateLimit: {
+        max: 60,
+        timeWindow: "1 minute"
+      }
+    }
+  },
+  async (request, reply) => {
+    const parsedBody = buildBriefRequestSchema.safeParse(request.body);
+
+    if (!parsedBody.success) {
+      return reply.code(400).send({
+        success: false,
+        message: "Invalid build brief request",
+        errors: parsedBody.error.flatten()
+      });
+    }
+
+    const domain = buildAppDomain(parsedBody.data.appName);
+
+    const brief = generateBuildBrief({
+      appName: parsedBody.data.appName,
+      domain,
+      image: parsedBody.data.image,
+      containerPort: parsedBody.data.containerPort,
+      runtime: parsedBody.data.runtime,
+      description: parsedBody.data.description,
+      startCommand: parsedBody.data.startCommand,
+      healthCheckPath: parsedBody.data.healthCheckPath,
+      environmentVariables: parsedBody.data.environmentVariables,
+      storageMounts: parsedBody.data.storageMounts
+    });
+
+    return reply.send({
+      success: true,
+      domain,
+      brief
+    });
+  }
+);
 
 app.post<{ Params: ContainerParams }>(
   "/containers/:id/start",

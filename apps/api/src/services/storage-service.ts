@@ -38,6 +38,38 @@ export function buildDefaultVolumeName(
   return `${appName}-${suffix}`.slice(0, MAX_GENERATED_NAME_LENGTH);
 }
 
+const MAX_NAME_GENERATION_ATTEMPTS = 25;
+
+/**
+ * Deterministic base name, with a numeric suffix appended only if that
+ * exact name is already taken (volume names are globally unique in
+ * Docker). `isNameTaken` is injected so callers can check both the
+ * database and any names already claimed earlier in the same batch (e.g.
+ * multiple mounts being created together in one wizard submission, before
+ * any of them are persisted).
+ */
+export function generateUniqueVolumeName(
+  appName: string,
+  containerPath: string,
+  isNameTaken: (name: string) => boolean
+): string {
+  const base = buildDefaultVolumeName(appName, containerPath);
+
+  if (!isNameTaken(base)) {
+    return base;
+  }
+
+  for (let attempt = 2; attempt <= MAX_NAME_GENERATION_ATTEMPTS; attempt += 1) {
+    const candidate = `${base}-${attempt}`;
+
+    if (!isNameTaken(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error("Unable to generate a unique volume name");
+}
+
 export interface DockerMountConfig {
   Type: "volume";
   Source: string;

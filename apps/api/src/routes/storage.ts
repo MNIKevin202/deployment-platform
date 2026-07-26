@@ -6,7 +6,7 @@ import {
   updateVolumeSchema
 } from "../schemas/storage.js";
 import {
-  buildDefaultVolumeName,
+  generateUniqueVolumeName,
   isReservedVolumeName
 } from "../services/storage-service.js";
 
@@ -42,35 +42,6 @@ function serializeVolume(volume: StoredAppVolume) {
     createdAt: volume.createdAt,
     updatedAt: volume.updatedAt
   };
-}
-
-const MAX_NAME_GENERATION_ATTEMPTS = 25;
-
-/**
- * Deterministic base name, with a numeric suffix appended only if that
- * exact name is already taken by another app's volume (volume names are
- * globally unique in Docker).
- */
-function resolveVolumeName(
-  appDatabase: AppDatabase,
-  appName: string,
-  containerPath: string
-): string {
-  const base = buildDefaultVolumeName(appName, containerPath);
-
-  if (!appDatabase.getAppVolumeByName(base)) {
-    return base;
-  }
-
-  for (let attempt = 2; attempt <= MAX_NAME_GENERATION_ATTEMPTS; attempt += 1) {
-    const candidate = `${base}-${attempt}`;
-
-    if (!appDatabase.getAppVolumeByName(candidate)) {
-      return candidate;
-    }
-  }
-
-  throw new Error("Unable to generate a unique volume name");
 }
 
 export async function registerStorageRoutes(
@@ -162,7 +133,11 @@ export async function registerStorageRoutes(
         }
       } else {
         try {
-          volumeName = resolveVolumeName(appDatabase, app.name, containerPath);
+          volumeName = generateUniqueVolumeName(
+            app.name,
+            containerPath,
+            (name) => Boolean(appDatabase.getAppVolumeByName(name))
+          );
         } catch {
           return reply.code(500).send({
             success: false,

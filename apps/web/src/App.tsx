@@ -7,6 +7,7 @@ import Header from "./layout/Header";
 import Notice from "./components/Notice";
 import LogViewer from "./components/LogViewer";
 import AppDetail from "./components/AppDetail";
+import CreateAppWizard from "./components/CreateAppWizard";
 import OverviewPage from "./pages/OverviewPage";
 import AppsPage from "./pages/AppsPage";
 import EnvironmentPage from "./pages/EnvironmentPage";
@@ -15,7 +16,7 @@ import type {
   ApiError,
   ContainerAction,
   ContainerSummary,
-  CreateAppResponse,
+  CreatedAppSummary,
   DockerInfo,
   RoutingStatus,
   StoredApp,
@@ -56,10 +57,6 @@ function App() {
   const [environmentRefreshKey, setEnvironmentRefreshKey] = useState(0);
 
   const [showCreateApp, setShowCreateApp] = useState(false);
-  const [appName, setAppName] = useState("");
-  const [appImage, setAppImage] = useState("");
-  const [containerPort, setContainerPort] = useState("80");
-  const [creatingApp, setCreatingApp] = useState(false);
 
   const systemContainers = useMemo(
     () => containers.filter((container) => container.isSystemContainer),
@@ -196,57 +193,12 @@ function App() {
     }
   };
 
-  const createApp = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    const parsedPort = Number(containerPort);
-
-    if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
-      setError("Container port must be between 1 and 65535.");
-      return;
-    }
-
-    try {
-      setCreatingApp(true);
-      setError("");
-      setNotice("");
-
-      const response = await fetch("/api/apps", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          name: appName.trim(),
-          image: appImage.trim(),
-          containerPort: parsedPort
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(
-          await getApiError(response, "Unable to deploy app")
-        );
-      }
-
-      const result = (await response.json()) as CreateAppResponse;
-
-      setNotice(result.message || "App deployed successfully.");
-      setShowCreateApp(false);
-      setAppName("");
-      setAppImage("");
-      setContainerPort("80");
-
-      await loadDashboard();
-    } catch (createError) {
-      setError(
-        createError instanceof Error
-          ? createError.message
-          : "Unable to deploy app"
-      );
-    } finally {
-      setCreatingApp(false);
-    }
+  const handleAppCreated = async (createdApp: CreatedAppSummary) => {
+    setShowCreateApp(false);
+    setNotice(`${createdApp.name} was created successfully.`);
+    setError("");
+    await loadDashboard();
+    setSelectedAppId(createdApp.id);
   };
 
   const deleteApp = async (container: ContainerSummary) => {
@@ -406,105 +358,11 @@ function App() {
         />
       )}
 
-      {showCreateApp && (
-        <div
-          className="modal-backdrop"
-          onClick={() => {
-            if (!creatingApp) {
-              setShowCreateApp(false);
-            }
-          }}
-        >
-          <section
-            className="form-modal"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <header>
-              <div>
-                <p className="eyebrow">New Deployment</p>
-                <h2>Create App</h2>
-              </div>
-
-              <button
-                className="close-button"
-                type="button"
-                disabled={creatingApp}
-                onClick={() => setShowCreateApp(false)}
-              >
-                Close
-              </button>
-            </header>
-
-            <form onSubmit={(event) => void createApp(event)}>
-              <label>
-                <span>App name</span>
-                <input
-                  value={appName}
-                  onChange={(event) => setAppName(event.target.value)}
-                  placeholder="hello-nginx"
-                  pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
-                  minLength={2}
-                  maxLength={40}
-                  required
-                  autoFocus
-                />
-                <small>
-                  Lowercase letters, numbers, and hyphens only.
-                </small>
-              </label>
-
-              <label>
-                <span>Docker image</span>
-                <input
-                  value={appImage}
-                  onChange={(event) => setAppImage(event.target.value)}
-                  placeholder="nginx:alpine"
-                  required
-                />
-                <small>
-                  Include a tag when possible, such as nginx:alpine.
-                </small>
-              </label>
-
-              <label>
-                <span>Container port</span>
-                <input
-                  type="number"
-                  value={containerPort}
-                  onChange={(event) =>
-                    setContainerPort(event.target.value)
-                  }
-                  min="1"
-                  max="65535"
-                  required
-                />
-                <small>
-                  The port the application listens on inside its container.
-                </small>
-              </label>
-
-              <div className="form-actions">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  disabled={creatingApp}
-                  onClick={() => setShowCreateApp(false)}
-                >
-                  Cancel
-                </button>
-
-                <button
-                  className="primary-button"
-                  type="submit"
-                  disabled={creatingApp}
-                >
-                  {creatingApp ? "Deploying..." : "Deploy App"}
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
-      )}
+      <CreateAppWizard
+        open={showCreateApp}
+        onClose={() => setShowCreateApp(false)}
+        onCreated={(createdApp) => void handleAppCreated(createdApp)}
+      />
 
       {selectedContainer && (
         <LogViewer

@@ -279,6 +279,25 @@ export function createAppDatabase(databasePath: string) {
     return result.healthy === 1;
   }
 
+  /**
+   * Runs fn inside BEGIN/COMMIT, rolling back on any throw. node:sqlite is
+   * synchronous, so fn must be synchronous too — this is meant for
+   * multi-row writes within a single request (e.g. creating an app plus
+   * its environment/storage records) that must not partially land.
+   */
+  function withTransaction<T>(fn: () => T): T {
+    db.exec("BEGIN");
+
+    try {
+      const result = fn();
+      db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   function close(): void {
     db.close();
   }
@@ -301,6 +320,7 @@ export function createAppDatabase(databasePath: string) {
     deleteApp,
     touchAppEnvironment,
     touchAllAppsEnvironment,
+    withTransaction,
     healthCheck,
     close,
     ...environmentRepository,

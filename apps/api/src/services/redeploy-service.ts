@@ -144,7 +144,7 @@ export interface RedeployDependencies {
   ) => Promise<RedeployReconcileResult>;
 }
 
-function errorMessage(error: unknown): string {
+export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
 }
 

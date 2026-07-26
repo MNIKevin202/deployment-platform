@@ -170,3 +170,84 @@ export interface StorageFormValues {
 }
 
 export type ContainerAction = "start" | "stop" | "restart";
+
+export type RestartPolicy = "unless-stopped" | "always" | "on-failure" | "no";
+
+export type BuildBriefRuntime =
+  | "nodejs"
+  | "python"
+  | "php"
+  | "static"
+  | "docker"
+  | "other";
+
+export interface WizardEnvVarInput {
+  key: string;
+  value: string;
+  isSecret: boolean;
+  enabled: boolean;
+}
+
+export interface WizardVolumeInput {
+  containerPath: string;
+  /** Empty string means "let the platform generate one". */
+  volumeName: string;
+  readOnly: boolean;
+}
+
+export interface CreateAppWizardPayload {
+  name: string;
+  image: string;
+  containerPort: number;
+  restartPolicy: RestartPolicy;
+  environmentVariables: Array<{
+    key: string;
+    value: string;
+    isSecret: boolean;
+    enabled: boolean;
+  }>;
+  storageMounts: Array<{
+    containerPath: string;
+    volumeName?: string;
+    readOnly: boolean;
+  }>;
+}
+
+export interface CreatedAppSummary {
+  id: number;
+  name: string;
+  containerName: string;
+  image: string;
+  containerPort: number;
+  domain: string | null;
+  containerId: string | null;
+  status: string;
+  routingReady: boolean;
+  environmentVariableCount: number;
+  secretVariableCount: number;
+  storageMountCount: number;
+}
+
+export interface CreateAppWizardResponse {
+  success: boolean;
+  message: string;
+  app?: CreatedAppSummary;
+}
+
+export interface BuildBriefRequestPayload {
+  appName: string;
+  image?: string;
+  containerPort: number;
+  runtime: BuildBriefRuntime;
+  description?: string;
+  startCommand?: string;
+  healthCheckPath?: string;
+  environmentVariables: Array<{ key: string; isSecret: boolean }>;
+  storageMounts: Array<{ containerPath: string; readOnly: boolean }>;
+}
+
+export interface BuildBriefResponse {
+  success: boolean;
+  domain: string;
+  brief: string;
+}
