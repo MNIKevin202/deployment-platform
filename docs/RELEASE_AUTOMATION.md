@@ -249,7 +249,13 @@ and the release runs in `caddy` deploy mode:
 - rendering fails loudly if any `__PLACEHOLDER__` survives,
 - the result is validated with the running Caddy binary
   (`caddy validate --adapter caddyfile`) *before* it is installed,
-- an identical render is a no-op (no reload, no backup churn),
+- the new configuration is applied by **restarting the Caddy container**.
+  `caddy reload` is attempted first but cannot work on this platform: the
+  generated Caddyfile sets `admin off`, and reload talks to that admin
+  endpoint. TLS material lives in the `caddy-data` volume, so a restart
+  costs a couple of seconds, not a certificate re-issuance. This is the
+  same fallback `installer/lib/caddy.sh` has always used.
+- an identical render is a no-op (no restart, no backup churn),
 - the previous file is backed up to
   `<Caddyfile>.backup-<release-timestamp>` and restored automatically if
   installation, reload, or verification fails,
@@ -259,6 +265,60 @@ and the release runs in `caddy` deploy mode:
 
 If the same release also changes application code, the Caddy stage runs
 in addition to the image deploy, immediately before verification.
+
+## Installer refreshes
+
+The guided installer copies itself to `/opt/deployment-platform/installer`
+and installs `/usr/local/bin/deployment-platform` as a copy of its CLI
+template. Both are **copies made at install time**. Nothing refreshed
+them afterwards, so a fix to `deployment-platform verify` or a new
+maintenance command could be written, tested, committed, and released
+while the server went on running the install-day version.
+
+Any change under `installer/` is therefore also a deployable scope:
+
+- the plan reports `Installer changed: yes` and `docs/script-only: no`,
+- the release runs in the same config-only `caddy` deploy mode (no image
+  build, no version number),
+- the remote script stages the new installer into
+  `<install-root>/installer.new-<timestamp>`, mirroring the installer's
+  own `rsync -a --exclude=tests`,
+- every `install.sh`, `lib/*.sh`, and the CLI template is `bash -n`
+  syntax-checked *before* anything becomes live — the shell equivalent of
+  `caddy validate`,
+- the swap is a rename, so an interrupted release can never leave a
+  half-copied installer; the previous copy is kept as
+  `installer.backup-<timestamp>`,
+- `/usr/local/bin/deployment-platform` is refreshed from the new
+  template and backed up alongside it,
+- an identical copy is a no-op, and any failure restores both the
+  directory and the CLI — also as part of the normal rollback path.
+
+`INSTALL_ROOT` in `release.config` controls the target (default
+`/opt/deployment-platform`).
+
+The refresh runs on **every** release that contacts the VPS, not only
+when the diff touched `installer/`. Staleness of the server-side copy is
+a property of the server (an install predating a fix, a restored backup,
+a release whose scope happened to be API-only), not of the current diff,
+and the stage is a no-op when the copy already matches.
+
+## `--deploy-config`
+
+```bash
+./release.sh --deploy-config --message "Re-apply server configuration"
+```
+
+Runs the configuration stages — installer refresh and Caddyfile
+re-render — regardless of what the pending diff touches, including on a
+completely clean tree. It exists so that bringing a drifted server back
+in line never requires inventing a fake change to `installer/` or
+hand-editing the live Caddyfile.
+
+With a clean tree there is nothing to stage, so the commit stage is
+skipped and the current `HEAD` is synced and deployed as-is. Everything
+else is unchanged: the same validation, the same backups, the same
+rollback semantics.
 
 ## The `/api` prefix contract
 

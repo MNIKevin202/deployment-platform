@@ -33,6 +33,9 @@ PLATFORM_NETWORK="deployment-platform"
 MANAGED_APPS_NETWORK="deployment-apps"
 API_DATA_VOLUME="deployment-platform-api-data"
 CADDY_CONTAINER="deployment-platform-caddy"
+# Where the guided installer put its own copy of itself and the state it
+# manages. A release refreshes that copy when installer/ changes.
+INSTALL_ROOT="/opt/deployment-platform"
 # The panel URL is MANDATORY: it is the platform's own dashboard, it
 # exists on every installation, and a release that cannot serve it is not
 # a successful release.
@@ -247,6 +250,7 @@ load_config_file() {
       MANAGED_APPS_NETWORK) MANAGED_APPS_NETWORK="${value}" ;;
       API_DATA_VOLUME) API_DATA_VOLUME="${value}" ;;
       CADDY_CONTAINER) CADDY_CONTAINER="${value}" ;;
+      INSTALL_ROOT) INSTALL_ROOT="${value}" ;;
       PUBLIC_URL_PANEL) PUBLIC_URL_PANEL="${value}" ;;
       PUBLIC_URL_WIZARD_TEST) PUBLIC_URL_WIZARD_TEST="${value}" ;;
       PUBLIC_URL_SQLITE_TEST) PUBLIC_URL_SQLITE_TEST="${value}" ;;
@@ -651,6 +655,19 @@ run_remote_deploy_and_report() {
     )
   fi
 
+  # The installer refresh runs on EVERY release that contacts the VPS,
+  # not only when this diff touched installer/.
+  # /opt/deployment-platform/installer and /usr/local/bin/deployment-platform
+  # are install-time COPIES, and their staleness is a property of the
+  # SERVER, not of the current diff: a fix released while the scope
+  # happened to be API-only would otherwise never arrive. The remote
+  # stage is a no-op when the copy already matches, so this costs nothing
+  # when there is nothing to do.
+  remote_args+=(
+    --deploy-installer
+    --install-root "${INSTALL_ROOT}"
+  )
+
   # Optional smoke-test URLs are only passed when actually configured.
   # Passing an empty value would look like a supplied-but-blank required
   # argument; omitting the flag lets the remote script treat the check as
@@ -787,6 +804,13 @@ COMMIT_MESSAGE=""
 API_VERSION_OVERRIDE=""
 WEB_VERSION_OVERRIDE=""
 VERIFY_ONLY=0
+# --deploy-config: contact the VPS and run the configuration-only stages
+# (installer refresh + Caddyfile re-render) even when the pending diff
+# does not happen to touch those paths. Server-side copies can drift for
+# reasons a diff cannot see — an install predating a fix, a restored
+# backup, a manual edit — and there must be a supported way to bring them
+# back in line that is not "make a fake change to installer/".
+FORCE_CONFIG_DEPLOY=0
 PLAN_ONLY=0
 NO_DEPLOY=0
 AUTO_YES=0
@@ -821,6 +845,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-deploy)
       NO_DEPLOY=1
+      shift
+      ;;
+    --deploy-config)
+      FORCE_CONFIG_DEPLOY=1
       shift
       ;;
     --yes)
@@ -1162,11 +1190,20 @@ for path in "${ALL_CHANGED_PATHS[@]:-}"; do
   fi
 done
 
-# A Caddy configuration change is deployable even with no API/web
-# change, so it must not be folded into the local-commit-only path.
+# A Caddy configuration change and an installer change are both
+# deployable with no API/web change, so neither may be folded into the
+# local-commit-only path.
 DOCS_ONLY="no"
-if [ "${API_CHANGED}" = "no" ] && [ "${WEB_CHANGED}" = "no" ] && [ "${CADDY_CONFIG_CHANGED}" = "no" ]; then
+if [ "${API_CHANGED}" = "no" ] && [ "${WEB_CHANGED}" = "no" ] &&
+   [ "${CADDY_CONFIG_CHANGED}" = "no" ] && [ "${INSTALLER_CHANGED}" = "no" ]; then
   DOCS_ONLY="yes"
+fi
+
+if [ "${FORCE_CONFIG_DEPLOY}" -eq 1 ]; then
+  CADDY_CONFIG_CHANGED="yes"
+  INSTALLER_CHANGED="yes"
+  DOCS_ONLY="no"
+  info "--deploy-config: the configuration stages will run regardless of the computed diff scope."
 fi
 
 info "API changed: ${API_CHANGED}"
@@ -1189,11 +1226,22 @@ has_releasable_changes() {
   [ ${#CANDIDATE_FILES[@]} -gt 0 ]
 }
 
+# --deploy-config is the one case where a clean tree is still a valid
+# release: it re-applies the server-side configuration from the CURRENT
+# commit. There is nothing to stage or commit, so the commit stage is
+# skipped and HEAD is synced and deployed as-is.
+SKIP_COMMIT=0
 if ! has_releasable_changes; then
-  print_header "NO CHANGES"
-  info "No releasable changes were found (permanently-excluded and unrecognized untracked files do not count)."
-  info "Nothing to release."
-  exit 0
+  if [ "${FORCE_CONFIG_DEPLOY}" -eq 1 ]; then
+    SKIP_COMMIT=1
+    info ""
+    info "No pending changes — --deploy-config will re-apply the configuration from the current commit."
+  else
+    print_header "NO CHANGES"
+    info "No releasable changes were found (permanently-excluded and unrecognized untracked files do not count)."
+    info "Nothing to release."
+    exit 0
+  fi
 fi
 
 info ""
@@ -1293,6 +1341,10 @@ if [ "${PLAN_ONLY}" -eq 1 ]; then
   info "  2. Build the changed image(s) from that directory."
   info "  3. Back up the database (VACUUM INTO) if the API changed."
   info "  4. Preserve the current container(s) under a rollback name, then swap."
+  info "  4a. Refresh ${INSTALL_ROOT}/installer and /usr/local/bin/deployment-platform from this release (no-op if identical)."
+  if [ "${CADDY_CONFIG_CHANGED}" = "yes" ]; then
+    info "  4b. Re-render, validate, and apply the Caddyfile (restart Caddy; admin API is disabled)."
+  fi
   info "  5. Verify image/network/migration/health, then run public URL checks."
   info "  6. On success, point the VPS 'current' source symlink at the new release."
   info ""
@@ -1388,11 +1440,10 @@ PREVIOUS_API_VERSION="unknown"
 PREVIOUS_WEB_VERSION="unknown"
 
 if [ "${DOCS_ONLY}" = "yes" ]; then
-  if [ "${INSTALLER_CHANGED}" = "yes" ]; then
-    info "Installer/script-only change."
-  else
-    info "Documentation/script-only change."
-  fi
+  # Installer changes are no longer local-only — they refresh the
+  # installed copy on the server — so this branch is now documentation
+  # and repo-tooling changes only.
+  info "Documentation/script-only change."
   info "This release will be committed locally only."
   info "The VPS will not be contacted."
   info "API and Web versions will not change."
@@ -1471,6 +1522,11 @@ fi
 
 print_header "COMMIT"
 
+if [ "${SKIP_COMMIT}" -eq 1 ]; then
+  COMMIT_SHA="$(git rev-parse HEAD)"
+  info "Nothing to commit — deploying the current commit: ${COMMIT_SHA}"
+else
+
 if [ ${#CHANGED_TRACKED_PATHS[@]} -gt 0 ]; then
   info "Diff stat:"
   git diff --stat -- "${CHANGED_TRACKED_PATHS[@]}" || true
@@ -1521,6 +1577,8 @@ fi
 
 COMMIT_SHA="$(git rev-parse HEAD)"
 info "Committed: ${COMMIT_SHA}"
+
+fi
 
 if [ "${DOCS_ONLY}" = "yes" ]; then
   print_header "RELEASE COMPLETE"

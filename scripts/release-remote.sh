@@ -22,6 +22,8 @@ SOURCE_DIR=""
 AUTH_FILE=""
 CADDY_ROUTES_DIR=""
 DEPLOY_CADDY_CONFIG=0
+DEPLOY_INSTALLER=0
+INSTALL_ROOT=""
 PANEL_DOMAIN=""
 CADDY_CONTAINER="deployment-platform-caddy"
 CADDY_CONFIG_FILE=""
@@ -48,6 +50,8 @@ while [ "$#" -gt 0 ]; do
     --auth-file) AUTH_FILE="$2"; shift 2 ;;
     --caddy-routes-dir) CADDY_ROUTES_DIR="$2"; shift 2 ;;
     --deploy-caddy-config) DEPLOY_CADDY_CONFIG=1; shift ;;
+    --deploy-installer) DEPLOY_INSTALLER=1; shift ;;
+    --install-root) INSTALL_ROOT="$2"; shift 2 ;;
     --panel-domain) PANEL_DOMAIN="$2"; shift 2 ;;
     --caddy-container) CADDY_CONTAINER="$2"; shift 2 ;;
     --caddy-config-file) CADDY_CONFIG_FILE="$2"; shift 2 ;;
@@ -99,22 +103,35 @@ is_valid_semver() {
   [[ "$1" =~ ${SEMVER_PATTERN} ]]
 }
 
-# "caddy" is a CONFIG-ONLY mode: it deploys a regenerated Caddyfile and
-# reloads Caddy, and builds/swaps no images at all. It exists because a
-# Caddy routing change is a real, deployable change to a running server
-# that touches neither apps/api nor apps/web — previously such a change
-# was classified as local-only and silently never reached the VPS, which
-# is how a broken /api prefix stayed live.
+# "caddy" is a CONFIG-ONLY mode: it deploys a regenerated Caddyfile
+# and/or refreshes the installed installer copy, and builds/swaps no
+# images at all. It exists because a Caddy routing change is a real,
+# deployable change to a running server that touches neither apps/api nor
+# apps/web — previously such a change was classified as local-only and
+# silently never reached the VPS, which is how a broken /api prefix
+# stayed live.
+#
+# The mode does NOT imply either deploy flag: an installer-only release
+# must not be required to supply Caddy arguments, and vice versa. It only
+# requires that there is at least one thing to do.
 case "${MODE}" in
   api|web|both) ;;
   caddy)
-    DEPLOY_CADDY_CONFIG=1
+    if [ "${DEPLOY_CADDY_CONFIG}" -eq 0 ] && [ "${DEPLOY_INSTALLER}" -eq 0 ]; then
+      printf 'ERROR: --mode caddy requires --deploy-caddy-config, --deploy-installer, or both.\n' >&2
+      exit 1
+    fi
     ;;
   *)
     printf 'ERROR: --mode must be one of: api, web, both, caddy (got: %s)\n' "${MODE}" >&2
     exit 1
     ;;
 esac
+
+if [ "${DEPLOY_INSTALLER}" -eq 1 ] && [ -z "${INSTALL_ROOT}" ]; then
+  printf 'ERROR: --deploy-installer requires --install-root\n' >&2
+  exit 1
+fi
 
 if [ "${DEPLOY_CADDY_CONFIG}" -eq 1 ]; then
   for caddy_required in PANEL_DOMAIN CADDY_CONTAINER CADDY_CONFIG_FILE; do
@@ -389,6 +406,11 @@ trigger_rollback() {
   # new state while the containers revert would be inconsistent.
   if declare -F restore_caddy_config_on_failure >/dev/null 2>&1; then
     restore_caddy_config_on_failure
+  fi
+  # Same reasoning for the refreshed installer copy and CLI wrapper: the
+  # maintenance tooling on disk must match whatever ends up running.
+  if declare -F restore_installer_on_failure >/dev/null 2>&1; then
+    restore_installer_on_failure
   fi
 
   local api_rollback_ok=1
@@ -1263,6 +1285,125 @@ restore_caddy_config_on_failure() {
     fi
   fi
 }
+
+# ============================================================
+# 4a. INSTALLER REFRESH
+# ============================================================
+#
+# The guided installer copies itself to ${INSTALL_ROOT}/installer at
+# install time, and /usr/local/bin/deployment-platform is a copy of the
+# CLI template. Nothing refreshed either afterwards, so every later fix
+# to the maintenance commands or the verification checks stayed on the
+# operator's laptop while the server kept running the install-day copy.
+# That is why a corrected `deployment-platform verify` could pass locally
+# and still be absent from the machine it was written for.
+#
+# The refresh mirrors installer/lib/filesystem.sh exactly (same rsync,
+# same --exclude=tests, same CLI copy), stages into a sibling directory,
+# syntax-checks it before it becomes live, and swaps by rename so an
+# interrupted release can never leave a half-copied installer.
+
+INSTALLER_BACKUP_DIR=""
+INSTALLER_REPLACED=0
+CLI_BACKUP=""
+CLI_REPLACED=0
+CLI_TARGET="/usr/local/bin/deployment-platform"
+
+restore_installer_on_failure() {
+  if [ "${CLI_REPLACED}" -eq 1 ] && [ -n "${CLI_BACKUP}" ] && [ -f "${CLI_BACKUP}" ]; then
+    if cp "${CLI_BACKUP}" "${CLI_TARGET}" 2>/dev/null; then
+      chmod 755 "${CLI_TARGET}" 2>/dev/null || true
+      info "Previous ${CLI_TARGET} restored."
+      CLI_REPLACED=0
+    else
+      info "WARNING: could not restore ${CLI_TARGET}. It is preserved at ${CLI_BACKUP}"
+    fi
+  fi
+  if [ "${INSTALLER_REPLACED}" -eq 1 ] && [ -n "${INSTALLER_BACKUP_DIR}" ] && [ -d "${INSTALLER_BACKUP_DIR}" ]; then
+    if rm -rf "${INSTALL_ROOT}/installer" 2>/dev/null &&
+       mv "${INSTALLER_BACKUP_DIR}" "${INSTALL_ROOT}/installer" 2>/dev/null; then
+      info "Previous installer copy restored."
+      INSTALLER_REPLACED=0
+    else
+      info "WARNING: could not restore the previous installer copy. It is preserved at ${INSTALLER_BACKUP_DIR}"
+    fi
+  fi
+}
+
+if [ "${DEPLOY_INSTALLER}" -eq 1 ]; then
+  print_header "INSTALLER REFRESH"
+
+  INSTALLER_SOURCE="${SOURCE_DIR}/installer"
+  if [ ! -d "${INSTALLER_SOURCE}" ]; then
+    fail "Installer directory not found in this release: ${INSTALLER_SOURCE}"
+  fi
+  if [ ! -d "${INSTALL_ROOT}/installer" ]; then
+    fail "Installed installer copy not found: ${INSTALL_ROOT}/installer"
+  fi
+  if ! command -v rsync >/dev/null 2>&1; then
+    fail "rsync is required to refresh the installer copy but is not installed."
+  fi
+
+  INSTALLER_STAGING="${INSTALL_ROOT}/installer.new-${RELEASE_TIMESTAMP}"
+  rm -rf "${INSTALLER_STAGING}"
+  if ! rsync -a --exclude=tests "${INSTALLER_SOURCE}/" "${INSTALLER_STAGING}/"; then
+    rm -rf "${INSTALLER_STAGING}"
+    fail "Failed to stage the new installer copy."
+  fi
+
+  # Cheap equivalent of `caddy validate` for shell: a syntax error must
+  # never become the live maintenance tooling.
+  installer_syntax_ok=1
+  for installer_script in "${INSTALLER_STAGING}/install.sh" "${INSTALLER_STAGING}"/lib/*.sh; do
+    [ -f "${installer_script}" ] || continue
+    if ! bash -n "${installer_script}" 2>/dev/null; then
+      info "ERROR: syntax check failed for ${installer_script}"
+      installer_syntax_ok=0
+    fi
+  done
+  if ! bash -n "${INSTALLER_STAGING}/templates/deployment-platform-cli.template" 2>/dev/null; then
+    info "ERROR: syntax check failed for the deployment-platform CLI template."
+    installer_syntax_ok=0
+  fi
+  if [ "${installer_syntax_ok}" -ne 1 ]; then
+    rm -rf "${INSTALLER_STAGING}"
+    fail "The new installer copy failed syntax validation; nothing was changed."
+  fi
+
+  if diff -r -q "${INSTALL_ROOT}/installer" "${INSTALLER_STAGING}" >/dev/null 2>&1 &&
+     cmp -s "${INSTALLER_STAGING}/templates/deployment-platform-cli.template" "${CLI_TARGET}"; then
+    rm -rf "${INSTALLER_STAGING}"
+    info "Installed installer copy is already identical to this release — nothing to refresh."
+  else
+    INSTALLER_BACKUP_DIR="${INSTALL_ROOT}/installer.backup-${RELEASE_TIMESTAMP}"
+    rm -rf "${INSTALLER_BACKUP_DIR}"
+    if ! mv "${INSTALL_ROOT}/installer" "${INSTALLER_BACKUP_DIR}"; then
+      rm -rf "${INSTALLER_STAGING}"
+      fail "Could not back up the current installer copy."
+    fi
+    if ! mv "${INSTALLER_STAGING}" "${INSTALL_ROOT}/installer"; then
+      mv "${INSTALLER_BACKUP_DIR}" "${INSTALL_ROOT}/installer" 2>/dev/null || true
+      fail "Could not install the new installer copy; the previous one was restored."
+    fi
+    chmod 755 "${INSTALL_ROOT}/installer/install.sh"
+    INSTALLER_REPLACED=1
+    info "Installer copy refreshed at ${INSTALL_ROOT}/installer (previous copy: ${INSTALLER_BACKUP_DIR})"
+
+    # The CLI wrapper is a plain copy of the template — same as
+    # install_cli_command in installer/lib/filesystem.sh.
+    if [ -f "${CLI_TARGET}" ]; then
+      CLI_BACKUP="${CLI_TARGET}.backup-${RELEASE_TIMESTAMP}"
+      cp "${CLI_TARGET}" "${CLI_BACKUP}"
+    fi
+    if ! cp "${INSTALL_ROOT}/installer/templates/deployment-platform-cli.template" "${CLI_TARGET}"; then
+      restore_installer_on_failure
+      fail "Could not install ${CLI_TARGET}; the previous installer copy was restored."
+    fi
+    chmod 755 "${CLI_TARGET}"
+    CLI_REPLACED=1
+    info "Management command refreshed: ${CLI_TARGET}"
+  fi
+fi
 
 if [ "${DEPLOY_CADDY_CONFIG}" -eq 1 ]; then
   print_header "CADDY CONFIGURATION DEPLOY"

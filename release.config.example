@@ -29,6 +29,14 @@ WEB_IMAGE_REPOSITORY=deployment-platform-web
 PLATFORM_NETWORK=deployment-platform
 MANAGED_APPS_NETWORK=deployment-apps
 API_DATA_VOLUME=deployment-platform-api-data
+
+# The Caddy container, and the guided installer's install root. Both are
+# only used by config-only releases: a Caddyfile change is re-rendered
+# and applied in place, and an installer/ change refreshes the installed
+# copy at ${INSTALL_ROOT}/installer plus /usr/local/bin/deployment-platform.
+# The live Caddyfile is assumed to sit next to CADDY_ROUTES_DIR.
+CADDY_CONTAINER=deployment-platform-caddy
+INSTALL_ROOT=/opt/deployment-platform
 # ---------------------------------------------------------------------
 # Public URL verification
 # ---------------------------------------------------------------------

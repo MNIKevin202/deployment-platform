@@ -477,8 +477,10 @@ run_plan_only() {
 # it, a tree containing only installer changes would silently skip every
 # version assertion.
 API_SCOPE_MARKER="$PROJECT_DIR/apps/api/.release-scope-test-marker"
+INSTALLER_SCOPE_MARKER="$PROJECT_DIR/installer/.release-scope-test-marker"
 cleanup_api_scope_marker() { rm -f "$API_SCOPE_MARKER"; }
-trap 'cleanup_api_scope_marker; restore_release_config; rm -rf "$TMP_ROOT"' EXIT
+cleanup_installer_scope_marker() { rm -f "$INSTALLER_SCOPE_MARKER"; }
+trap 'cleanup_api_scope_marker; cleanup_installer_scope_marker; restore_release_config; rm -rf "$TMP_ROOT"' EXIT
 printf 'release-scope test marker; safe to delete\n' > "$API_SCOPE_MARKER"
 
 PLAN_DISABLED="$(run_plan_only "" "")"
@@ -528,13 +530,24 @@ assert_contains "an explicit override beats the bootstrap initial version" "$PLA
 assert_failure "an invalid override is rejected before anything runs" \
   bash -c "cd '$PROJECT_DIR' && PATH='$FAKE_BIN:$REAL_PATH' bash ./release.sh --plan-only --api-version not-a-version"
 
-# With the marker removed, this repository's real tree is exercised. The
-# Caddy template IS part of this change, so the plan must report a Caddy
-# configuration change and must NOT fall into the local-commit-only path.
+# The plan must always report the Caddy scope, whatever the tree holds.
 cleanup_api_scope_marker
 PLAN_CADDY_SCOPE="$(run_plan_only "" "")"
 assert_contains "the plan reports the Caddy configuration scope" "$PLAN_CADDY_SCOPE" "Caddy configuration changed:"
-assert_contains "a Caddy config change is not documentation/script-only" "$PLAN_CADDY_SCOPE" "docs/script-only: no"
+
+# An installer-only change must reach the VPS, not be committed locally
+# and forgotten — that is how the server kept running the install-day
+# copy of `deployment-platform verify`. A throwaway marker under
+# installer/ makes this deterministic regardless of the working tree.
+printf 'release-scope test marker; safe to delete\n' > "$INSTALLER_SCOPE_MARKER"
+PLAN_INSTALLER_SCOPE="$(run_plan_only "" "")"
+cleanup_installer_scope_marker
+assert_contains "the plan reports the installer scope" "$PLAN_INSTALLER_SCOPE" "Installer changed: yes"
+assert_contains "an installer-only change is not documentation/script-only" "$PLAN_INSTALLER_SCOPE" "docs/script-only: no"
+assert_contains "the plan says it would refresh the installed installer copy" "$PLAN_INSTALLER_SCOPE" \
+  "Refresh /opt/deployment-platform/installer and /usr/local/bin/deployment-platform"
+assert_not_contains "an installer-only change is not announced as local-only" "$PLAN_INSTALLER_SCOPE" \
+  "committed locally only"
 
 echo "=== release-remote.sh argument validation with optional URLs ==="
 # Direct argument-validation regression: the first release after an
@@ -912,9 +925,115 @@ REMOTE_CADDY_MISSING="$(
     --apps-network deployment-apps \
     --api-data-volume deployment-platform-api-data \
     --url-panel https://panel.example.com \
+    --deploy-caddy-config \
     --current-symlink /nonexistent/current 2>&1 || true
 )"
-assert_contains "caddy mode without a panel domain is rejected" "$REMOTE_CADDY_MISSING" "requires --panel-domain"
+assert_contains "a Caddy config deploy without a panel domain is rejected" "$REMOTE_CADDY_MISSING" "requires --panel-domain"
+
+echo
+echo "=== Installer refresh deployment scope ==="
+# /opt/deployment-platform/installer and /usr/local/bin/deployment-platform
+# are install-time COPIES. Nothing refreshed them, so a corrected
+# `deployment-platform verify` or a new maintenance command could be
+# committed, tested, and released while the server kept running the
+# install-day version.
+assert_contains "an installer change is no longer classified local-only" "$RELEASE_TEXT" \
+  '[ "${INSTALLER_CHANGED}" = "no" ]; then'
+assert_contains "release.sh passes the installer refresh flag" "$RELEASE_TEXT" "--deploy-installer"
+# Staleness of the server-side copy is a property of the SERVER, not of
+# the current diff, so the refresh must not be conditional on it.
+assert_not_contains "the refresh is not gated on the diff touching installer/" "$RELEASE_TEXT" \
+  '  if [ "${INSTALLER_CHANGED}" = "yes" ]; then
+    remote_args+=('
+assert_contains "an explicit config-only deploy flag exists" "$RELEASE_TEXT" "--deploy-config)"
+assert_contains "--deploy-config forces the configuration scope" "$RELEASE_TEXT" \
+  "the configuration stages will run regardless of the computed diff scope"
+assert_contains "--deploy-config works on a clean tree" "$RELEASE_TEXT" "SKIP_COMMIT=1"
+assert_contains "release.sh passes the install root" "$RELEASE_TEXT" "--install-root"
+assert_contains "INSTALL_ROOT is a configurable key" "$RELEASE_TEXT" "INSTALL_ROOT) INSTALL_ROOT="
+assert_contains "the example config documents INSTALL_ROOT" \
+  "$(cat "$PROJECT_DIR/release.config.example")" "INSTALL_ROOT=/opt/deployment-platform"
+assert_contains "the example config documents CADDY_CONTAINER" \
+  "$(cat "$PROJECT_DIR/release.config.example")" "CADDY_CONTAINER=deployment-platform-caddy"
+
+assert_contains "the remote script accepts the installer refresh flag" "$REMOTE_TEXT" "--deploy-installer) DEPLOY_INSTALLER=1"
+assert_contains "the refresh mirrors the installer's own rsync" "$REMOTE_TEXT" 'rsync -a --exclude=tests'
+assert_contains "the refresh stages before it swaps" "$REMOTE_TEXT" "installer.new-"
+assert_contains "the staged copy is syntax-checked before going live" "$REMOTE_TEXT" "failed syntax validation"
+assert_contains "the previous installer copy is kept" "$REMOTE_TEXT" "installer.backup-"
+assert_contains "the CLI wrapper is refreshed too" "$REMOTE_TEXT" "/usr/local/bin/deployment-platform"
+assert_contains "the CLI wrapper is backed up" "$REMOTE_TEXT" 'CLI_BACKUP="${CLI_TARGET}.backup-'
+assert_contains "an identical installer copy is a no-op" "$REMOTE_TEXT" "already identical to this release"
+assert_contains "installer restore is wired into the automatic rollback path" "$REMOTE_TEXT" "restore_installer_on_failure"
+
+# The mode must not force either deploy flag on: an installer-only
+# release supplies no Caddy arguments, and vice versa.
+assert_contains "caddy mode requires something to actually do" "$REMOTE_TEXT" \
+  "--mode caddy requires --deploy-caddy-config, --deploy-installer, or both."
+assert_contains "the installer refresh requires an install root" "$REMOTE_TEXT" \
+  "--deploy-installer requires --install-root"
+
+REMOTE_INSTALLER_ONLY="$(
+  bash "$REMOTE_SH" \
+    --mode caddy \
+    --source-dir /nonexistent/release-dir \
+    --auth-file /nonexistent/auth.env \
+    --caddy-routes-dir /nonexistent/routes \
+    --api-container deployment-platform-api \
+    --web-container deployment-platform-web \
+    --api-image-repo deployment-platform-api \
+    --web-image-repo deployment-platform-web \
+    --platform-network deployment-platform \
+    --apps-network deployment-apps \
+    --api-data-volume deployment-platform-api-data \
+    --url-panel https://panel.example.com \
+    --deploy-installer \
+    --install-root /nonexistent/install-root \
+    --current-symlink /nonexistent/current 2>&1 || true
+)"
+assert_not_contains "an installer-only release needs no Caddy arguments" \
+  "$REMOTE_INSTALLER_ONLY" "requires --panel-domain"
+assert_not_contains "an installer-only release is an accepted mode" \
+  "$REMOTE_INSTALLER_ONLY" "--mode must be one of"
+
+REMOTE_NOTHING_TO_DO="$(
+  bash "$REMOTE_SH" \
+    --mode caddy \
+    --source-dir /nonexistent/release-dir \
+    --auth-file /nonexistent/auth.env \
+    --caddy-routes-dir /nonexistent/routes \
+    --api-container deployment-platform-api \
+    --web-container deployment-platform-web \
+    --api-image-repo deployment-platform-api \
+    --web-image-repo deployment-platform-web \
+    --platform-network deployment-platform \
+    --apps-network deployment-apps \
+    --api-data-volume deployment-platform-api-data \
+    --url-panel https://panel.example.com \
+    --current-symlink /nonexistent/current 2>&1 || true
+)"
+assert_contains "a config-only release with nothing to do is rejected" \
+  "$REMOTE_NOTHING_TO_DO" "requires --deploy-caddy-config, --deploy-installer, or both"
+
+REMOTE_INSTALLER_NO_ROOT="$(
+  bash "$REMOTE_SH" \
+    --mode caddy \
+    --source-dir /nonexistent/release-dir \
+    --auth-file /nonexistent/auth.env \
+    --caddy-routes-dir /nonexistent/routes \
+    --api-container deployment-platform-api \
+    --web-container deployment-platform-web \
+    --api-image-repo deployment-platform-api \
+    --web-image-repo deployment-platform-web \
+    --platform-network deployment-platform \
+    --apps-network deployment-apps \
+    --api-data-volume deployment-platform-api-data \
+    --url-panel https://panel.example.com \
+    --deploy-installer \
+    --current-symlink /nonexistent/current 2>&1 || true
+)"
+assert_contains "an installer refresh without an install root is rejected" \
+  "$REMOTE_INSTALLER_NO_ROOT" "requires --install-root"
 
 
 echo "=== Secrets never appear in release output ==="
