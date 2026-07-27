@@ -2325,6 +2325,33 @@ if [ -f "$AUTH_TS" ]; then
 fi
 
 echo
+echo "=== Log output survives a session with no controlling terminal ==="
+# `ssh host deployment-platform verify` has no /dev/tty. The append to it
+# fails, and with `>> path 2>/dev/null` the shell printed its own
+# "No such device or address" in front of EVERY line — a healthy run
+# looked broken. Ordering the redirections the other way fixes it.
+COMMON_SRC="$(cat "$INSTALLER_DIR/lib/common.sh")"
+assert_contains "the visible-output redirection discards stderr first" "$COMMON_SRC" \
+  'printf '"'"'%s\n'"'"' "$1" 2>/dev/null >> "${PROMPT_OUTPUT_PATH:-/dev/tty}"'
+assert_failure "the old redirection order is gone from the visible path" \
+  bash -c "grep -q 'printf .%s..n. \"\\\$1\" >> \"\\\${PROMPT_OUTPUT_PATH:-/dev/tty}\" 2>/dev/null' '$INSTALLER_DIR/lib/common.sh'"
+
+# Functional proof: an unwritable output path must produce the log line
+# on stderr and nothing else.
+TTYLESS_OUT="$(
+  bash -c '
+    DEPLOYMENT_PLATFORM_INSTALLER_ROOT='"'$INSTALLER_DIR'"'
+    source '"'$INSTALLER_DIR/lib/common.sh'"'
+    PROMPT_OUTPUT_PATH=/nonexistent-directory-for-tests/out
+    INSTALLER_LOG_FILE=/nonexistent-directory-for-tests/installer.log
+    log_pass "verification line"
+  ' 2>&1
+)"
+assert_contains "the log line still reaches the operator" "$TTYLESS_OUT" "[PASS] verification line"
+assert_not_contains "no shell redirection error is printed" "$TTYLESS_OUT" "No such file or directory"
+assert_not_contains "no /dev/tty error is printed" "$TTYLESS_OUT" "No such device or address"
+
+echo
 echo "=== Installer verification probes the REAL backend route ==="
 VERIFY_SRC="$(cat "$INSTALLER_DIR/lib/verify.sh")"
 assert_contains "the container probe targets /auth/session" "$VERIFY_SRC" 'API_HEALTH_CHECK_PATH="/auth/session"'

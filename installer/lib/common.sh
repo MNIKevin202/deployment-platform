@@ -51,8 +51,18 @@ log_redact() {
 # usable path. Writing log lines to the terminal channel keeps captured
 # stdout clean, and is identical from the operator's point of view (both
 # stdout and stderr land on their terminal).
+# The 2>/dev/null comes BEFORE the append on purpose. Redirections are
+# applied left to right, so stderr is already discarded by the time the
+# append to /dev/tty is attempted. With the two in the other order, a
+# session that has no controlling terminal — `ssh host deployment-platform
+# verify`, cron, a CI runner — printed a shell-level
+#   /dev/tty: No such device or address
+# in front of EVERY log line, because that message is emitted by the
+# failing redirection itself and never saw the 2>/dev/null. The fallback
+# to stderr already handled the output correctly; only the noise was the
+# problem, and it made a completely healthy verification run look broken.
 _visible_line() {
-  printf '%s\n' "$1" >> "${PROMPT_OUTPUT_PATH:-/dev/tty}" 2>/dev/null || printf '%s\n' "$1" >&2
+  printf '%s\n' "$1" 2>/dev/null >> "${PROMPT_OUTPUT_PATH:-/dev/tty}" || printf '%s\n' "$1" >&2
 }
 
 _log_line() {
@@ -65,7 +75,10 @@ _log_line() {
 
   if [ -n "${INSTALLER_LOG_FILE:-}" ]; then
     mkdir -p "$(dirname "$INSTALLER_LOG_FILE")" 2>/dev/null || true
-    printf '%s [%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$marker" "$sanitized" >> "$INSTALLER_LOG_FILE" 2>/dev/null || true
+    # 2>/dev/null before the append, for the same reason as _visible_line:
+    # an unwritable log path must fail silently, not print a shell error
+    # in front of the operator's output.
+    printf '%s [%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$marker" "$sanitized" 2>/dev/null >> "$INSTALLER_LOG_FILE" || true
     _rotate_log_if_needed
   fi
 }
