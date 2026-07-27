@@ -48,8 +48,16 @@ const METADATA_KEY_LABELS: Record<string, string> = {
   stdoutSummary: "Output detail",
   rolledBack: "Rolled back",
   commitShortSha: "Commit",
-  imageTag: "Image tag"
+  imageTag: "Image tag",
+  configuredPort: "Configured port",
+  internalStatusCode: "Internal result",
+  internalReachable: "Internal reachable",
+  publicStatusCode: "Public result",
+  publicReachable: "Public reachable"
 };
+
+/** Values formatted specially per key — e.g. an HTTP status code reads better as "HTTP 200" than a bare number. */
+const HTTP_STATUS_KEYS = new Set(["internalStatusCode", "publicStatusCode"]);
 
 function formatMetadataKey(key: string): string {
   if (METADATA_KEY_LABELS[key]) {
@@ -60,9 +68,12 @@ function formatMetadataKey(key: string): string {
     .replace(/^./, (char) => char.toUpperCase());
 }
 
-function formatMetadataValue(value: unknown): string {
+function formatMetadataValue(key: string, value: unknown): string {
   if (value === null || value === undefined) {
     return "—";
+  }
+  if (HTTP_STATUS_KEYS.has(key) && typeof value === "number") {
+    return `HTTP ${value}`;
   }
   if (typeof value === "boolean") {
     return value ? "Yes" : "No";
@@ -218,7 +229,7 @@ export default function ActivityPanel({ appId }: ActivityPanelProps) {
                           {Object.entries(event.metadata).map(([key, value]) => (
                             <div key={key}>
                               <dt>{formatMetadataKey(key)}</dt>
-                              <dd>{formatMetadataValue(value)}</dd>
+                              <dd>{formatMetadataValue(key, value)}</dd>
                             </div>
                           ))}
                         </dl>

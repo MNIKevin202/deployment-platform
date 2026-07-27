@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import {
+  detectPort,
   detectProjectType,
   inspectCheckoutDirectory,
   inspectRepositoryRemote
@@ -78,6 +79,162 @@ describe("detectProjectType", () => {
   });
 });
 
+describe("detectPort", () => {
+  test("prefers a single Dockerfile EXPOSE port with high confidence", () => {
+    const result = detectPort({
+      recommendedStrategy: "dockerfile",
+      dockerfileContent: "FROM node:24-alpine\nEXPOSE 53123\nCMD [\"node\", \"server.js\"]\n",
+      packageJsonRaw: null,
+      sourceFileContents: {}
+    });
+    assert.equal(result.detectedPort, 53123);
+    assert.equal(result.source, "dockerfile-expose");
+    assert.equal(result.confidence, "high");
+  });
+
+  test("detects a Dockerfile ENV PORT setting when EXPOSE is absent", () => {
+    const result = detectPort({
+      recommendedStrategy: "dockerfile",
+      dockerfileContent: "FROM node:24-alpine\nENV PORT=4000\nCMD [\"node\", \"server.js\"]\n",
+      packageJsonRaw: null,
+      sourceFileContents: {}
+    });
+    assert.equal(result.detectedPort, 4000);
+    assert.equal(result.source, "dockerfile-env");
+    assert.equal(result.confidence, "high");
+  });
+
+  test("detects a --port command-line flag in CMD when nothing else is present", () => {
+    const result = detectPort({
+      recommendedStrategy: "dockerfile",
+      dockerfileContent: 'FROM node:24-alpine\nCMD ["node", "server.js", "--port", "9090"]\n',
+      packageJsonRaw: null,
+      sourceFileContents: {}
+    });
+    assert.equal(result.detectedPort, 9090);
+    assert.equal(result.source, "dockerfile-env");
+  });
+
+  test("does not guess when multiple EXPOSE ports conflict", () => {
+    const result = detectPort({
+      recommendedStrategy: "dockerfile",
+      dockerfileContent: "FROM node:24-alpine\nEXPOSE 3000\nEXPOSE 8080\n",
+      packageJsonRaw: null,
+      sourceFileContents: {}
+    });
+    assert.equal(result.detectedPort, null);
+    assert.equal(result.confidence, "none");
+    assert.ok(result.warnings.some((w) => w.includes("3000") && w.includes("8080")));
+  });
+
+  test("detects a port from a package.json start script", () => {
+    const result = detectPort({
+      recommendedStrategy: "nodejs",
+      dockerfileContent: null,
+      packageJsonRaw: JSON.stringify({ scripts: { start: "node server.js --port 3000" } }),
+      sourceFileContents: {}
+    });
+    assert.equal(result.detectedPort, 3000);
+    assert.equal(result.source, "package-script");
+    assert.equal(result.confidence, "high");
+  });
+
+  test("detects a literal app.listen port from source code", () => {
+    const result = detectPort({
+      recommendedStrategy: "nodejs",
+      dockerfileContent: null,
+      packageJsonRaw: JSON.stringify({ scripts: {} }),
+      sourceFileContents: { "server.js": "const app = express();\napp.listen(53123);\n" }
+    });
+    assert.equal(result.detectedPort, 53123);
+    assert.equal(result.source, "source-code");
+    assert.equal(result.confidence, "high");
+  });
+
+  test("detects process.env.PORT || literal fallback", () => {
+    const result = detectPort({
+      recommendedStrategy: "nodejs",
+      dockerfileContent: null,
+      packageJsonRaw: null,
+      sourceFileContents: { "index.js": "const port = process.env.PORT || 4321;\n" }
+    });
+    assert.equal(result.detectedPort, 4321);
+    assert.equal(result.source, "source-code");
+  });
+
+  test("detects process.env.PORT ?? literal fallback", () => {
+    const result = detectPort({
+      recommendedStrategy: "nodejs",
+      dockerfileContent: null,
+      packageJsonRaw: null,
+      sourceFileContents: { "index.js": "const port = process.env.PORT ?? 4321;\n" }
+    });
+    assert.equal(result.detectedPort, 4321);
+    assert.equal(result.source, "source-code");
+  });
+
+  test("does not guess when source files disagree on the port", () => {
+    const result = detectPort({
+      recommendedStrategy: "nodejs",
+      dockerfileContent: null,
+      packageJsonRaw: null,
+      sourceFileContents: {
+        "server.js": "app.listen(3000);",
+        "index.js": "app.listen(8080);"
+      }
+    });
+    assert.equal(result.detectedPort, null);
+    assert.equal(result.confidence, "none");
+  });
+
+  test("suggests a framework default at low confidence only, never silently applied", () => {
+    const result = detectPort({
+      recommendedStrategy: "nodejs",
+      dockerfileContent: null,
+      packageJsonRaw: JSON.stringify({ dependencies: { vite: "^5.0.0" } }),
+      sourceFileContents: {}
+    });
+    assert.equal(result.detectedPort, 5173);
+    assert.equal(result.source, "framework-default");
+    assert.equal(result.confidence, "low");
+    assert.ok(result.warnings.some((w) => w.toLowerCase().includes("not confirmed")));
+  });
+
+  test("uses a high-confidence platform default of 80 for static deployments", () => {
+    const result = detectPort({
+      recommendedStrategy: "static",
+      dockerfileContent: null,
+      packageJsonRaw: null,
+      sourceFileContents: {}
+    });
+    assert.equal(result.detectedPort, 80);
+    assert.equal(result.source, "platform-default");
+    assert.equal(result.confidence, "high");
+  });
+
+  test("reports no detection when nothing matches", () => {
+    const result = detectPort({
+      recommendedStrategy: "dockerfile",
+      dockerfileContent: "FROM scratch\nCOPY . .\n",
+      packageJsonRaw: null,
+      sourceFileContents: {}
+    });
+    assert.equal(result.detectedPort, null);
+    assert.equal(result.source, "none");
+    assert.equal(result.confidence, "none");
+  });
+
+  test("rejects an out-of-range EXPOSE port rather than treating it as valid", () => {
+    const result = detectPort({
+      recommendedStrategy: "dockerfile",
+      dockerfileContent: "FROM node:24-alpine\nEXPOSE 99999\n",
+      packageJsonRaw: null,
+      sourceFileContents: {}
+    });
+    assert.notEqual(result.detectedPort, 99999);
+  });
+});
+
 describe("inspectCheckoutDirectory", () => {
   let checkoutDir: string;
 
@@ -98,6 +255,24 @@ describe("inspectCheckoutDirectory", () => {
     const result = inspectCheckoutDirectory(checkoutDir, ".");
     assert.equal(result.detectedProjectType, "nodejs");
     assert.equal(result.packageJson?.hasStartScript, true);
+  });
+
+  test("also detects the container port from a Dockerfile EXPOSE on disk", () => {
+    writeFileSync(join(checkoutDir, "Dockerfile"), "FROM node:24-alpine\nEXPOSE 53123\n");
+
+    const result = inspectCheckoutDirectory(checkoutDir, ".");
+    assert.equal(result.detectedProjectType, "dockerfile");
+    assert.equal(result.portDetection.detectedPort, 53123);
+    assert.equal(result.portDetection.source, "dockerfile-expose");
+  });
+
+  test("also detects the container port from a literal server.js listen call on disk", () => {
+    writeFileSync(join(checkoutDir, "package.json"), JSON.stringify({ scripts: { start: "node server.js" } }));
+    writeFileSync(join(checkoutDir, "server.js"), "app.listen(53123);\n");
+
+    const result = inspectCheckoutDirectory(checkoutDir, ".");
+    assert.equal(result.portDetection.detectedPort, 53123);
+    assert.equal(result.portDetection.source, "source-code");
   });
 
   test("inspects a configured subdirectory rather than the checkout root", () => {
@@ -200,5 +375,52 @@ describe("inspectRepositoryRemote", () => {
 
     assert.equal(result.detectedProjectType, "nodejs");
     assert.equal(result.packageJson?.hasStartScript, false);
+  });
+
+  test("also fetches Dockerfile content over the API and attaches port detection", async () => {
+    const files: Record<string, string> = { Dockerfile: "FROM node:24-alpine\nEXPOSE 53123\n" };
+    const client: SourceProviderClient = {
+      provider: "github",
+      async validateCredential() {
+        throw new Error("not used in this test");
+      },
+      async listRepositories() {
+        throw new Error("not used in this test");
+      },
+      async getRepository() {
+        throw new Error("not used in this test");
+      },
+      async listBranches() {
+        throw new Error("not used in this test");
+      },
+      async listCommits() {
+        throw new Error("not used in this test");
+      },
+      async resolveBranchCommit() {
+        throw new Error("not used in this test");
+      },
+      async pathExists(_token, _owner, _repo, _ref, path) {
+        return path in files;
+      },
+      async getFileContents(_token, _owner, _repo, _ref, path) {
+        if (path in files) {
+          return files[path];
+        }
+        throw new Error("file not found");
+      }
+    };
+
+    const result = await inspectRepositoryRemote(client, {
+      token: "test-token",
+      repositoryOwner: "MNIKevin202",
+      repositoryName: "mflabs",
+      ref: "main",
+      subdirectory: "."
+    });
+
+    assert.equal(result.detectedProjectType, "dockerfile");
+    assert.equal(result.portDetection.detectedPort, 53123);
+    assert.equal(result.portDetection.source, "dockerfile-expose");
+    assert.equal(result.portDetection.confidence, "high");
   });
 });

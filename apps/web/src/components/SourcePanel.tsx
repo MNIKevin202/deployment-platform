@@ -385,6 +385,33 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
                 </dd>
               </div>
               <div>
+                <dt>Configured port</dt>
+                <dd>{source.containerPort ?? "Uses the app's current setting"}</dd>
+              </div>
+              <div>
+                <dt>Port source</dt>
+                <dd>
+                  {source.containerPortSource
+                    ? PORT_SOURCE_LABELS[source.containerPortSource] ?? source.containerPortSource
+                    : "Not set"}
+                  {source.containerPortConfidence && source.containerPortConfidence !== "none"
+                    ? ` (${source.containerPortConfidence} confidence)`
+                    : ""}
+                </dd>
+              </div>
+              <div>
+                <dt>Last internal health result</dt>
+                <dd>{source.lastInternalHealthResult ?? "Not yet checked"}</dd>
+              </div>
+              <div>
+                <dt>Last public route result</dt>
+                <dd>{source.lastPublicHealthResult ?? "Not yet checked"}</dd>
+              </div>
+              <div>
+                <dt>Last deployment status</dt>
+                <dd>{source.lastDeploymentStatus ?? "Never deployed"}</dd>
+              </div>
+              <div>
                 <dt>Auto deploy</dt>
                 <dd>{source.autoDeploy ? "Enabled" : "Disabled"} (coming in a later phase)</dd>
               </div>
@@ -480,7 +507,7 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
                 type="button"
                 onClick={() => setShowLinkDialog(true)}
               >
-                Change Source
+                Edit Source
               </button>
               <button
                 className="danger-button compact"
@@ -661,6 +688,17 @@ const STEP_LABELS: Record<WizardStep, string> = {
   review: "Review"
 };
 
+export const PORT_SOURCE_LABELS: Record<string, string> = {
+  manual: "Manually entered",
+  "dockerfile-expose": "Dockerfile EXPOSE",
+  "dockerfile-env": "Dockerfile ENV/ARG or command line",
+  "package-script": "package.json script",
+  "source-code": "Application source code",
+  "framework-default": "Framework default",
+  "platform-default": "Platform default",
+  none: "Not detected"
+};
+
 const STRATEGY_INFO: Record<Exclude<BuildStrategy, "unsupported">, { title: string; description: string }> = {
   dockerfile: {
     title: "Dockerfile",
@@ -676,15 +714,43 @@ const STRATEGY_INFO: Record<Exclude<BuildStrategy, "unsupported">, { title: stri
   }
 };
 
+// Reconstructs just enough of a SourceRepository to resume editing an
+// already-linked source without a network round-trip — the operator is
+// editing a source that's already known to exist and be linked, not
+// browsing repositories fresh, so the fields the repositories-listing
+// API alone would provide (id/description/pushedAt/updatedAt) are
+// filled with safe placeholders never displayed as if they were fetched.
+function repositoryFromExistingSource(existing: AppSourceInfo): SourceRepository {
+  return {
+    id: existing.repositoryId ?? existing.repositoryFullName ?? `${existing.repositoryOwner}/${existing.repositoryName}`,
+    owner: existing.repositoryOwner,
+    name: existing.repositoryName,
+    fullName: existing.repositoryFullName ?? `${existing.repositoryOwner}/${existing.repositoryName}`,
+    private: existing.repositoryVisibility === "private",
+    archived: false,
+    description: null,
+    defaultBranch: existing.branch,
+    htmlUrl: `https://github.com/${existing.repositoryOwner}/${existing.repositoryName}`,
+    pushedAt: null,
+    updatedAt: null
+  };
+}
+
 function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkRepositoryDialogProps) {
-  const [step, setStep] = useState<WizardStep>("provider");
+  // Editing an already-linked source (Edit Source) resumes at the
+  // Branch step, with the repository already populated from the saved
+  // configuration — the operator only has to repeat provider/repository
+  // selection if they deliberately click "Change Repository" below.
+  const [step, setStep] = useState<WizardStep>(existing ? "branch" : "provider");
 
   const [repos, setRepos] = useState<SourceRepository[]>([]);
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState("");
   const [search, setSearch] = useState("");
 
-  const [selectedRepo, setSelectedRepo] = useState<SourceRepository | null>(null);
+  const [selectedRepo, setSelectedRepo] = useState<SourceRepository | null>(
+    existing ? repositoryFromExistingSource(existing) : null
+  );
 
   const [branches, setBranches] = useState<SourceBranch[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
@@ -707,6 +773,16 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
   const [buildContext, setBuildContext] = useState(existing?.buildContext ?? ".");
   const [containerPort, setContainerPort] = useState(
     existing?.containerPort != null ? String(existing.containerPort) : ""
+  );
+  // "manual" once the operator types their own value; otherwise the
+  // PortDetectionSource of whatever suggestion was accepted from
+  // inspection — never invented, always either preloaded from the saved
+  // source or set the moment a detection result is actually applied.
+  const [containerPortSource, setContainerPortSource] = useState<string | null>(
+    existing?.containerPortSource ?? null
+  );
+  const [containerPortConfidence, setContainerPortConfidence] = useState<string | null>(
+    existing?.containerPortConfidence ?? null
   );
   // autoDeploy has no UI control (it is currently inert on the backend —
   // no scheduler or webhook ever reads it) but the existing stored value
@@ -788,6 +864,25 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
     void loadBranches(repo);
   };
 
+  // Load the branch list once, on mount, when resuming Edit Source with
+  // an already-populated repository — loadBranches preserves the
+  // existing selected branch as long as it's still in the fetched list
+  // (see loadBranches above), so this never resets the operator's
+  // current branch to the repo's default.
+  useEffect(() => {
+    if (existing && selectedRepo) {
+      void loadBranches(selectedRepo);
+    }
+    // Only ever meant to run once, on mount, for the edit-existing case.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const changeRepository = () => {
+    setSelectedRepo(null);
+    setBranches([]);
+    setStep("repository");
+  };
+
   // Stale-inspection handling: any change to repository, branch, or
   // subdirectory invalidates a prior inspection result outright — an
   // inspection from one selection must never be reused for another.
@@ -830,6 +925,17 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
 
       setInspection(inspectResult.inspection ?? null);
       setInspectedCommitSha(inspectResult.commitSha ?? null);
+
+      // Prefill the container port only from a high-confidence, single,
+      // unambiguous detection, and only if the operator hasn't already
+      // typed a value — an ambiguous/conflicting/low-confidence result
+      // is shown (see the Deployment step below) but never auto-applied.
+      const portDetection = inspectResult.inspection?.portDetection;
+      if (portDetection && portDetection.detectedPort !== null && portDetection.confidence === "high" && !containerPort.trim()) {
+        setContainerPort(String(portDetection.detectedPort));
+        setContainerPortSource(portDetection.source);
+        setContainerPortConfidence(portDetection.confidence);
+      }
 
       // The commit message lookup is best-effort context only — the
       // inspection result itself does not depend on it succeeding.
@@ -917,6 +1023,10 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
       dockerfilePath,
       buildContext,
       containerPort: containerPort.trim() ? Number(containerPort) : undefined,
+      // Only ever sent once a port value is actually present — an empty
+      // port has no source/confidence to report either.
+      containerPortSource: containerPort.trim() ? containerPortSource ?? "manual" : undefined,
+      containerPortConfidence: containerPort.trim() ? containerPortConfidence ?? undefined : undefined,
       autoDeploy: existingAutoDeploy
     };
   };
@@ -1041,7 +1151,7 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
       <section className="form-modal wizard-modal" onClick={(event) => event.stopPropagation()}>
         <header>
           <div>
-            <p className="eyebrow">{existing ? "Change Source" : "Link Repository"}</p>
+            <p className="eyebrow">{existing ? "Edit Source" : "Link Repository"}</p>
             <h2>Repository Source</h2>
           </div>
           <button className="close-button" type="button" disabled={saving} onClick={onClose}>
@@ -1118,7 +1228,10 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
           {step === "branch" && selectedRepo && (
             <>
               <p className="section-description">
-                Repository: <strong>{selectedRepo.fullName}</strong>
+                Repository: <strong>{selectedRepo.fullName}</strong>{" "}
+                <button className="secondary-button compact" type="button" onClick={changeRepository}>
+                  Change Repository
+                </button>
               </p>
               {branchesError && <div className="error-banner">{branchesError}</div>}
               {branchesLoading ? (
@@ -1193,6 +1306,37 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
                     </div>
                   </dl>
                   <InspectionResultCard inspection={inspection} />
+
+                  <div className="wizard-row inspection-card">
+                    <dl className="wizard-review-grid">
+                      <div>
+                        <dt>Suggested container port</dt>
+                        <dd>{inspection.portDetection.detectedPort ?? "None detected"}</dd>
+                      </div>
+                      <div>
+                        <dt>Detected from</dt>
+                        <dd>{PORT_SOURCE_LABELS[inspection.portDetection.source] ?? inspection.portDetection.source}</dd>
+                      </div>
+                      <div>
+                        <dt>Confidence</dt>
+                        <dd style={{ textTransform: "capitalize" }}>{inspection.portDetection.confidence}</dd>
+                      </div>
+                    </dl>
+                    {inspection.portDetection.evidence.length > 0 && (
+                      <ul className="wizard-file-list">
+                        {inspection.portDetection.evidence.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {inspection.portDetection.warnings.length > 0 && (
+                      <ul className="wizard-warning-list">
+                        {inspection.portDetection.warnings.map((warning) => (
+                          <li key={warning}>{warning}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 </>
               )}
 
@@ -1285,11 +1429,30 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
                   min={1}
                   max={65535}
                   value={containerPort}
-                  onChange={(event) => setContainerPort(event.target.value)}
+                  onChange={(event) => {
+                    setContainerPort(event.target.value);
+                    setContainerPortSource("manual");
+                    setContainerPortConfidence(null);
+                  }}
                   placeholder="Uses the app's current port if left blank"
                 />
                 <small>Only needed when the built image should expose a different port than the app's current setting.</small>
               </label>
+
+              {containerPort.trim() && (
+                <p className="section-description">
+                  {containerPortSource === "manual" || !containerPortSource
+                    ? "Manually entered."
+                    : `Detected from ${PORT_SOURCE_LABELS[containerPortSource] ?? containerPortSource}${
+                        containerPortConfidence ? ` (${containerPortConfidence} confidence)` : ""
+                      }.`}
+                  {containerPortConfidence === "low" && " Suggested port, not confirmed — verify before deploying."}
+                </p>
+              )}
+
+              {inspection.portDetection.detectedPort === null && inspection.portDetection.warnings.length > 0 && (
+                <div className="warning-banner">{inspection.portDetection.warnings.join(" ")}</div>
+              )}
             </>
           )}
 
@@ -1404,7 +1567,7 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
                   disabled={saving}
                   onClick={() => void saveWithoutDeploying()}
                 >
-                  {pendingAction === "save" ? "Saving..." : "Save without deploying"}
+                  {pendingAction === "save" ? "Saving..." : existing ? "Save changes" : "Save without deploying"}
                 </button>
                 {!isUnsupported && (
                   <button
@@ -1413,7 +1576,11 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
                     disabled={saving}
                     onClick={() => void saveAndDeploy()}
                   >
-                    {pendingAction === "deploy" ? "Saving and deploying..." : "Save and deploy"}
+                    {pendingAction === "deploy"
+                      ? "Saving and deploying..."
+                      : existing
+                        ? "Save changes and deploy"
+                        : "Save and deploy"}
                   </button>
                 )}
               </>

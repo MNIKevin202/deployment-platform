@@ -487,6 +487,25 @@ export interface PackageJsonSummary {
   hasStartScript: boolean;
 }
 
+export type PortDetectionSource =
+  | "dockerfile-expose"
+  | "dockerfile-env"
+  | "package-script"
+  | "source-code"
+  | "framework-default"
+  | "platform-default"
+  | "none";
+
+export type PortDetectionConfidence = "high" | "medium" | "low" | "none";
+
+export interface PortDetectionResult {
+  detectedPort: number | null;
+  source: PortDetectionSource;
+  confidence: PortDetectionConfidence;
+  evidence: string[];
+  warnings: string[];
+}
+
 export interface RepositoryInspectionResult {
   detectedProjectType: DetectedProjectType;
   recommendedStrategy: BuildStrategy;
@@ -495,6 +514,7 @@ export interface RepositoryInspectionResult {
   warnings: string[];
   supported: boolean;
   unsupportedReason: string | null;
+  portDetection: PortDetectionResult;
 }
 
 export interface InspectSourceResponse {
@@ -536,6 +556,8 @@ export interface AppSourceInfo {
   buildStrategy: BuildStrategy | null;
   detectedProjectType: DetectedProjectType | null;
   containerPort: number | null;
+  containerPortSource: string | null;
+  containerPortConfidence: string | null;
   autoDeploy: boolean;
   lastValidatedCommitSha: string | null;
   lastValidatedAt: string | null;
@@ -545,6 +567,9 @@ export interface AppSourceInfo {
   latestDeployedCommitSha: string | null;
   latestDeployedCommitMessage: string | null;
   latestDeployedAt: string | null;
+  lastInternalHealthResult: string | null;
+  lastPublicHealthResult: string | null;
+  lastDeploymentStatus: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -564,5 +589,7 @@ export interface AppSourceConfigFormValues {
   dockerfilePath: string;
   buildContext: string;
   containerPort: number | null;
+  containerPortSource: string | null;
+  containerPortConfidence: string | null;
   autoDeploy: boolean;
 }

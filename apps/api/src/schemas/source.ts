@@ -154,6 +154,24 @@ export const DEFAULT_SUBDIRECTORY = ".";
 // user can request.
 export const buildStrategySchema = z.enum(["dockerfile", "nodejs", "static"]);
 
+// "manual" when the operator typed the port themselves; otherwise the
+// exact PortDetectionSource string the operator accepted from an
+// inspection result (see repository-inspection-service.ts). The server
+// never trusts this as the *value* of the port — containerPort is still
+// independently validated by containerPortSchema — this only records
+// *how* that already-validated value was arrived at, for display.
+export const containerPortSourceSchema = z.enum([
+  "manual",
+  "dockerfile-expose",
+  "dockerfile-env",
+  "package-script",
+  "source-code",
+  "framework-default",
+  "platform-default"
+]);
+
+export const containerPortConfidenceSchema = z.enum(["high", "medium", "low", "none"]);
+
 export const appSourceConfigSchema = z
   .object({
     repositoryOwner: repositoryOwnerSchema,
@@ -164,6 +182,8 @@ export const appSourceConfigSchema = z
     dockerfilePath: dockerfilePathSchema.optional().default(DEFAULT_DOCKERFILE_PATH),
     buildContext: buildContextSchema.optional().default(DEFAULT_BUILD_CONTEXT),
     containerPort: containerPortSchema.optional(),
+    containerPortSource: containerPortSourceSchema.optional(),
+    containerPortConfidence: containerPortConfidenceSchema.optional(),
     autoDeploy: z.boolean().optional().default(false)
   })
   .strict();

@@ -29,6 +29,9 @@ export interface StoredAppSource {
   buildStrategy: BuildStrategy | null;
   detectedProjectType: string | null;
   containerPort: number | null;
+  /** "manual" when the operator typed it themselves, or the PortDetectionSource that was accepted. Null before any port has ever been confirmed. */
+  containerPortSource: string | null;
+  containerPortConfidence: string | null;
   autoDeploy: boolean;
   lastValidatedCommitSha: string | null;
   lastValidatedAt: string | null;
@@ -38,6 +41,10 @@ export interface StoredAppSource {
   latestDeployedCommitSha: string | null;
   latestDeployedCommitMessage: string | null;
   latestDeployedAt: string | null;
+  /** Most recent GitHub-deployment runtime verification results — see github-deploy-service.ts. */
+  lastInternalHealthResult: string | null;
+  lastPublicHealthResult: string | null;
+  lastDeploymentStatus: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -59,6 +66,8 @@ interface AppSourceRow {
   build_strategy: string | null;
   detected_project_type: string | null;
   container_port: number | null;
+  container_port_source: string | null;
+  container_port_confidence: string | null;
   auto_deploy: number;
   last_validated_commit_sha: string | null;
   last_validated_at: string | null;
@@ -68,6 +77,9 @@ interface AppSourceRow {
   latest_deployed_commit_sha: string | null;
   latest_deployed_commit_message: string | null;
   latest_deployed_at: string | null;
+  last_internal_health_result: string | null;
+  last_public_health_result: string | null;
+  last_deployment_status: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -76,10 +88,12 @@ const APP_SOURCE_COLUMNS = `
   app_id, provider, repository_owner, repository_name, repository_full_name,
   repository_id, repository_visibility, repository_clone_url, branch,
   subdirectory, deployment_mode, dockerfile_path, build_context,
-  build_strategy, detected_project_type, container_port, auto_deploy,
+  build_strategy, detected_project_type, container_port, container_port_source,
+  container_port_confidence, auto_deploy,
   last_validated_commit_sha, last_validated_at, validation_status,
   validation_error, latest_remote_commit_sha, latest_deployed_commit_sha,
-  latest_deployed_commit_message, latest_deployed_at, created_at, updated_at
+  latest_deployed_commit_message, latest_deployed_at, last_internal_health_result,
+  last_public_health_result, last_deployment_status, created_at, updated_at
 `;
 
 function mapAppSource(row: AppSourceRow): StoredAppSource {
@@ -100,6 +114,8 @@ function mapAppSource(row: AppSourceRow): StoredAppSource {
     buildStrategy: (row.build_strategy as BuildStrategy | null) ?? null,
     detectedProjectType: row.detected_project_type,
     containerPort: row.container_port,
+    containerPortSource: row.container_port_source,
+    containerPortConfidence: row.container_port_confidence,
     autoDeploy: row.auto_deploy === 1,
     lastValidatedCommitSha: row.last_validated_commit_sha,
     lastValidatedAt: row.last_validated_at,
@@ -109,6 +125,9 @@ function mapAppSource(row: AppSourceRow): StoredAppSource {
     latestDeployedCommitSha: row.latest_deployed_commit_sha,
     latestDeployedCommitMessage: row.latest_deployed_commit_message,
     latestDeployedAt: row.latest_deployed_at,
+    lastInternalHealthResult: row.last_internal_health_result,
+    lastPublicHealthResult: row.last_public_health_result,
+    lastDeploymentStatus: row.last_deployment_status,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -128,6 +147,9 @@ export interface UpsertAppSourceInput {
   dockerfilePath: string;
   buildContext: string;
   containerPort: number | null;
+  /** "manual" when the operator typed it, or the accepted PortDetectionSource. Null if not confirmed. */
+  containerPortSource?: string | null;
+  containerPortConfidence?: string | null;
   autoDeploy: boolean;
 }
 
@@ -163,64 +185,130 @@ export function createAppSourceRepository(db: DatabaseSync) {
   }
 
   /**
-   * Creates the source link on first save, or replaces it in place. Any
-   * config change (repository, branch, deployment mode, Dockerfile path,
-   * build context, subdirectory) always resets validation *and*
-   * inspection back to "unknown"/null — a previous result described the
-   * *old* configuration and would misrepresent the new one. Callers are
-   * expected to immediately run validation/inspection after this.
-   * Deployment history (latest_deployed_*) is deliberately left alone —
-   * changing the configured branch doesn't erase what's already running.
+   * Creates the source link on first save, or replaces it in place.
+   * Only a change to an *inspection-relevant* field — repository,
+   * branch, subdirectory, Dockerfile path, or build context — resets
+   * validation and inspection back to "unknown"/null; a previous result
+   * described the *old* configuration in that case and would
+   * misrepresent the new one. Changing only the confirmed container
+   * port (or its source/confidence) deliberately does NOT invalidate an
+   * existing inspection — the operator correcting a port after a
+   * successful inspection shouldn't be forced to re-inspect first.
+   * Callers are expected to immediately run validation/inspection after
+   * an inspection-relevant change. Deployment history (latest_deployed_*)
+   * is deliberately left alone either way — editing configuration doesn't
+   * erase what's already running.
    */
   function upsertAppSource(appId: number, input: UpsertAppSourceInput): StoredAppSource {
     const existing = getAppSource(appId);
 
+    const inspectionRelevantChanged =
+      !existing ||
+      existing.repositoryOwner !== input.repositoryOwner ||
+      existing.repositoryName !== input.repositoryName ||
+      existing.branch !== input.branch ||
+      existing.subdirectory !== input.subdirectory ||
+      existing.dockerfilePath !== input.dockerfilePath ||
+      existing.buildContext !== input.buildContext;
+
+    const containerPortSource = input.containerPortSource ?? null;
+    const containerPortConfidence = input.containerPortConfidence ?? null;
+
     if (existing) {
-      db.prepare(
-        `
-          UPDATE app_sources
-          SET
-            provider = ?,
-            repository_owner = ?,
-            repository_name = ?,
-            repository_full_name = ?,
-            repository_id = ?,
-            repository_visibility = ?,
-            repository_clone_url = ?,
-            branch = ?,
-            subdirectory = ?,
-            deployment_mode = ?,
-            dockerfile_path = ?,
-            build_context = ?,
-            container_port = ?,
-            auto_deploy = ?,
-            build_strategy = NULL,
-            detected_project_type = NULL,
-            latest_remote_commit_sha = NULL,
-            validation_status = 'unknown',
-            validation_error = NULL,
-            last_validated_commit_sha = NULL,
-            last_validated_at = NULL,
-            updated_at = CURRENT_TIMESTAMP
-          WHERE app_id = ?
-        `
-      ).run(
-        input.provider,
-        input.repositoryOwner,
-        input.repositoryName,
-        input.repositoryFullName,
-        input.repositoryId,
-        input.repositoryVisibility,
-        input.repositoryCloneUrl,
-        input.branch,
-        input.subdirectory,
-        input.deploymentMode,
-        input.dockerfilePath,
-        input.buildContext,
-        input.containerPort,
-        input.autoDeploy ? 1 : 0,
-        appId
-      );
+      if (inspectionRelevantChanged) {
+        db.prepare(
+          `
+            UPDATE app_sources
+            SET
+              provider = ?,
+              repository_owner = ?,
+              repository_name = ?,
+              repository_full_name = ?,
+              repository_id = ?,
+              repository_visibility = ?,
+              repository_clone_url = ?,
+              branch = ?,
+              subdirectory = ?,
+              deployment_mode = ?,
+              dockerfile_path = ?,
+              build_context = ?,
+              container_port = ?,
+              container_port_source = ?,
+              container_port_confidence = ?,
+              auto_deploy = ?,
+              build_strategy = NULL,
+              detected_project_type = NULL,
+              latest_remote_commit_sha = NULL,
+              validation_status = 'unknown',
+              validation_error = NULL,
+              last_validated_commit_sha = NULL,
+              last_validated_at = NULL,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE app_id = ?
+          `
+        ).run(
+          input.provider,
+          input.repositoryOwner,
+          input.repositoryName,
+          input.repositoryFullName,
+          input.repositoryId,
+          input.repositoryVisibility,
+          input.repositoryCloneUrl,
+          input.branch,
+          input.subdirectory,
+          input.deploymentMode,
+          input.dockerfilePath,
+          input.buildContext,
+          input.containerPort,
+          containerPortSource,
+          containerPortConfidence,
+          input.autoDeploy ? 1 : 0,
+          appId
+        );
+      } else {
+        db.prepare(
+          `
+            UPDATE app_sources
+            SET
+              provider = ?,
+              repository_owner = ?,
+              repository_name = ?,
+              repository_full_name = ?,
+              repository_id = ?,
+              repository_visibility = ?,
+              repository_clone_url = ?,
+              branch = ?,
+              subdirectory = ?,
+              deployment_mode = ?,
+              dockerfile_path = ?,
+              build_context = ?,
+              container_port = ?,
+              container_port_source = ?,
+              container_port_confidence = ?,
+              auto_deploy = ?,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE app_id = ?
+          `
+        ).run(
+          input.provider,
+          input.repositoryOwner,
+          input.repositoryName,
+          input.repositoryFullName,
+          input.repositoryId,
+          input.repositoryVisibility,
+          input.repositoryCloneUrl,
+          input.branch,
+          input.subdirectory,
+          input.deploymentMode,
+          input.dockerfilePath,
+          input.buildContext,
+          input.containerPort,
+          containerPortSource,
+          containerPortConfidence,
+          input.autoDeploy ? 1 : 0,
+          appId
+        );
+      }
     } else {
       db.prepare(
         `
@@ -228,9 +316,10 @@ export function createAppSourceRepository(db: DatabaseSync) {
             app_id, provider, repository_owner, repository_name,
             repository_full_name, repository_id, repository_visibility,
             repository_clone_url, branch, subdirectory, deployment_mode,
-            dockerfile_path, build_context, container_port, auto_deploy
+            dockerfile_path, build_context, container_port,
+            container_port_source, container_port_confidence, auto_deploy
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
       ).run(
         appId,
@@ -247,6 +336,8 @@ export function createAppSourceRepository(db: DatabaseSync) {
         input.dockerfilePath,
         input.buildContext,
         input.containerPort,
+        containerPortSource,
+        containerPortConfidence,
         input.autoDeploy ? 1 : 0
       );
     }
@@ -338,6 +429,36 @@ export function createAppSourceRepository(db: DatabaseSync) {
     ).run(input.commitSha, input.commitMessage, input.deployedAt, appId);
   }
 
+  /**
+   * Records the most recent GitHub-deployment runtime verification
+   * results, regardless of whether the deployment ultimately succeeded —
+   * called on every outcome (PASS, ROLLED_BACK, ROLLBACK_FAILED) so the
+   * Source tab always reflects what the last attempt actually found,
+   * not just the last successful one.
+   */
+  function updateDeploymentHealthResult(
+    appId: number,
+    input: { lastInternalHealthResult: string | null; lastPublicHealthResult: string | null; lastDeploymentStatus: string | null }
+  ): void {
+    const existing = getAppSource(appId);
+
+    if (!existing) {
+      return;
+    }
+
+    db.prepare(
+      `
+        UPDATE app_sources
+        SET
+          last_internal_health_result = ?,
+          last_public_health_result = ?,
+          last_deployment_status = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE app_id = ?
+      `
+    ).run(input.lastInternalHealthResult, input.lastPublicHealthResult, input.lastDeploymentStatus, appId);
+  }
+
   function deleteAppSource(appId: number): void {
     db.prepare(`DELETE FROM app_sources WHERE app_id = ?`).run(appId);
   }
@@ -375,6 +496,7 @@ export function createAppSourceRepository(db: DatabaseSync) {
     updateAppSourceValidation,
     updateInspectionResult,
     updateDeployedCommit,
+    updateDeploymentHealthResult,
     deleteAppSource,
     acquireDeploymentLock,
     releaseDeploymentLock,

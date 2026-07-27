@@ -13,8 +13,8 @@ import { cloneRepositoryBranch, cleanupCheckout, CloneError } from "./github-clo
 import { inspectCheckoutDirectory } from "./repository-inspection-service.js";
 import { prepareBuildPlan, BuildPlanError } from "./build-strategy.js";
 import { sanitizeProcessOutput } from "./process-runner.js";
-import type { HealthCheckDependencies } from "./health-check-service.js";
-import { performHealthCheck } from "./health-check-service.js";
+import type { HealthCheckDependencies, HealthCheckHttpClient } from "./health-check-service.js";
+import { performHealthCheck, sanitizeHealthCheckError } from "./health-check-service.js";
 
 const PROTECTED_CONTAINER_NAMES = new Set([
   "deployment-platform-api",
@@ -28,6 +28,125 @@ const MAX_CONCURRENT_DEPLOYMENTS = 2;
 
 /** Coarse, in-memory-only global throttle — not a correctness lock (that's the per-app DB lock below), just a resource guard against many builds running at once. */
 let activeDeploymentCount = 0;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const INTERNAL_CHECK_ATTEMPTS = 3;
+const INTERNAL_CHECK_TIMEOUT_MS = 5000;
+const INTERNAL_CHECK_RETRY_DELAY_MS = 1500;
+
+export interface InternalCheckResult {
+  reachable: boolean;
+  statusCode: number | null;
+  message: string;
+}
+
+/**
+ * A bounded, retried HTTP request to the *replacement* container's own
+ * name and configured port over the managed-app Docker network —
+ * exactly the same request shape `health-check-service.ts` already
+ * uses, reused here rather than reimplemented. The target is never
+ * browser-supplied: `containerName` is the app's own validated
+ * container name and `port` is the already-validated, saved
+ * `containerPort` — nothing here is constructed from operator- or
+ * request-supplied text. A connection failure (including "connection
+ * refused" — nothing listening on that port) is treated as
+ * unreachable; any actual HTTP response, even a 4xx/5xx from the app
+ * itself, proves something is listening and is treated as reachable —
+ * the *public* route check below is what gates on gateway-level
+ * statuses like 502.
+ */
+export async function verifyInternalReachability(
+  httpClient: HealthCheckHttpClient,
+  containerName: string,
+  port: number
+): Promise<InternalCheckResult> {
+  let lastError: string | null = null;
+
+  for (let attempt = 1; attempt <= INTERNAL_CHECK_ATTEMPTS; attempt += 1) {
+    try {
+      const result = await httpClient.request({
+        hostname: containerName,
+        port,
+        path: "/",
+        timeoutMs: INTERNAL_CHECK_TIMEOUT_MS
+      });
+      return {
+        reachable: true,
+        statusCode: result.statusCode,
+        message: `Internal service responded with HTTP ${result.statusCode} on port ${port}.`
+      };
+    } catch (error) {
+      lastError = sanitizeHealthCheckError(error);
+      if (attempt < INTERNAL_CHECK_ATTEMPTS) {
+        await sleep(INTERNAL_CHECK_RETRY_DELAY_MS);
+      }
+    }
+  }
+
+  return {
+    reachable: false,
+    statusCode: null,
+    message: `Container started, but nothing responded on port ${port}${lastError ? ` (${lastError})` : "."}`
+  };
+}
+
+const PUBLIC_CHECK_ATTEMPTS = 3;
+const PUBLIC_CHECK_TIMEOUT_MS = 8000;
+const PUBLIC_CHECK_RETRY_DELAY_MS = 2000;
+/** Gateway/upstream-failure statuses — never "the deployment is fine, the app just returned an error page." */
+const PUBLIC_CHECK_UNHEALTHY_STATUSES = new Set([502, 503, 504]);
+
+export interface PublicCheckResult {
+  ok: boolean;
+  statusCode: number | null;
+  message: string;
+}
+
+/**
+ * Verifies the app's own platform-managed public domain — never an
+ * operator- or browser-supplied URL; `domain` always comes from
+ * `app.domain`, assigned by the platform itself when the app was
+ * created. Bounded retries/timeout; 502/503/504, a connection failure,
+ * or a TLS failure are all treated as deployment failure. Any other
+ * response (including ordinary 4xx from the app itself) is accepted —
+ * this is the platform's `502` bug fix, not a strict-uptime gate.
+ */
+export async function verifyPublicRoute(domain: string): Promise<PublicCheckResult> {
+  const url = `https://${domain}/`;
+  let lastError: string | null = null;
+
+  for (let attempt = 1; attempt <= PUBLIC_CHECK_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PUBLIC_CHECK_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, { method: "GET", signal: controller.signal });
+      clearTimeout(timer);
+
+      if (PUBLIC_CHECK_UNHEALTHY_STATUSES.has(response.status)) {
+        lastError = `HTTP ${response.status}`;
+      } else {
+        return { ok: true, statusCode: response.status, message: `Public route responded with HTTP ${response.status}.` };
+      }
+    } catch (error) {
+      clearTimeout(timer);
+      lastError = error instanceof Error ? error.message.slice(0, 300) : "Unknown network error";
+    }
+
+    if (attempt < PUBLIC_CHECK_ATTEMPTS) {
+      await sleep(PUBLIC_CHECK_RETRY_DELAY_MS);
+    }
+  }
+
+  return {
+    ok: false,
+    statusCode: null,
+    message: `Public route did not return a healthy response${lastError ? ` (${lastError})` : "."}`
+  };
+}
 
 export type DeployStage =
   | "resolving-repository"
@@ -221,6 +340,10 @@ export async function deployFromGithub(
   let replacementCurrentName: string | null = null;
   let replacementStarted = false;
   let anySwapPerformed = false;
+  /** Hoisted so the catch block can persist whatever these found even on a verification failure. */
+  let internalCheckResult: InternalCheckResult | null = null;
+  let publicCheckResult: PublicCheckResult | null = null;
+  let selectedContainerPort: number | null = null;
 
   try {
     progress("resolving-repository");
@@ -317,6 +440,7 @@ export async function deployFromGithub(
     progress("preparing-build");
 
     const containerPort = source.containerPort ?? app.containerPort;
+    selectedContainerPort = containerPort;
     const hasLockfile = detection.presentFiles.some(isLockfile);
 
     let buildPlan;
@@ -434,8 +558,67 @@ export async function deployFromGithub(
 
     progress("verifying-health");
 
+    // Mandatory, unconditional internal reachability check — independent
+    // of whether the app happens to have an optional health-check row
+    // configured. A GitHub deployment must never be recorded successful
+    // just because "the container reached a running state"; the
+    // application inside it must actually be listening on the
+    // configured port. This is the direct fix for the reported bug: a
+    // container that started fine but had nothing listening on the
+    // (wrong) configured port was previously recorded as a success.
+    if (!deps.healthCheckDeps) {
+      throw new GithubDeployError(
+        "Internal verification is not configured for this deployment pipeline.",
+        "verifying-health"
+      );
+    }
+
+    internalCheckResult = await verifyInternalReachability(deps.healthCheckDeps.httpClient, containerName, containerPort);
+
+    recordEvent({
+      appId,
+      eventType: "github-deploy-progress",
+      severity: internalCheckResult.reachable ? "info" : "error",
+      message: `Verifying internal application port: ${internalCheckResult.message}`,
+      metadata: {
+        stage: "verifying-health",
+        configuredPort: containerPort,
+        internalStatusCode: internalCheckResult.statusCode,
+        internalReachable: internalCheckResult.reachable
+      }
+    });
+
+    if (!internalCheckResult.reachable) {
+      throw new GithubDeployError(internalCheckResult.message, "verifying-health");
+    }
+
+    if (app.domain) {
+      publicCheckResult = await verifyPublicRoute(app.domain);
+
+      recordEvent({
+        appId,
+        eventType: "github-deploy-progress",
+        severity: publicCheckResult.ok ? "info" : "error",
+        message: `Verifying public route: ${publicCheckResult.message}`,
+        metadata: {
+          stage: "verifying-health",
+          publicStatusCode: publicCheckResult.statusCode,
+          publicReachable: publicCheckResult.ok
+        }
+      });
+
+      if (!publicCheckResult.ok) {
+        throw new GithubDeployError(
+          `Internal service responded on port ${containerPort}, but the public route returned an error: ${publicCheckResult.message}`,
+          "verifying-health"
+        );
+      }
+    }
+
+    // An operator-configured health check, if one exists, still runs too
+    // — additively, never as a substitute for the mandatory checks above.
     const healthConfig = appDatabase.getAppHealthCheck(appId);
-    if (healthConfig && deps.healthCheckDeps) {
+    if (healthConfig) {
       const healthOutcome = await performHealthCheck(
         {
           appDatabase,
@@ -455,6 +638,14 @@ export async function deployFromGithub(
         );
       }
     }
+
+    // Only now — after every required verification has passed — is the
+    // deployment allowed to update deployed-commit bookkeeping.
+    appDatabase.updateDeploymentHealthResult(appId, {
+      lastInternalHealthResult: internalCheckResult.message,
+      lastPublicHealthResult: publicCheckResult ? publicCheckResult.message : null,
+      lastDeploymentStatus: "PASS"
+    });
 
     const finalInspection = await dockerOps.inspectContainer(replacementContainerId);
     appDatabase.updateAppContainer(app.id, {
@@ -519,6 +710,17 @@ export async function deployFromGithub(
     // secret-looking keys — this is deliberately never anything more than
     // stage/exit-code/signal-shaped facts, never raw process output).
     const eventMetadata: Record<string, unknown> = { stage };
+    if (selectedContainerPort !== null) {
+      eventMetadata.configuredPort = selectedContainerPort;
+    }
+    if (internalCheckResult) {
+      eventMetadata.internalStatusCode = internalCheckResult.statusCode;
+      eventMetadata.internalReachable = internalCheckResult.reachable;
+    }
+    if (publicCheckResult) {
+      eventMetadata.publicStatusCode = publicCheckResult.statusCode;
+      eventMetadata.publicReachable = publicCheckResult.ok;
+    }
     if (diagnostics) {
       if (diagnostics.exitCode !== undefined) eventMetadata.exitCode = diagnostics.exitCode;
       if (diagnostics.signal !== undefined) eventMetadata.signal = diagnostics.signal;
@@ -547,6 +749,12 @@ export async function deployFromGithub(
         severity: "error",
         message: `GitHub deployment failed for "${app.name}" (stage: ${stage}): ${message}`,
         metadata: eventMetadata
+      });
+
+      appDatabase.updateDeploymentHealthResult(appId, {
+        lastInternalHealthResult: internalCheckResult?.message ?? null,
+        lastPublicHealthResult: publicCheckResult?.message ?? null,
+        lastDeploymentStatus: "FAILED"
       });
 
       return { success: false, rolledBack: false, message, stage };
@@ -585,6 +793,17 @@ export async function deployFromGithub(
         ? `GitHub deployment for "${app.name}" failed at stage "${stage}" (${message}); the previous version was restored.`
         : `GitHub deployment for "${app.name}" failed at stage "${stage}" (${message}); automatic rollback ALSO failed${restoreError ? `: ${restoreError}` : ""}. Manual attention required.`,
       metadata: { ...eventMetadata, rolledBack: restored }
+    });
+
+    // Never update latest_deployed_commit_sha/latest_deployed_at on a
+    // rollback (see updateDeployedCommit above, never reached on this
+    // path) — but do record what the health checks actually found, and
+    // the exact distinct status, so the Source tab reflects reality
+    // rather than the last time a deployment *succeeded*.
+    appDatabase.updateDeploymentHealthResult(appId, {
+      lastInternalHealthResult: internalCheckResult?.message ?? null,
+      lastPublicHealthResult: publicCheckResult?.message ?? null,
+      lastDeploymentStatus: restored ? "ROLLED_BACK" : "ROLLBACK_FAILED"
     });
 
     return {

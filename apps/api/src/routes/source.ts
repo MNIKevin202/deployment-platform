@@ -44,6 +44,8 @@ function serializeSource(source: StoredAppSource) {
     buildStrategy: source.buildStrategy,
     detectedProjectType: source.detectedProjectType,
     containerPort: source.containerPort,
+    containerPortSource: source.containerPortSource,
+    containerPortConfidence: source.containerPortConfidence,
     autoDeploy: source.autoDeploy,
     lastValidatedCommitSha: source.lastValidatedCommitSha,
     lastValidatedAt: source.lastValidatedAt,
@@ -53,6 +55,9 @@ function serializeSource(source: StoredAppSource) {
     latestDeployedCommitSha: source.latestDeployedCommitSha,
     latestDeployedCommitMessage: source.latestDeployedCommitMessage,
     latestDeployedAt: source.latestDeployedAt,
+    lastInternalHealthResult: source.lastInternalHealthResult,
+    lastPublicHealthResult: source.lastPublicHealthResult,
+    lastDeploymentStatus: source.lastDeploymentStatus,
     createdAt: source.createdAt,
     updatedAt: source.updatedAt
   };
@@ -66,7 +71,8 @@ export function serializeInspection(detection: InspectionDetection) {
     packageJson: detection.packageJson,
     warnings: detection.warnings,
     supported: detection.supported,
-    unsupportedReason: detection.unsupportedReason
+    unsupportedReason: detection.unsupportedReason,
+    portDetection: detection.portDetection
   };
 }
 

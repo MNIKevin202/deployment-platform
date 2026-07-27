@@ -202,6 +202,8 @@ export async function saveAppSource(
     dockerfilePath: input.dockerfilePath,
     buildContext: input.buildContext,
     containerPort: input.containerPort ?? null,
+    containerPortSource: input.containerPortSource ?? null,
+    containerPortConfidence: input.containerPortConfidence ?? null,
     autoDeploy: input.autoDeploy
   });
 
