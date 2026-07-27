@@ -236,6 +236,83 @@ refuses to build an image tag that already exists on the VPS. There is
 no override for that check in this version — if you need to reuse a
 tag, do it manually and deliberately, outside this script.
 
+### First release after a guided install (bootstrap tags)
+
+The guided installer has no release history to bump from, so it tags its
+first-boot images by source content rather than by version:
+
+| Tag shape | Meaning |
+|---|---|
+| `bootstrap-unknown` | installed before source fingerprinting existed |
+| `bootstrap-local-<hex>` | built from a local source tree, content fingerprint |
+| `bootstrap-<hex>` | built from a git checkout, commit prefix |
+
+These are legitimate running tags but they are **not** versions. On the
+first `release.sh` run after an install, a changed component whose
+running tag is any of the above starts the semantic version track at
+**0.1.0** — matching the version already declared in `package.json` at
+the repository root and in both `apps/api` and `apps/web`. The proposed
+version and the transition are both stated in the release plan:
+
+```
+Current API image: deployment-platform-api:bootstrap-local-da486e2b7645
+Proposed API version: 0.1.0
+  First release for the API off installer bootstrap tag
+  'bootstrap-local-da486e2b7645' — the version track would start at 0.1.0.
+```
+
+Subsequent releases patch-bump normally (0.1.0 -> 0.1.1 -> ...).
+
+If a running tag is **neither** a semantic version nor a recognized
+bootstrap tag (for example `latest`), `release.sh` stops before touching
+Git, Docker, or the VPS and asks for an explicit
+`--api-version`/`--web-version`. It never guesses, and it never passes a
+non-version through to the remote script.
+
+Rollback is unaffected by bootstrap tags: the previous version is only
+used to name the preserved rollback container, is never required to be a
+semantic version, and is sanitized for Docker naming — so a release off
+`bootstrap-unknown` can still be rolled back to that exact image.
+
+## Public URL verification contract
+
+After the containers are swapped and verified, the remote script checks
+public URLs. The contract is explicit about what is enforced:
+
+| Config key | Required? | Behaviour |
+|---|---|---|
+| `PUBLIC_URL_PANEL` | **Mandatory** | Must return HTTP 200 or the release fails. |
+| `PUBLIC_URL_WIZARD_TEST` | Optional | Empty/unset -> reported `SKIPPED` with a reason. Set -> must return HTTP 200. |
+| `PUBLIC_URL_SQLITE_TEST` | Optional | Empty/unset -> reported `SKIPPED` with a reason. Set -> must return HTTP 200. |
+
+The two app URLs point at deployed **test apps**, which do not exist on a
+freshly installed server — the Caddy routes directory is empty until an
+app is created. Requiring them made the first release after an install
+impossible, so they now default to disabled.
+
+Important properties:
+
+- A **disabled** check is reported as `SKIPPED`, never as a pass.
+- A **configured** check is mandatory. A connection failure (HTTP `000`,
+  TLS failure, DNS failure) **fails the release** — it is never
+  downgraded to a skip.
+- Release summaries distinguish `PASS`, `FAIL`, and `SKIPPED`.
+- Existing production configs that set both app URLs keep checking them
+  exactly as before.
+
+Do **not** point the app URLs at the panel URL to make them pass. That
+would claim test-app coverage that never happened. Enable them once the
+test apps are actually deployed.
+
+Operator-facing summary labels are rendered from the configured URLs, so
+the summary always names the server actually being deployed to:
+
+```
+Panel URL (https://panel.example.com): 200
+Wizard test URL: skipped (not configured)
+SQLite test URL: skipped (not configured)
+```
+
 ## Immutable release directories
 
 Every release that reaches the VPS is synced into its own,

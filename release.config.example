@@ -29,6 +29,31 @@ WEB_IMAGE_REPOSITORY=deployment-platform-web
 PLATFORM_NETWORK=deployment-platform
 MANAGED_APPS_NETWORK=deployment-apps
 API_DATA_VOLUME=deployment-platform-api-data
+# ---------------------------------------------------------------------
+# Public URL verification
+# ---------------------------------------------------------------------
+#
+# PUBLIC_URL_PANEL is MANDATORY. It is the platform's own dashboard, it
+# exists on every installation, and a release that cannot serve it is not
+# a successful release. It must return HTTP 200.
 PUBLIC_URL_PANEL=https://panel.hookstats.com
-PUBLIC_URL_WIZARD_TEST=https://wizard-test.apps.hookstats.com
-PUBLIC_URL_SQLITE_TEST=https://sqlite-test.apps.hookstats.com
+
+# The two app smoke-test URLs are OPTIONAL and default to disabled.
+#
+# They point at deployed test apps, which do NOT exist on a freshly
+# installed server — the Caddy routes directory is empty until an app is
+# created — so requiring them made the first release after an install
+# impossible.
+#
+#   left empty / omitted -> the check is reported as SKIPPED, with the
+#                           reason stated in the release summary
+#   set to a URL         -> the check is MANDATORY and must return
+#                           HTTP 200; a connection failure (HTTP 000)
+#                           fails the release and is never treated as a
+#                           skip
+#
+# Enable these once the corresponding test apps have actually been
+# deployed. Do NOT point them at the panel URL to "make them pass": that
+# would claim test-app coverage that never happened.
+PUBLIC_URL_WIZARD_TEST=
+PUBLIC_URL_SQLITE_TEST=

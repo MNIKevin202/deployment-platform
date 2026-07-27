@@ -14,18 +14,44 @@ if [ -z "${DEPLOYMENT_PLATFORM_INSTALLER_ROOT:-}" ]; then
 fi
 
 INSTALLER_TEMP_DIRS=()
+INSTALLER_TEMP_FILES=()
 INSTALLER_CREATED_CONTAINERS_UNSTARTED=()
 
 track_temp_dir() {
   INSTALLER_TEMP_DIRS+=("$1")
 }
 
+track_temp_file() {
+  INSTALLER_TEMP_FILES+=("$1")
+}
+
 cleanup_on_exit() {
   local exit_code=$?
 
-  local dir
-  for dir in "${INSTALLER_TEMP_DIRS[@]:-}"; do
-    [ -n "$dir" ] && [ -d "$dir" ] && rm -rf "$dir"
+  # Restore the terminal and reap any wrapped command still running,
+  # before anything else — otherwise an interrupted long-running step
+  # could leave the cursor hidden or a child process orphaned.
+  if command -v progress_cleanup >/dev/null 2>&1; then
+    progress_cleanup
+  fi
+
+  local path
+  for path in "${INSTALLER_TEMP_DIRS[@]:-}"; do
+    [ -n "$path" ] || continue
+    # Historically this list only ever handled directories, so a tracked
+    # *file* (install.sh tracks the short-lived plaintext admin-password
+    # file here) was silently never removed on a failure path. Handle
+    # both shapes, so a tracked path is always cleaned up regardless of
+    # which helper recorded it.
+    if [ -d "$path" ]; then
+      rm -rf "$path"
+    elif [ -f "$path" ]; then
+      rm -f "$path"
+    fi
+  done
+
+  for path in "${INSTALLER_TEMP_FILES[@]:-}"; do
+    [ -n "$path" ] && [ -f "$path" ] && rm -f "$path"
   done
 
   if [ "$exit_code" -ne 0 ] && [ "${INSTALLER_FAILED_STAGE:-}" != "" ]; then

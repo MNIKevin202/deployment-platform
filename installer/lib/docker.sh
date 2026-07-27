@@ -41,8 +41,12 @@ install_docker() {
 
       # Docker's own published GPG key, fetched over TLS with a bounded
       # timeout — never a third-party mirror, never piped into a shell.
-      if ! curl -fsSL --connect-timeout 10 --max-time 30 \
-        https://download.docker.com/linux/ubuntu/gpg -o "$DOCKER_GPG_KEY_PATH"; then
+      local status=0
+      run_with_progress "Downloading Docker's official GPG key" \
+        curl -fsSL --connect-timeout 10 --max-time 30 \
+        https://download.docker.com/linux/ubuntu/gpg -o "$DOCKER_GPG_KEY_PATH" || status=$?
+      if [ "$status" -ne 0 ]; then
+        print_last_output_excerpt "Recent curl output:"
         fatal "Unable to download Docker's GPG key. Check network connectivity."
       fi
       chmod a+r "$DOCKER_GPG_KEY_PATH"
@@ -55,16 +59,27 @@ install_docker() {
       printf 'deb [arch=%s signed-by=%s] https://download.docker.com/linux/ubuntu %s stable\n' \
         "$arch" "$DOCKER_GPG_KEY_PATH" "$codename" > "$DOCKER_APT_LIST_PATH"
 
-      export DEBIAN_FRONTEND=noninteractive
-      if ! apt-get update -qq; then
+      status=0
+      run_with_progress "Updating apt metadata (with Docker's repository)" \
+        env DEBIAN_FRONTEND=noninteractive apt-get "${APT_COMMON_OPTIONS[@]}" update || status=$?
+      if [ "$status" -ne 0 ]; then
+        print_package_failure_diagnostics "apt-get update (after adding Docker's repository)" "$status"
         fatal "apt-get update failed after adding Docker's repository."
       fi
-      if ! apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; then
+
+      local docker_packages="docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+      status=0
+      run_with_progress "Installing Docker Engine: ${docker_packages}" \
+        env DEBIAN_FRONTEND=noninteractive apt-get "${APT_COMMON_OPTIONS[@]}" install -y \
+        docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || status=$?
+      if [ "$status" -ne 0 ]; then
+        print_package_failure_diagnostics "Docker Engine installation" "$status" "$docker_packages"
         fatal "Failed to install Docker Engine."
       fi
 
       if command -v systemctl >/dev/null 2>&1; then
-        systemctl enable --now docker >/dev/null 2>&1 || true
+        run_with_progress "Enabling and starting the Docker service" \
+          systemctl enable --now docker || log_warn "Could not enable/start the Docker service via systemctl; checking daemon reachability directly."
       fi
     fi
 

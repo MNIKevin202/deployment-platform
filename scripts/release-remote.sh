@@ -67,6 +67,26 @@ done
 
 SEMVER_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+$'
 
+# Sanitizes a previous-version string for use inside a Docker container
+# name. PREVIOUS_API_VERSION / PREVIOUS_WEB_VERSION are deliberately NOT
+# semver-validated: on the first release after a guided install the
+# running tag is legitimately an installer bootstrap tag such as
+# bootstrap-unknown or bootstrap-local-<hex>, and the rollback container
+# must still be able to preserve it. Those tags are already valid Docker
+# name characters, so this only guards the empty case (which would
+# otherwise produce an ambiguous "...-rollback--<timestamp>") and any
+# stray character a tag could theoretically carry.
+container_name_fragment() {
+  local raw="$1"
+  local cleaned
+  cleaned="$(printf '%s' "${raw}" | tr -c 'A-Za-z0-9_.-' '-')"
+  if [ -z "${cleaned}" ]; then
+    printf 'unknown-version'
+    return 0
+  fi
+  printf '%s' "${cleaned}"
+}
+
 is_valid_semver() {
   [[ "$1" =~ ${SEMVER_PATTERN} ]]
 }
@@ -79,9 +99,15 @@ case "${MODE}" in
     ;;
 esac
 
+# URL_WIZARD_TEST and URL_SQLITE_TEST are deliberately NOT in this list.
+# They point at deployed test apps, which do not exist on a freshly
+# installed server, so requiring them made the first release after an
+# install impossible. Empty means the check is explicitly disabled and is
+# reported as SKIPPED. URL_PANEL stays mandatory — it is the platform's
+# own dashboard and exists on every installation.
 for required in SOURCE_DIR AUTH_FILE CADDY_ROUTES_DIR API_CONTAINER WEB_CONTAINER \
   API_IMAGE_REPO WEB_IMAGE_REPO PLATFORM_NETWORK APPS_NETWORK API_DATA_VOLUME \
-  URL_PANEL URL_WIZARD_TEST URL_SQLITE_TEST; do
+  URL_PANEL; do
   if [ -z "${!required}" ]; then
     printf 'ERROR: missing required --%s\n' "$(printf '%s' "${required}" | tr '[:upper:]_' '[:lower:]-')" >&2
     exit 1
@@ -474,7 +500,7 @@ if [ "${MODE}" = "api" ] || [ "${MODE}" = "both" ]; then
   if ! docker inspect "${API_CONTAINER}" >/dev/null 2>&1; then
     fail "API container not found: ${API_CONTAINER}"
   fi
-  API_ROLLBACK_TARGET_NAME="${API_CONTAINER}-rollback-${PREVIOUS_API_VERSION}-${RELEASE_TIMESTAMP}"
+  API_ROLLBACK_TARGET_NAME="${API_CONTAINER}-rollback-$(container_name_fragment "${PREVIOUS_API_VERSION}")-${RELEASE_TIMESTAMP}"
   if docker inspect "${API_ROLLBACK_TARGET_NAME}" >/dev/null 2>&1; then
     fail "Intended API rollback container name already exists: ${API_ROLLBACK_TARGET_NAME}"
   fi
@@ -487,7 +513,7 @@ if [ "${MODE}" = "web" ] || [ "${MODE}" = "both" ]; then
   if ! docker inspect "${WEB_CONTAINER}" >/dev/null 2>&1; then
     fail "Web container not found: ${WEB_CONTAINER}"
   fi
-  WEB_ROLLBACK_TARGET_NAME="${WEB_CONTAINER}-rollback-${PREVIOUS_WEB_VERSION}-${RELEASE_TIMESTAMP}"
+  WEB_ROLLBACK_TARGET_NAME="${WEB_CONTAINER}-rollback-$(container_name_fragment "${PREVIOUS_WEB_VERSION}")-${RELEASE_TIMESTAMP}"
   if docker inspect "${WEB_ROLLBACK_TARGET_NAME}" >/dev/null 2>&1; then
     fail "Intended web rollback container name already exists: ${WEB_ROLLBACK_TARGET_NAME}"
   fi
@@ -1289,17 +1315,54 @@ check_public_url() {
   printf '%s' "${code}"
 }
 
+# Checks one optional smoke-test URL. An unconfigured URL yields the
+# literal result "SKIPPED"; a CONFIGURED URL is checked for real and its
+# HTTP code returned verbatim, so a network failure surfaces as 000 and
+# is treated as a failure below — never as a skip.
+check_optional_public_url() {
+  local url="$1"
+  if [ -z "${url}" ]; then
+    printf 'SKIPPED'
+    return 0
+  fi
+  check_public_url "${url}"
+}
+
 info "Checking public URLs..."
 RESULT_PANEL="$(check_public_url "${URL_PANEL}")"
-RESULT_WIZARD="$(check_public_url "${URL_WIZARD_TEST}")"
-RESULT_SQLITE="$(check_public_url "${URL_SQLITE_TEST}")"
+RESULT_WIZARD="$(check_optional_public_url "${URL_WIZARD_TEST}")"
+RESULT_SQLITE="$(check_optional_public_url "${URL_SQLITE_TEST}")"
 
-info "  ${URL_PANEL} -> HTTP ${RESULT_PANEL}"
-info "  ${URL_WIZARD_TEST} -> HTTP ${RESULT_WIZARD}"
-info "  ${URL_SQLITE_TEST} -> HTTP ${RESULT_SQLITE}"
+info "  panel (mandatory): ${URL_PANEL} -> HTTP ${RESULT_PANEL}"
+if [ -n "${URL_WIZARD_TEST}" ]; then
+  info "  wizard test (configured, mandatory): ${URL_WIZARD_TEST} -> HTTP ${RESULT_WIZARD}"
+else
+  info "  wizard test: SKIPPED — no --url-wizard-test configured (no wizard test app deployed)"
+fi
+if [ -n "${URL_SQLITE_TEST}" ]; then
+  info "  sqlite test (configured, mandatory): ${URL_SQLITE_TEST} -> HTTP ${RESULT_SQLITE}"
+else
+  info "  sqlite test: SKIPPED — no --url-sqlite-test configured (no sqlite test app deployed)"
+fi
 
-if [ "${RESULT_PANEL}" != "200" ] || [ "${RESULT_WIZARD}" != "200" ] || [ "${RESULT_SQLITE}" != "200" ]; then
-  fail "One or more public URL checks did not return HTTP 200."
+# The panel is always required. Each optional URL is required only when
+# configured — and when configured, anything other than 200 (including a
+# connection failure reported as 000) fails the release.
+URL_CHECK_FAILURES=0
+if [ "${RESULT_PANEL}" != "200" ]; then
+  info "  FAIL: panel URL check failed: ${URL_PANEL} -> HTTP ${RESULT_PANEL} (expected 200)."
+  URL_CHECK_FAILURES=$((URL_CHECK_FAILURES + 1))
+fi
+if [ -n "${URL_WIZARD_TEST}" ] && [ "${RESULT_WIZARD}" != "200" ]; then
+  info "  FAIL: configured wizard test URL check failed: ${URL_WIZARD_TEST} -> HTTP ${RESULT_WIZARD} (expected 200)."
+  URL_CHECK_FAILURES=$((URL_CHECK_FAILURES + 1))
+fi
+if [ -n "${URL_SQLITE_TEST}" ] && [ "${RESULT_SQLITE}" != "200" ]; then
+  info "  FAIL: configured sqlite test URL check failed: ${URL_SQLITE_TEST} -> HTTP ${RESULT_SQLITE} (expected 200)."
+  URL_CHECK_FAILURES=$((URL_CHECK_FAILURES + 1))
+fi
+if [ "${URL_CHECK_FAILURES}" -gt 0 ]; then
+  fail "${URL_CHECK_FAILURES} public URL check(s) did not return HTTP 200."
 fi
 
 if [ "${MODE}" = "api" ] || [ "${MODE}" = "both" ]; then

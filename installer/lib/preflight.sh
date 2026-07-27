@@ -108,9 +108,48 @@ check_systemd() {
 
 REQUIRED_PORTS=(80 443)
 
+MANAGED_CADDY_CONTAINER_NAME="deployment-platform-caddy"
+
+# Ports published by the installer's own Caddy container, one per line.
+#
+# `docker port` output covers both address families, e.g.
+#   80/tcp -> 0.0.0.0:80
+#   80/tcp -> [::]:80
+#   443/tcp -> 0.0.0.0:443
+# so the host port is the text after the FINAL colon in either shape.
+managed_caddy_published_ports() {
+  command -v docker >/dev/null 2>&1 || return 0
+  docker inspect "$MANAGED_CADDY_CONTAINER_NAME" >/dev/null 2>&1 || return 0
+  docker port "$MANAGED_CADDY_CONTAINER_NAME" 2>/dev/null \
+    | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p' \
+    | LC_ALL=C sort -u
+}
+
+port_is_owned_by_managed_caddy() {
+  local port="$1"
+  local published
+  published="$(managed_caddy_published_ports)"
+  [ -n "$published" ] || return 1
+  case "
+${published}
+" in
+    *"
+${port}
+"*) return 0 ;;
+  esac
+  return 1
+}
+
+# Distinguishes "the installer's own Caddy already owns these ports"
+# (expected on every resume, and healthy) from "something else is
+# holding them" (a real conflict). The old check reported a bare warning
+# either way, so a normal resume looked alarming for no reason.
 check_ports_available() {
   local port
   local occupied=()
+  local managed=()
+  local conflicting=()
+
   for port in "${REQUIRED_PORTS[@]}"; do
     if command -v ss >/dev/null 2>&1; then
       if ss -ltn "( sport = :$port )" 2>/dev/null | grep -q ":$port"; then
@@ -119,11 +158,30 @@ check_ports_available() {
     fi
   done
 
-  if [ "${#occupied[@]}" -gt 0 ]; then
-    log_warn "Port(s) ${occupied[*]} already have a listener. If this is an existing Caddy/nginx/apache instance not managed by this installer, resolve the conflict before continuing — Caddy will fail to bind otherwise."
-  else
+  if [ "${#occupied[@]}" -eq 0 ]; then
     log_pass "Required ports (${REQUIRED_PORTS[*]}) are free."
+    return 0
   fi
+
+  for port in "${occupied[@]}"; do
+    if port_is_owned_by_managed_caddy "$port"; then
+      managed+=("$port")
+    else
+      conflicting+=("$port")
+    fi
+  done
+
+  if [ "${#managed[@]}" -gt 0 ]; then
+    log_pass "Port(s) ${managed[*]} are already published by this installer's own ${MANAGED_CADDY_CONTAINER_NAME} container — expected, and not a conflict."
+  fi
+
+  if [ "${#conflicting[@]}" -gt 0 ]; then
+    log_warn "Port(s) ${conflicting[*]} already have a listener that is NOT this installer's ${MANAGED_CADDY_CONTAINER_NAME} container. If this is an existing Caddy/nginx/apache instance, resolve the conflict before continuing — Caddy will fail to bind otherwise."
+  fi
+
+  # Never fatal: a healthy resume must not be stopped by its own Caddy
+  # holding the ports it is supposed to hold.
+  return 0
 }
 
 run_preflight_checks() {

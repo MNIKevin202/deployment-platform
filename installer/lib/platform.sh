@@ -18,16 +18,40 @@ fi
 API_CONTAINER_NAME="deployment-platform-api"
 WEB_CONTAINER_NAME="deployment-platform-web"
 
+API_STARTUP_MAX_ATTEMPTS=20
+API_STARTUP_DELAY_SECONDS=2
+
+# Reports true attempt/elapsed numbers on every poll rather than a
+# spinner: the operator wants to know how many attempts remain before
+# this gives up, and there is no honest percentage for "has the API
+# finished migrating and started listening yet".
 wait_for_log_marker() {
   local container="$1"
   local marker="$2"
-  local attempts=0
-  while [ "$attempts" -lt 20 ]; do
+  local description="$3"
+  local attempt=1
+  local start_epoch
+  start_epoch="$(date -u +%s)"
+  local elapsed=0
+
+  while [ "$attempt" -le "$API_STARTUP_MAX_ATTEMPTS" ]; do
     if docker logs "$container" 2>&1 | grep -qiE "$marker"; then
+      elapsed=$(( $(date -u +%s) - start_epoch ))
+      log_pass "${description} (ready after ${elapsed}s, attempt ${attempt}/${API_STARTUP_MAX_ATTEMPTS})"
       return 0
     fi
-    attempts=$((attempts + 1))
-    sleep 2
+
+    # A container that has already exited will never log the marker —
+    # fail immediately instead of burning the full retry budget.
+    if [ "$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || echo false)" != "true" ]; then
+      log_fail "${container} is no longer running while waiting for it to start."
+      return 1
+    fi
+
+    elapsed=$(( $(date -u +%s) - start_epoch ))
+    progress_report_attempt "$description" "$attempt" "$API_STARTUP_MAX_ATTEMPTS" "$elapsed" "$API_STARTUP_DELAY_SECONDS"
+    attempt=$((attempt + 1))
+    [ "$attempt" -le "$API_STARTUP_MAX_ATTEMPTS" ] && sleep "$API_STARTUP_DELAY_SECONDS"
   done
   return 1
 }
@@ -88,9 +112,17 @@ ensure_api_container() {
 
   docker start "$API_CONTAINER_NAME" >/dev/null
 
-  log_info "Waiting for the API to start and apply database migrations..."
-  if ! wait_for_log_marker "$API_CONTAINER_NAME" "listening at"; then
-    fatal "API container did not log a startup message in time. Check: docker logs $API_CONTAINER_NAME"
+  if ! wait_for_log_marker "$API_CONTAINER_NAME" "listening at" \
+    "Waiting for the API to start and apply database migrations"; then
+    log_fail "The API container did not report a successful startup in time. Its most recent output:"
+    docker logs --tail 30 "$API_CONTAINER_NAME" 2>&1 | log_redact | while IFS= read -r line; do
+      _visible_line "  ${line}"
+    done
+    _visible_line ""
+    _visible_line "Full container log:"
+    _visible_line "  docker logs ${API_CONTAINER_NAME}"
+    _visible_line ""
+    fatal "API container did not log a startup message in time."
   fi
   log_pass "API container started: $API_CONTAINER_NAME ($api_image)"
 }

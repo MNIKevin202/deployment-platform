@@ -32,9 +32,25 @@ WEB_IMAGE_REPOSITORY="deployment-platform-web"
 PLATFORM_NETWORK="deployment-platform"
 MANAGED_APPS_NETWORK="deployment-apps"
 API_DATA_VOLUME="deployment-platform-api-data"
+# The panel URL is MANDATORY: it is the platform's own dashboard, it
+# exists on every installation, and a release that cannot serve it is not
+# a successful release.
 PUBLIC_URL_PANEL="https://panel.hookstats.com"
-PUBLIC_URL_WIZARD_TEST="https://wizard-test.apps.hookstats.com"
-PUBLIC_URL_SQLITE_TEST="https://sqlite-test.apps.hookstats.com"
+
+# The two app smoke-test URLs are OPTIONAL, and default to disabled.
+# They point at deployed test apps, which do not exist on a freshly
+# installed server — the Caddy routes directory is empty until an app is
+# created — so requiring them made the first release after an install
+# impossible. Set them in release.config to enable the checks; leave them
+# empty (or unset) to disable.
+#
+# Disabled means SKIPPED and reported as such — never silently passed,
+# and never quietly substituted with the panel URL, which would claim
+# test-app coverage that did not happen. A URL that IS configured stays
+# strictly mandatory: it must return HTTP 200, and a network failure is a
+# failure, not a skip.
+PUBLIC_URL_WIZARD_TEST=""
+PUBLIC_URL_SQLITE_TEST=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REMOTE_SCRIPT_LOCAL_PATH="${SCRIPT_DIR}/scripts/release-remote.sh"
@@ -117,12 +133,70 @@ confirm() {
 
 # ssh/rsync wrappers — always use the configured identity file and default
 # host-key checking behavior (never disabled).
-ssh_run() {
-  ssh -i "${SSH_KEY}" -o BatchMode=yes "${VPS_USER}@${VPS_HOST}" "$@"
+# ============================================================
+# Remote command transport
+# ============================================================
+#
+# ssh does NOT transport an argv array. Given `ssh host a b c` it joins
+# its command arguments with single spaces into ONE string and hands that
+# to the remote LOGIN shell, which re-parses it. Any structure in an
+# argument — spaces, newlines, quotes, $, ;, braces, Go template syntax —
+# is therefore lost or, worse, re-interpreted as remote shell syntax.
+#
+# That is not theoretical. The plan-only runtime preview passes a
+# multiline `docker inspect --format` template; after joining, its
+# newlines became remote command separators, so the line
+#   "  nano cpus: {{.HostConfig.NanoCpus}}"
+# ran the remote **nano editor** with the argument "cpus:" — producing
+# the blank screen and "[ New File ]" the operator saw, while the real
+# docker inspect on the first line received a mangled format string and
+# failed into "(unable to inspect deployment-platform-api)".
+#
+# The fix has two halves, and both are required:
+#
+#   1. Quote every argument with printf '%q' so the remote shell
+#      reconstructs the exact original argv.
+#   2. Deliver that text over STDIN to an explicitly invoked remote
+#      `bash -s`, not as ssh command arguments.
+#
+# Half 2 matters for two independent reasons. First, ssh's own argv here
+# is just the two harmless tokens `bash -s`, so the join-and-reparse step
+# has nothing to damage; the command text travels as raw bytes that ssh
+# never touches. Second, bash's %q emits ANSI-C quoting ($'a\nb') for
+# arguments containing newlines, and that is a bashism — this host's
+# /bin/sh is dash, which does not understand it. Naming `bash`
+# explicitly means correctness no longer depends on what the remote
+# login shell happens to be.
+#
+# No eval anywhere: the remote text is executed by bash as a script read
+# from stdin, exactly like any other shell script.
+#
+# Note: because stdin carries the script, a remote command cannot also
+# read the caller's stdin. No call site in this file needs that.
+
+build_remote_command() {
+  local quoted="" piece arg
+  for arg in "$@"; do
+    # printf -v avoids a subshell per argument, and (unlike command
+    # substitution) cannot strip a trailing newline from the result.
+    printf -v piece '%q' "${arg}"
+    quoted="${quoted}${piece} "
+  done
+  printf '%s' "${quoted}"
 }
 
+# Runs a command on the VPS with argv preserved exactly. Returns the
+# remote command's own exit status (ssh is last in the pipeline).
+ssh_run() {
+  build_remote_command "$@" \
+    | ssh -i "${SSH_KEY}" -o BatchMode=yes "${VPS_USER}@${VPS_HOST}" bash -s
+}
+
+# As ssh_run, but silent. Retains BatchMode=yes, ConnectTimeout=10, full
+# output suppression, and the exact remote exit status.
 ssh_quiet() {
-  ssh -i "${SSH_KEY}" -o BatchMode=yes -o ConnectTimeout=10 "${VPS_USER}@${VPS_HOST}" "$@" >/dev/null 2>&1
+  build_remote_command "$@" \
+    | ssh -i "${SSH_KEY}" -o BatchMode=yes -o ConnectTimeout=10 "${VPS_USER}@${VPS_HOST}" bash -s >/dev/null 2>&1
 }
 
 require_tools() {
@@ -179,6 +253,22 @@ load_config_file() {
         ;;
     esac
   done < "${file}"
+
+  validate_ssh_key_path
+}
+
+# The source-sync step passes the key inside an rsync `-e` transport
+# string ("ssh -i <key>"), and rsync splits that value on whitespace —
+# so a key path containing a space would be silently torn into separate
+# arguments. Nested quoting inside -e is handled inconsistently across
+# rsync versions, so this refuses the input up front with a clear
+# message instead of failing confusingly mid-sync.
+validate_ssh_key_path() {
+  case "${SSH_KEY}" in
+    *[[:space:]]*)
+      fail "SSH_KEY must not contain whitespace (rsync's -e transport string is split on spaces): ${SSH_KEY}"
+      ;;
+  esac
 }
 
 print_help() {
@@ -305,6 +395,27 @@ is_valid_semver() {
   [[ "$1" =~ ${SEMVER_PATTERN} ]]
 }
 
+# Tags the guided installer produces for its first-boot images. It has no
+# release history to bump from, so it identifies images by source content
+# instead of by version:
+#   bootstrap-unknown            — pre-fingerprint installs
+#   bootstrap-local-<hex>        — local source, content fingerprint
+#   bootstrap-<hex>              — git source, commit prefix
+# These are legitimate running tags, but they are NOT versions.
+BOOTSTRAP_TAG_PATTERN='^bootstrap-(unknown|local-[0-9a-f]{6,}|[0-9a-f]{6,})$'
+
+is_bootstrap_tag() {
+  [[ "$1" =~ ${BOOTSTRAP_TAG_PATTERN} ]]
+}
+
+# The version assigned when a component transitions off a bootstrap tag
+# onto the normal release track. 0.1.0 matches the version already
+# declared in package.json at the repository root and in both
+# apps/api/package.json and apps/web/package.json, so the first release
+# agrees with what the code says about itself rather than inventing a
+# different starting point.
+INITIAL_RELEASE_VERSION="0.1.0"
+
 bump_patch() {
   local version="$1"
   local major minor patch
@@ -312,21 +423,106 @@ bump_patch() {
   printf '%s.%s.%s' "${major}" "${minor}" "$((patch + 1))"
 }
 
-# compute_next_version <current-version-or-"unknown"> <changed:yes/no> <override>
+# compute_next_version <current-tag-or-"unknown"> <changed:yes/no> <override>
+#
+# Returns the version to release for one component. Only ever bumps a
+# real semantic version: bump_patch on a non-semver string used to emit
+# garbage (IFS='.' read on "bootstrap-unknown" leaves patch empty, so
+# $((patch + 1)) produced "bootstrap-unknown..1"), which then failed
+# release-remote.sh's semver validation after the release had already
+# started doing work.
+#
+# An unrecognized tag is returned UNCHANGED rather than mangled or
+# silently replaced, so validate_release_version can name the actual tag
+# in its error. That check is what turns this into a hard failure.
 compute_next_version() {
   local current="$1" changed="$2" override="$3"
 
+  # An explicit --api-version/--web-version always wins. Already
+  # validated as semver during argument parsing.
   if [ -n "${override}" ]; then
     printf '%s' "${override}"
     return 0
   fi
 
-  if [ "${changed}" = "yes" ] && [ "${current}" != "unknown" ] && [ -n "${current}" ]; then
+  if [ "${changed}" != "yes" ]; then
+    printf '%s' "${current}"
+    return 0
+  fi
+
+  if is_valid_semver "${current}"; then
     bump_patch "${current}"
     return 0
   fi
 
+  # First release after a guided install: start the version track.
+  if is_bootstrap_tag "${current}"; then
+    printf '%s' "${INITIAL_RELEASE_VERSION}"
+    return 0
+  fi
+
   printf '%s' "${current}"
+}
+
+# States the public-URL contract up front, so an operator can see before
+# deploying which checks will actually gate this release and which are
+# disabled — rather than discovering a skipped check in the summary.
+print_public_url_plan() {
+  info "Public URL checks this release will enforce:"
+  info "  Panel (mandatory):      ${PUBLIC_URL_PANEL}"
+  if [ -n "${PUBLIC_URL_WIZARD_TEST}" ]; then
+    info "  Wizard test (enabled):  ${PUBLIC_URL_WIZARD_TEST} — must return HTTP 200"
+  else
+    info "  Wizard test:            skipped (not configured)"
+  fi
+  if [ -n "${PUBLIC_URL_SQLITE_TEST}" ]; then
+    info "  SQLite test (enabled):  ${PUBLIC_URL_SQLITE_TEST} — must return HTTP 200"
+  else
+    info "  SQLite test:            skipped (not configured)"
+  fi
+}
+
+# Renders one optional smoke-test URL line for the operator summary.
+# Distinguishes three genuinely different outcomes and never conflates
+# them: a disabled check (no URL configured), a check that ran and
+# produced an HTTP result, and a configured check whose result never came
+# back (which is a problem, not a skip).
+report_optional_url_result() {
+  local label="$1" configured_url="$2" result="$3"
+
+  if [ -z "${configured_url}" ]; then
+    info "${label}: skipped (not configured)"
+    return 0
+  fi
+  if [ -z "${result}" ]; then
+    info "${label} (${configured_url}): not checked"
+    return 0
+  fi
+  if [ "${result}" = "SKIPPED" ]; then
+    # The remote script only reports SKIPPED for an unconfigured URL, so
+    # this combination means local and remote config disagree.
+    info "${label} (${configured_url}): SKIPPED — but this URL IS configured locally; the remote script did not receive it."
+    return 0
+  fi
+  info "${label} (${configured_url}): ${result}"
+}
+
+# Gate between "what we computed" and "what we send to the VPS". Any
+# changed component must end up with a real semantic version; anything
+# else stops the release before a single remote action is taken, and says
+# exactly how to proceed.
+validate_release_version() {
+  local component="$1" computed="$2" current="$3" override_flag="$4"
+
+  if is_valid_semver "${computed}"; then
+    return 0
+  fi
+
+  info ""
+  if [ "${current}" = "unknown" ] || [ -z "${current}" ]; then
+    fail "Could not determine the currently running ${component} version, so no release version can be derived. Re-run once the VPS and the ${component} container are reachable, or pass an explicit ${override_flag} <major.minor.patch>."
+  fi
+  fail "The running ${component} image tag '${current}' is neither a semantic version nor a recognized installer bootstrap tag, so ${component} cannot be version-bumped automatically. Pass an explicit ${override_flag} <major.minor.patch> to choose the release version deliberately. Nothing was changed."
 }
 
 # ============================================================
@@ -417,24 +613,36 @@ run_remote_deploy_and_report() {
     --previous-api-version "${PREVIOUS_API_VERSION}"
     --previous-web-version "${PREVIOUS_WEB_VERSION}"
     --url-panel "${PUBLIC_URL_PANEL}"
-    --url-wizard-test "${PUBLIC_URL_WIZARD_TEST}"
-    --url-sqlite-test "${PUBLIC_URL_SQLITE_TEST}"
     --current-symlink "${VPS_SOURCE_DIR}/current"
   )
 
-  # Build a safely quoted remote command string. Every argument is our own
-  # fixed configuration or a validated semver/path string — none of it is
-  # operator-supplied free text that reaches the shell unquoted.
-  local remote_command=""
-  local arg
-  for arg in "${remote_args[@]}"; do
-    remote_command="${remote_command}$(printf '%q ' "${arg}")"
-  done
+  # Optional smoke-test URLs are only passed when actually configured.
+  # Passing an empty value would look like a supplied-but-blank required
+  # argument; omitting the flag lets the remote script treat the check as
+  # explicitly disabled and report it as SKIPPED.
+  if [ -n "${PUBLIC_URL_WIZARD_TEST}" ]; then
+    remote_args+=(--url-wizard-test "${PUBLIC_URL_WIZARD_TEST}")
+  fi
+  if [ -n "${PUBLIC_URL_SQLITE_TEST}" ]; then
+    remote_args+=(--url-sqlite-test "${PUBLIC_URL_SQLITE_TEST}")
+  fi
+
+  # Same transport contract as ssh_run: %q-quote every argument, then
+  # deliver the text over stdin to an explicitly invoked remote `bash -s`.
+  # This call previously passed the quoted string as an ssh command
+  # argument, which left correctness dependent on the remote LOGIN shell
+  # understanding bash's %q output — and %q emits $'...' ANSI-C quoting,
+  # which this host's /bin/sh (dash) does not support. Naming bash
+  # explicitly removes that dependency.
+  local remote_command
+  remote_command="$(build_remote_command "${remote_args[@]}")"
 
   local remote_log
   remote_log="$(new_tmp_file)"
   local deploy_exit_code=0
-  ssh -i "${SSH_KEY}" -o BatchMode=yes "${VPS_USER}@${VPS_HOST}" "${remote_command}" 2>&1 | tee "${remote_log}" || deploy_exit_code=$?
+  printf '%s\n' "${remote_command}" \
+    | ssh -i "${SSH_KEY}" -o BatchMode=yes "${VPS_USER}@${VPS_HOST}" bash -s 2>&1 \
+    | tee "${remote_log}" || deploy_exit_code=$?
 
   ssh_quiet rm -f "${REMOTE_SCRIPT_REMOTE_PATH}" || true
   REMOTE_CLEANUP_DONE=1
@@ -495,9 +703,12 @@ run_remote_deploy_and_report() {
   info "Database backup path: ${summary_backup_path:-none}"
   info "Rollback containers: ${summary_rollback_containers:-none} (${summary_rollback_state:-n/a})"
   info "Release directory: ${REMOTE_RELEASE_DIR}"
-  info "panel.hookstats.com: ${summary_url_panel:-not checked}"
-  info "wizard-test.apps.hookstats.com: ${summary_url_wizard:-not checked}"
-  info "sqlite-test.apps.hookstats.com: ${summary_url_sqlite:-not checked}"
+  # Labels come from the configured URLs, never hard-coded hostnames: the
+  # operator-facing summary previously printed hookstats.com regardless of
+  # which server was actually deployed to.
+  info "Panel URL (${PUBLIC_URL_PANEL}): ${summary_url_panel:-not checked}"
+  report_optional_url_result "Wizard test URL" "${PUBLIC_URL_WIZARD_TEST}" "${summary_url_wizard}"
+  report_optional_url_result "SQLite test URL" "${PUBLIC_URL_SQLITE_TEST}" "${summary_url_sqlite}"
 
   # Status meanings, kept distinct and never collapsed together:
   #   PASS                 — deployment succeeded, verified, and the
@@ -981,7 +1192,13 @@ if [ "${PLAN_ONLY}" -eq 1 ]; then
       PLAN_PREVIOUS_API_VERSION="unknown"
       [ -n "${PLAN_PREVIOUS_API_IMAGE}" ] && PLAN_PREVIOUS_API_VERSION="$(extract_tag "${PLAN_PREVIOUS_API_IMAGE}")"
       info "Current API image: ${PLAN_PREVIOUS_API_IMAGE:-unknown}"
-      info "Proposed API version: $(compute_next_version "${PLAN_PREVIOUS_API_VERSION}" "yes" "${API_VERSION_OVERRIDE}")"
+      PLAN_NEW_API_VERSION="$(compute_next_version "${PLAN_PREVIOUS_API_VERSION}" "yes" "${API_VERSION_OVERRIDE}")"
+      info "Proposed API version: ${PLAN_NEW_API_VERSION}"
+      if is_bootstrap_tag "${PLAN_PREVIOUS_API_VERSION}"; then
+        info "  First release for the API off installer bootstrap tag '${PLAN_PREVIOUS_API_VERSION}' — the version track would start at ${PLAN_NEW_API_VERSION}."
+      elif ! is_valid_semver "${PLAN_NEW_API_VERSION}"; then
+        info "  WARNING: '${PLAN_PREVIOUS_API_VERSION}' is neither a semantic version nor a recognized installer bootstrap tag. A real release would STOP here unless you pass --api-version <major.minor.patch>."
+      fi
       info ""
       info "API container runtime settings that would be inspected and preserved:"
       ssh_run docker inspect --format '  restart policy: {{.HostConfig.RestartPolicy.Name}}
@@ -1008,7 +1225,13 @@ if [ "${PLAN_ONLY}" -eq 1 ]; then
       [ -n "${PLAN_PREVIOUS_WEB_IMAGE}" ] && PLAN_PREVIOUS_WEB_VERSION="$(extract_tag "${PLAN_PREVIOUS_WEB_IMAGE}")"
       info ""
       info "Current web image: ${PLAN_PREVIOUS_WEB_IMAGE:-unknown}"
-      info "Proposed web version: $(compute_next_version "${PLAN_PREVIOUS_WEB_VERSION}" "yes" "${WEB_VERSION_OVERRIDE}")"
+      PLAN_NEW_WEB_VERSION="$(compute_next_version "${PLAN_PREVIOUS_WEB_VERSION}" "yes" "${WEB_VERSION_OVERRIDE}")"
+      info "Proposed web version: ${PLAN_NEW_WEB_VERSION}"
+      if is_bootstrap_tag "${PLAN_PREVIOUS_WEB_VERSION}"; then
+        info "  First release for the web app off installer bootstrap tag '${PLAN_PREVIOUS_WEB_VERSION}' — the version track would start at ${PLAN_NEW_WEB_VERSION}."
+      elif ! is_valid_semver "${PLAN_NEW_WEB_VERSION}"; then
+        info "  WARNING: '${PLAN_PREVIOUS_WEB_VERSION}' is neither a semantic version nor a recognized installer bootstrap tag. A real release would STOP here unless you pass --web-version <major.minor.patch>."
+      fi
       info ""
       info "Web container runtime settings that would be inspected and preserved:"
       ssh_run docker inspect --format '  restart policy: {{.HostConfig.RestartPolicy.Name}}
@@ -1020,6 +1243,8 @@ if [ "${PLAN_ONLY}" -eq 1 ]; then
     fi
   fi
 
+  info ""
+  print_public_url_plan
   info ""
   info "Sync/deploy steps a real run would take:"
   info "  1. Sync committed source into a new immutable release directory on the VPS."
@@ -1172,12 +1397,30 @@ else
   info "Current web image: ${PREVIOUS_WEB_IMAGE:-unknown}"
   info "Proposed API version: ${NEW_API_VERSION} (rebuild: ${API_CHANGED})"
   info "Proposed web version: ${NEW_WEB_VERSION} (rebuild: ${WEB_CHANGED})"
+
+  if [ "${API_CHANGED}" = "yes" ] && is_bootstrap_tag "${PREVIOUS_API_VERSION}"; then
+    info "First release for the API off installer bootstrap tag '${PREVIOUS_API_VERSION}' — starting the version track at ${NEW_API_VERSION}."
+  fi
+  if [ "${WEB_CHANGED}" = "yes" ] && is_bootstrap_tag "${PREVIOUS_WEB_VERSION}"; then
+    info "First release for the web app off installer bootstrap tag '${PREVIOUS_WEB_VERSION}' — starting the version track at ${NEW_WEB_VERSION}."
+  fi
 fi
 
 if [ "${VERIFY_ONLY}" -eq 1 ]; then
   info ""
   info "--verify-only: stopping before staging, committing, syncing, or deploying."
   exit 0
+fi
+
+# Past this point a real deployment will happen, so every version that
+# will be sent to the VPS must already be a valid semantic version.
+# --verify-only exits above precisely so it can still report on an
+# unreachable VPS without tripping this gate.
+if [ "${API_CHANGED}" = "yes" ]; then
+  validate_release_version "API" "${NEW_API_VERSION}" "${PREVIOUS_API_VERSION}" "--api-version"
+fi
+if [ "${WEB_CHANGED}" = "yes" ]; then
+  validate_release_version "web" "${NEW_WEB_VERSION}" "${PREVIOUS_WEB_VERSION}" "--web-version"
 fi
 
 # ============================================================

@@ -30,19 +30,43 @@ render_caddyfile() {
   log_pass "Rendered $out_file"
 }
 
+# Pulled as its own visible step rather than implicitly during the first
+# `docker run`: on a fresh server this is a multi-megabyte download that
+# would otherwise look like a hung validation.
+ensure_caddy_image() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log_info "[dry-run] Would ensure the $CADDY_IMAGE image is present locally."
+    return 0
+  fi
+  if docker image inspect "$CADDY_IMAGE" >/dev/null 2>&1; then
+    log_pass "Caddy image already present locally: $CADDY_IMAGE"
+    return 0
+  fi
+  local status=0
+  run_with_progress --show-output-tail "Pulling $CADDY_IMAGE" \
+    docker pull "$CADDY_IMAGE" || status=$?
+  if [ "$status" -ne 0 ]; then
+    print_last_output_excerpt "Recent docker pull output:"
+    fatal "Could not pull the Caddy image ($CADDY_IMAGE). Check network connectivity and Docker Hub reachability."
+  fi
+}
+
 validate_caddyfile() {
   local caddyfile="${INSTALL_ROOT}/caddy/Caddyfile"
   if [ "$DRY_RUN" -eq 1 ]; then
     log_info "[dry-run] Would validate Caddyfile with: docker run --rm -v $caddyfile:/etc/caddy/Caddyfile:ro $CADDY_IMAGE caddy validate --config /etc/caddy/Caddyfile"
     return 0
   fi
-  if ! docker run --rm \
+  local status=0
+  run_with_progress "Validating the Caddyfile" \
+    docker run --rm \
     -v "${caddyfile}:/etc/caddy/Caddyfile:ro" \
     -v "${INSTALL_ROOT}/caddy/routes:/etc/caddy/routes:ro" \
-    "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+    "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile || status=$?
+  if [ "$status" -ne 0 ]; then
+    print_last_output_excerpt "Recent Caddy validation output:"
     fatal "Caddyfile failed validation. Check $caddyfile"
   fi
-  log_pass "Caddyfile validated."
 }
 
 ensure_caddy_container() {
@@ -81,6 +105,7 @@ setup_caddy() {
   local panel_domain="$1"
 
   render_caddyfile "$panel_domain"
+  ensure_caddy_image
   validate_caddyfile
   ensure_caddy_container
 }

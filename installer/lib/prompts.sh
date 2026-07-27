@@ -120,38 +120,41 @@ prompt_domain() {
   local domain=""
   local error=""
   while true; do
-    printf '%s: ' "$label"
-    read -r domain || domain=""
+    prompt_output "${label}: "
+    prompt_read domain
     if error="$(validate_domain "$domain" 2>&1)"; then
       printf '%s' "$error"
       return 0
     fi
-    echo "  $error"
+    prompt_output "  ${error}"$'\n'
   done
 }
 
 # Hidden input with confirmation — never echoed, never written to
-# shell history, never passed as a CLI argument.
+# shell history, never passed as a CLI argument. Label and confirmation
+# label are visible (prompt_output); the password itself is read via
+# prompt_read_secret (read -s) and only ever written to stdout, once,
+# as this function's own final return value.
 prompt_password() {
   local label="$1"
   local password="" confirm=""
 
   while true; do
-    printf '%s: ' "$label"
-    read -rs password || password=""
-    printf '\n'
+    prompt_output "${label}: "
+    prompt_read_secret password
+    prompt_output $'\n'
 
     if [ "${#password}" -lt 12 ]; then
-      echo "  Password must be at least 12 characters."
+      prompt_output "  Password must be at least 12 characters."$'\n'
       continue
     fi
 
-    printf 'Confirm %s: ' "$label"
-    read -rs confirm || confirm=""
-    printf '\n'
+    prompt_output "Confirm ${label}: "
+    prompt_read_secret confirm
+    prompt_output $'\n'
 
     if [ "$password" != "$confirm" ]; then
-      echo "  Passwords did not match — try again."
+      prompt_output "  Passwords did not match — try again."$'\n'
       continue
     fi
 
@@ -166,11 +169,11 @@ prompt_text() {
   local value=""
 
   if [ -n "$default_value" ]; then
-    printf '%s [%s]: ' "$label" "$default_value"
+    prompt_output "${label} [${default_value}]: "
   else
-    printf '%s: ' "$label"
+    prompt_output "${label}: "
   fi
-  read -r value || value=""
+  prompt_read value
 
   if [ -z "$value" ] && [ -n "$default_value" ]; then
     value="$default_value"
@@ -185,20 +188,20 @@ prompt_choice() {
   local index=1
   local option
 
-  echo "$label"
+  prompt_output "${label}"$'\n'
   for option in "${options[@]}"; do
-    printf '  %d) %s\n' "$index" "$option"
+    prompt_output "  ${index}) ${option}"$'\n'
     index=$((index + 1))
   done
 
   local choice=""
   while true; do
-    printf 'Choice [1-%d]: ' "${#options[@]}"
-    read -r choice || choice=""
+    prompt_output "Choice [1-${#options[@]}]: "
+    prompt_read choice
     if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#options[@]}" ]; then
       printf '%s' "${options[$((choice - 1))]}"
       return 0
     fi
-    echo "  Enter a number between 1 and ${#options[@]}."
+    prompt_output "  Enter a number between 1 and ${#options[@]}."$'\n'
   done
 }

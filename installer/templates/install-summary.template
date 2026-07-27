@@ -5,7 +5,7 @@ Status:              __STATUS__
 Panel URL:            https://__PANEL_DOMAIN__
 Apps base domain:     __APPS_DOMAIN__ (apps are served at <app-name>.__APPS_DOMAIN__)
 Administrator user:   __ADMIN_USERNAME__
-Source commit:        __SOURCE_COMMIT__
+Source identity:      __SOURCE_IDENTITY__
 API image:            __API_IMAGE__
 Web image:            __WEB_IMAGE__
 Caddy image:          __CADDY_IMAGE__
