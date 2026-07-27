@@ -949,6 +949,16 @@ assert_contains "an explicit config-only deploy flag exists" "$RELEASE_TEXT" "--
 assert_contains "--deploy-config forces the configuration scope" "$RELEASE_TEXT" \
   "the configuration stages will run regardless of the computed diff scope"
 assert_contains "--deploy-config works on a clean tree" "$RELEASE_TEXT" "SKIP_COMMIT=1"
+# An empty candidate list is legitimate under --deploy-config, and an
+# unguarded array expansion under `set -u` aborted the run at that point.
+assert_contains "an empty candidate list is handled" "$RELEASE_TEXT" \
+  'if [ "${#CANDIDATE_FILES[@]}" -eq 0 ]; then'
+CLEAN_TREE_CONFIG_PLAN="$(
+  cd "$PROJECT_DIR" && PATH="$FAKE_BIN:$REAL_PATH" \
+    bash ./release.sh --plan-only --deploy-config 2>&1 || true
+)"
+assert_not_contains "--deploy-config on a clean tree does not hit an unbound variable" \
+  "$CLEAN_TREE_CONFIG_PLAN" "unbound variable"
 assert_contains "release.sh passes the install root" "$RELEASE_TEXT" "--install-root"
 assert_contains "INSTALL_ROOT is a configurable key" "$RELEASE_TEXT" "INSTALL_ROOT) INSTALL_ROOT="
 assert_contains "the example config documents INSTALL_ROOT" \

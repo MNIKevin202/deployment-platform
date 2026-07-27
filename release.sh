@@ -1245,10 +1245,18 @@ if ! has_releasable_changes; then
 fi
 
 info ""
-info "Candidate files for this release:"
-for path in "${CANDIDATE_FILES[@]}"; do
-  info "  - ${path}"
-done
+# --deploy-config on a clean tree legitimately has an EMPTY candidate
+# list, and under `set -u` an unguarded "${CANDIDATE_FILES[@]}" expansion
+# aborts the run right here — after local pre-flight but before anything
+# is synced or deployed.
+if [ "${#CANDIDATE_FILES[@]}" -eq 0 ]; then
+  info "Candidate files for this release: none (re-applying configuration from the current commit)."
+else
+  info "Candidate files for this release:"
+  for path in "${CANDIDATE_FILES[@]}"; do
+    info "  - ${path}"
+  done
+fi
 
 # ============================================================
 # --plan-only: preview and stop
