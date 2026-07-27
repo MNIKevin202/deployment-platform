@@ -48,7 +48,11 @@ export type EventType =
    * github-credential-service.ts.
    */
   | "github-connected"
-  | "github-disconnected";
+  | "github-disconnected"
+  /** Performance Diagnostics (compact — never carries raw resource lists, see performance-diagnostics-service.ts). */
+  | "performance-test-started"
+  | "performance-test-completed"
+  | "performance-test-failed";
 
 export interface RecordEventInput {
   appId: number;

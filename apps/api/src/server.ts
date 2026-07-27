@@ -43,6 +43,8 @@ import { createGithubBuildDockerOps } from "./services/github-deploy-docker-ops.
 import type { GithubDeployDependencies } from "./services/github-deploy-service.js";
 import { registerGithubDeployRoutes } from "./routes/github-deploy.js";
 import { verifyGitAvailable } from "./services/github-clone-service.js";
+import { createRealHttpProbeClient } from "./services/performance-diagnostics-service.js";
+import { registerPerformanceDiagnosticsRoutes } from "./routes/performance-diagnostics.js";
 
 const dockerOps = createDockerOps(docker);
 
@@ -186,6 +188,12 @@ const deployDeps: GithubDeployDependencies = {
 };
 
 await registerGithubDeployRoutes(app, { appDatabase, deployDeps });
+
+await registerPerformanceDiagnosticsRoutes(app, {
+  appDatabase,
+  httpProbeClient: createRealHttpProbeClient(),
+  recordEvent
+});
 
 interface ContainerParams {
   id: string;

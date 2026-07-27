@@ -9,6 +9,7 @@ import { migration007ProviderCredentials } from "./007_provider_credentials.js";
 import { migration008AppSources } from "./008_app_sources.js";
 import { migration009AppSourceDeploymentMetadata } from "./009_app_source_deployment_metadata.js";
 import { migration010SourcePortMetadata } from "./010_source_port_metadata.js";
+import { migration011PerformanceDiagnostics } from "./011_performance_diagnostics.js";
 import type { Migration } from "./types.js";
 
 export type { Migration } from "./types.js";
@@ -23,7 +24,8 @@ const migrations: Migration[] = [
   migration007ProviderCredentials,
   migration008AppSources,
   migration009AppSourceDeploymentMetadata,
-  migration010SourcePortMetadata
+  migration010SourcePortMetadata,
+  migration011PerformanceDiagnostics
 ];
 
 interface SchemaMigrationRow {

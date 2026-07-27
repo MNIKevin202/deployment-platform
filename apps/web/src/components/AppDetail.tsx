@@ -20,6 +20,7 @@ import StorageTable from "./StorageTable";
 import StorageDialog from "./StorageDialog";
 import HealthPanel from "./HealthPanel";
 import MetricsPanel from "./MetricsPanel";
+import PerformanceDiagnosticsPanel from "./PerformanceDiagnosticsPanel";
 import LogsPanel from "./LogsPanel";
 import ActivityPanel from "./ActivityPanel";
 import SourcePanel from "./SourcePanel";
@@ -39,6 +40,7 @@ type DetailTab =
   | "storage"
   | "health"
   | "metrics"
+  | "performance"
   | "logs"
   | "activity";
 
@@ -713,6 +715,7 @@ export default function AppDetail({
           { key: "storage", label: "Storage" },
           { key: "health", label: "Health" },
           { key: "metrics", label: "Metrics" },
+          { key: "performance", label: "Performance" },
           { key: "logs", label: "Logs" },
           { key: "activity", label: "Activity" }
         ]}
@@ -968,6 +971,10 @@ export default function AppDetail({
 
       {activeTab === "metrics" && (
         <MetricsPanel appId={appId} containerRunning={isRunning} />
+      )}
+
+      {activeTab === "performance" && (
+        <PerformanceDiagnosticsPanel appId={appId} publicDomain={detail.domain} />
       )}
 
       {activeTab === "logs" && (

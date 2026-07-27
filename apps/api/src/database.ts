@@ -8,6 +8,7 @@ import { createHealthRepository } from "./health-database.js";
 import { createEventRepository } from "./event-database.js";
 import { createCredentialRepository } from "./credential-database.js";
 import { createAppSourceRepository } from "./app-source-database.js";
+import { createPerformanceDiagnosticsRepository } from "./performance-diagnostics-database.js";
 
 export type {
   StoredGlobalEnvVar,
@@ -342,6 +343,7 @@ export function createAppDatabase(databasePath: string) {
   const eventRepository = createEventRepository(db);
   const credentialRepository = createCredentialRepository(db);
   const appSourceRepository = createAppSourceRepository(db);
+  const performanceDiagnosticsRepository = createPerformanceDiagnosticsRepository(db);
 
   return {
     db,
@@ -366,7 +368,8 @@ export function createAppDatabase(databasePath: string) {
     ...healthRepository,
     ...eventRepository,
     ...credentialRepository,
-    ...appSourceRepository
+    ...appSourceRepository,
+    ...performanceDiagnosticsRepository
   };
 }
 

@@ -593,3 +593,119 @@ export interface AppSourceConfigFormValues {
   containerPortConfidence: string | null;
   autoDeploy: boolean;
 }
+
+// ---------- Performance Diagnostics ----------
+
+export interface PublicProbeResult {
+  ok: boolean;
+  totalMs: number | null;
+  dnsMs: number | null;
+  connectMs: number | null;
+  tlsMs: number | null;
+  ttfbMs: number | null;
+  downloadMs: number | null;
+  statusCode: number | null;
+  responseBytes: number | null;
+  redirectCount: number;
+  finalHost: string | null;
+  error: string | null;
+}
+
+export interface InternalProbeResult {
+  ok: boolean;
+  totalMs: number | null;
+  connectMs: number | null;
+  ttfbMs: number | null;
+  statusCode: number | null;
+  responseBytes: number | null;
+  error: string | null;
+  port: number | null;
+}
+
+export type ResourceCategory = "javascript" | "css" | "image" | "font" | "api" | "other";
+
+export interface ResourceCategorySummary {
+  category: ResourceCategory;
+  count: number;
+  totalTransferBytes: number;
+  totalDurationMs: number;
+  slowestPath: string | null;
+  slowestDurationMs: number;
+  failedCount: number;
+}
+
+export interface SanitizedResourceEntry {
+  category: ResourceCategory;
+  host: string;
+  path: string;
+  firstParty: boolean;
+  startMs: number;
+  durationMs: number;
+  transferBytes: number | null;
+  statusOk: boolean;
+}
+
+export interface PerformanceDiagnosticBrowserSummary {
+  submittedAt: string | null;
+  available: boolean;
+  dnsMs: number | null;
+  tlsMs: number | null;
+  ttfbMs: number | null;
+  pageLoadMs: number | null;
+  totalNavigationMs: number | null;
+  transferBytes: number | null;
+}
+
+export interface PerformanceDiagnostic {
+  id: number;
+  appId: number;
+  createdAt: string;
+  publicProbe: PublicProbeResult;
+  internalProbe: InternalProbeResult;
+  browser: PerformanceDiagnosticBrowserSummary;
+  resourceSummary: ResourceCategorySummary[] | null;
+  topResources: SanitizedResourceEntry[] | null;
+  diagnosis: {
+    category: string | null;
+    message: string | null;
+    evidence: string[];
+  };
+}
+
+export interface PerformanceDiagnosticResponse {
+  success: boolean;
+  diagnostic: PerformanceDiagnostic | null;
+  message?: string;
+}
+
+export interface PerformanceDiagnosticHistoryResponse {
+  success: boolean;
+  history: PerformanceDiagnostic[];
+  message?: string;
+}
+
+export interface BrowserNavigationTimingPayload {
+  dnsMs: number | null;
+  tcpMs: number | null;
+  tlsMs: number | null;
+  requestStartMs: number | null;
+  ttfbMs: number | null;
+  downloadMs: number | null;
+  domInteractiveMs: number | null;
+  domContentLoadedMs: number | null;
+  pageLoadMs: number | null;
+  totalNavigationMs: number | null;
+  transferBytes: number | null;
+  encodedBodyBytes: number | null;
+  decodedBodyBytes: number | null;
+  available: boolean;
+}
+
+export interface BrowserResourceEntryPayload {
+  url: string;
+  initiatorType: string;
+  startMs: number;
+  durationMs: number;
+  transferBytes: number | null;
+  statusOk: boolean;
+}
