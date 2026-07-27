@@ -1,0 +1,33 @@
+Deployment Platform — Installation Summary
+===========================================
+
+Status:              __STATUS__
+Panel URL:            https://__PANEL_DOMAIN__
+Apps base domain:     __APPS_DOMAIN__ (apps are served at <app-name>.__APPS_DOMAIN__)
+Administrator user:   __ADMIN_USERNAME__
+Source commit:        __SOURCE_COMMIT__
+API image:            __API_IMAGE__
+Web image:            __WEB_IMAGE__
+Caddy image:          __CADDY_IMAGE__
+Database volume:      __API_DATA_VOLUME__
+Database backup:      __BACKUP_PATH__
+Installation root:    __INSTALL_ROOT__
+Installer state:      __STATE_FILE__
+
+Verification:         __VERIFICATION_RESULT__
+
+Useful commands
+----------------
+Re-run verification:      deployment-platform verify
+Resume an install:        sudo ./installer/install.sh --resume
+Preview an uninstall:     deployment-platform uninstall-preview
+Show non-secret config:   deployment-platform show-config
+View logs:                deployment-platform logs api|web|caddy
+
+Recommended next steps
+-----------------------
+1. Log in at https://__PANEL_DOMAIN__ with the administrator account above.
+2. Connect GitHub in Settings if you plan to deploy from a repository.
+3. Review installer/README.md for backup, update, and uninstall details.
+
+Secrets, encryption keys, and password hashes are never included in this file.

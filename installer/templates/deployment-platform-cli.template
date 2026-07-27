@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+#
+# /usr/local/bin/deployment-platform — installed by
+# installer/lib/filesystem.sh. Thin wrapper delegating to the real
+# installer scripts under /opt/deployment-platform/installer/. Requires
+# sudo for anything that touches Docker or the filesystem, matching the
+# rest of this platform's maintenance commands (section 8/25).
+set -Eeuo pipefail
+
+INSTALL_ROOT="/opt/deployment-platform"
+INSTALLER_DIR="${INSTALL_ROOT}/installer"
+
+API_CONTAINER_NAME="deployment-platform-api"
+WEB_CONTAINER_NAME="deployment-platform-web"
+CADDY_CONTAINER_NAME="deployment-platform-caddy"
+
+usage() {
+  cat <<'EOF'
+Usage: deployment-platform <command>
+
+  status               Show container status (running/stopped)
+  verify               Run local + public verification checks
+  installer-status      Show the installer's own state (stage, last run)
+  resume-install        Resume an interrupted installation
+  show-config            Show non-secret configuration (never secret values)
+  logs api|web|caddy     Tail a container's logs
+  backup-database         Back up the SQLite database now
+  uninstall-preview       Show what an uninstall would remove, without changing anything
+EOF
+}
+
+require_root_for() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "This command requires sudo: sudo deployment-platform $*" >&2
+    exit 1
+  fi
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  status)
+    for name in "$API_CONTAINER_NAME" "$WEB_CONTAINER_NAME" "$CADDY_CONTAINER_NAME"; do
+      state="$(docker inspect --format '{{.State.Status}}' "$name" 2>/dev/null || echo "not found")"
+      printf '%-32s %s\n' "$name" "$state"
+    done
+    ;;
+  verify)
+    require_root_for verify
+    exec "${INSTALLER_DIR}/install.sh" --verify-only
+    ;;
+  installer-status)
+    if [ -f "${INSTALL_ROOT}/state/installer-state.json" ]; then
+      if command -v jq >/dev/null 2>&1; then
+        jq '.' "${INSTALL_ROOT}/state/installer-state.json"
+      else
+        cat "${INSTALL_ROOT}/state/installer-state.json"
+      fi
+    else
+      echo "No installer state found."
+    fi
+    ;;
+  resume-install)
+    require_root_for resume-install
+    exec "${INSTALLER_DIR}/install.sh" --resume
+    ;;
+  show-config)
+    echo "Panel/apps domain configuration (non-secret):"
+    [ -f "${INSTALL_ROOT}/config/platform.env" ] && cat "${INSTALL_ROOT}/config/platform.env"
+    echo
+    echo "Secret values (auth.env) are never shown by this command."
+    ;;
+  logs)
+    target="${1:-}"
+    case "$target" in
+      api) exec docker logs -f --tail 200 "$API_CONTAINER_NAME" ;;
+      web) exec docker logs -f --tail 200 "$WEB_CONTAINER_NAME" ;;
+      caddy) exec docker logs -f --tail 200 "$CADDY_CONTAINER_NAME" ;;
+      *) echo "Usage: deployment-platform logs api|web|caddy" >&2; exit 1 ;;
+    esac
+    ;;
+  backup-database)
+    require_root_for backup-database
+    # shellcheck source=/dev/null
+    source "${INSTALLER_DIR}/lib/common.sh" 2>/dev/null || true
+    DRY_RUN=0
+    # shellcheck source=/dev/null
+    source "${INSTALLER_DIR}/lib/platform.sh"
+    backup_database
+    ;;
+  uninstall-preview)
+    require_root_for uninstall-preview
+    exec "${INSTALLER_DIR}/install.sh" --uninstall-preview
+    ;;
+  ""|help|--help|-h)
+    usage
+    ;;
+  *)
+    echo "Unknown command: $cmd" >&2
+    usage
+    exit 1
+    ;;
+esac

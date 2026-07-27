@@ -238,14 +238,38 @@ is_secret_like_path() {
   [[ "${path}" =~ ${SECRET_LIKE_PATTERN} ]]
 }
 
+# Generated/runtime installer paths that must never be auto-staged even
+# though they live under the otherwise-allowed installer/ tree — none of
+# these should ever actually appear inside this git checkout (the real
+# installer only ever writes them under /opt/deployment-platform on a
+# target VPS), but this is checked first, unconditionally, as a defense
+# -in-depth guard against ever committing a stray secret or generated
+# artifact if one somehow ended up here (e.g. a test run against the
+# wrong INSTALL_ROOT, or a manual local install attempt from this
+# checkout).
+is_installer_generated_runtime_path() {
+  local path="$1"
+  case "${path}" in
+    installer/logs/*|installer/state/*|*/auth.env|*/platform.env|*/install-summary.txt|*/installer-state.json|*.log|*.tmp|*/.installer-state.*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 # Paths allowed to be picked up automatically when untracked (initial
 # development of the release tooling itself, plus normal project trees).
 # Anything untracked outside these roots is reported but never
 # auto-staged.
 is_allowed_untracked_path() {
   local path="$1"
+
+  if is_installer_generated_runtime_path "${path}"; then
+    return 1
+  fi
+
   case "${path}" in
-    apps/*|packages/*|scripts/*|docs/*|release.sh|release.config.example|README.md|*.md)
+    apps/*|packages/*|scripts/*|docs/*|installer/*|release.sh|release.config.example|README.md|*.md)
       return 0
       ;;
   esac
@@ -872,6 +896,7 @@ fi
 
 API_CHANGED="no"
 WEB_CHANGED="no"
+INSTALLER_CHANGED="no"
 
 for path in "${ALL_CHANGED_PATHS[@]:-}"; do
   [ -n "${path:-}" ] || continue
@@ -879,6 +904,11 @@ for path in "${ALL_CHANGED_PATHS[@]:-}"; do
     api) API_CHANGED="yes" ;;
     web) WEB_CHANGED="yes" ;;
     both) API_CHANGED="yes"; WEB_CHANGED="yes" ;;
+  esac
+  case "${path}" in
+    installer/*)
+      INSTALLER_CHANGED="yes"
+      ;;
   esac
 done
 
@@ -889,6 +919,7 @@ fi
 
 info "API changed: ${API_CHANGED}"
 info "Web changed: ${WEB_CHANGED}"
+info "Installer changed: ${INSTALLER_CHANGED}"
 info "Documentation/script-only change: ${DOCS_ONLY}"
 
 # The exact set of files this release would stage. Computed here (not
@@ -1003,6 +1034,36 @@ if [ "${PLAN_ONLY}" -eq 1 ]; then
 fi
 
 # ============================================================
+# 2b. INSTALLER TESTS
+# ============================================================
+#
+# Runs whenever this release touches installer/ — before the npm
+# build/tests, before staging, before commit — so a broken installer
+# change is caught as early and cheaply as possible. Never run for a
+# release that doesn't touch installer/ at all (installer/tests/run.sh
+# needs no Docker/root/VPS, but there is no reason to pay even its
+# small runtime for an unrelated API/web-only release). This same code
+# path also covers --verify-only, which stops before staging/commit
+# further down but must still report on and run installer tests first.
+
+if [ "${INSTALLER_CHANGED}" = "yes" ]; then
+  print_header "INSTALLER TESTS"
+
+  if [ ! -x "installer/tests/run.sh" ] && [ ! -f "installer/tests/run.sh" ]; then
+    fail "installer/ changed but installer/tests/run.sh was not found."
+  fi
+
+  info "Running: bash installer/tests/run.sh"
+  INSTALLER_TEST_LOG="$(new_tmp_file)"
+  if bash installer/tests/run.sh > "${INSTALLER_TEST_LOG}" 2>&1; then
+    info "Installer tests passed."
+  else
+    cat "${INSTALLER_TEST_LOG}" >&2
+    fail "Installer tests failed. Nothing was staged, committed, synced, or deployed."
+  fi
+fi
+
+# ============================================================
 # 3. BUILD
 # ============================================================
 
@@ -1060,8 +1121,14 @@ PREVIOUS_API_VERSION="unknown"
 PREVIOUS_WEB_VERSION="unknown"
 
 if [ "${DOCS_ONLY}" = "yes" ]; then
-  info "Documentation/script-only change — skipping remote version inspection."
-  info "This release will be committed locally only; the VPS will not be contacted."
+  if [ "${INSTALLER_CHANGED}" = "yes" ]; then
+    info "Installer/script-only change."
+  else
+    info "Documentation/script-only change."
+  fi
+  info "This release will be committed locally only."
+  info "The VPS will not be contacted."
+  info "API and Web versions will not change."
 else
   if ssh_quiet true; then
     VPS_REACHABLE=1
@@ -1175,7 +1242,8 @@ if [ "${DOCS_ONLY}" = "yes" ]; then
   info "Commit SHA: ${COMMIT_SHA}"
   info "API changed: no"
   info "Web changed: no"
-  info "Local-only release: documentation/script-only change committed. The VPS was not contacted."
+  info "Installer changed: ${INSTALLER_CHANGED}"
+  info "Local-only release: documentation/script-only change committed. The VPS was not contacted. API and Web image versions were not changed."
   info "Status: PASS"
   exit 0
 fi
