@@ -4,8 +4,15 @@
 # platform API itself when an app's domain is assigned.
 
 {
-	# Caddy's own admin API stays bound to localhost inside the container
-	# only — it is never exposed on a public listener.
+	# Caddy's own admin API is disabled outright, not merely unpublished.
+	#
+	# Consequence worth knowing before changing anything: `caddy reload`
+	# speaks to that admin endpoint, so it can NEVER succeed here. Every
+	# code path that applies a Caddyfile change on this platform must
+	# restart the Caddy container instead (see installer/lib/caddy.sh and
+	# the Caddy deploy stage in scripts/release-remote.sh). TLS material
+	# lives in the caddy-data volume, so a restart does not re-issue
+	# certificates.
 	admin off
 }
 

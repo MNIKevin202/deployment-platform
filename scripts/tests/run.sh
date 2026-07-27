@@ -847,6 +847,23 @@ assert_contains "the remote validates the candidate before touching the live fil
 assert_contains "the remote backs up the previous Caddyfile" "$REMOTE_TEXT" "CADDY_CONFIG_BACKUP"
 assert_contains "the remote reloads Caddy rather than replacing the container" "$REMOTE_TEXT" "caddy reload --config /etc/caddy/Caddyfile"
 assert_contains "a failed reload restores the previous configuration" "$REMOTE_TEXT" "restore_caddy_config_on_failure"
+
+# `caddy reload` speaks to the admin API, and the platform's generated
+# Caddyfile sets `admin off` — so reload can never succeed and a
+# reload-only deploy stage fails 100% of the time. The restart fallback
+# is the actual mechanism, exactly as installer/lib/caddy.sh already does.
+assert_contains "applying a config change has a single entry point" "$REMOTE_TEXT" "apply_caddy_config()"
+assert_contains "a failed reload falls back to restarting Caddy" "$REMOTE_TEXT" 'docker restart "${CADDY_CONTAINER}"'
+assert_contains "the fallback explains why reload cannot work here" "$REMOTE_TEXT" "admin API is disabled"
+assert_contains "the restart is confirmed to have left Caddy running" "$REMOTE_TEXT" "did not stay running after the restart"
+assert_contains "the restore path uses the same apply mechanism" "$REMOTE_TEXT" "apply_caddy_config; then"
+# Exactly one reload call must exist: the one inside apply_caddy_config.
+assert_eq "only one caddy reload call remains in the remote script" "1" \
+  "$(grep -c 'caddy reload --config' "$REMOTE_SH")"
+CADDY_TEMPLATE_SRC="$(cat "$PROJECT_DIR/installer/templates/Caddyfile.template")"
+assert_contains "the template documents that admin off forbids reload" "$CADDY_TEMPLATE_SRC" "can NEVER succeed here"
+assert_contains "the installer applies config changes by restarting too" \
+  "$(cat "$PROJECT_DIR/installer/lib/caddy.sh")" 'docker restart "$CADDY_CONTAINER_NAME"'
 assert_contains "config rollback is wired into the automatic rollback path" "$REMOTE_TEXT" "restore_caddy_config_on_failure"
 assert_contains "the rendered candidate is checked for leftover placeholders" "$REMOTE_TEXT" "unreplaced template placeholders"
 assert_contains "an identical config is a no-op" "$REMOTE_TEXT" "already identical to the live file"

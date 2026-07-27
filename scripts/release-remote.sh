@@ -1207,12 +1207,56 @@ fi
 CADDY_CONFIG_BACKUP=""
 CADDY_CONFIG_REPLACED=0
 
+# Applies the on-disk Caddyfile to the running Caddy.
+#
+# `caddy reload` talks to Caddy's admin API. The platform's generated
+# Caddyfile sets `admin off` (the admin endpoint is not wanted on a
+# host that also serves customer apps), so reload ALWAYS fails with
+# "dial tcp [::1]:2019: connect: connection refused". Restarting the
+# container is the supported way to apply a config change on this
+# platform — it is exactly what installer/lib/caddy.sh already falls
+# back to. TLS certificates survive because they live in the caddy-data
+# volume, so the restart costs a couple of seconds of connection
+# refusals, not a re-issuance.
+#
+# Reload is still attempted first: it is zero-downtime, and it will
+# start working for free if the admin endpoint is ever enabled.
+apply_caddy_config() {
+  if docker exec "${CADDY_CONTAINER}" caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+    info "Caddy reloaded in place (admin API available)."
+    return 0
+  fi
+
+  info "Caddy's admin API is disabled, so a live reload is not possible — restarting the Caddy container instead."
+  if ! docker restart "${CADDY_CONTAINER}" >/dev/null 2>&1; then
+    info "ERROR: docker restart ${CADDY_CONTAINER} failed."
+    return 1
+  fi
+
+  # A config error surfaces as a container that exits immediately, so
+  # confirm it is still running before calling this a success.
+  caddy_wait=0
+  while [ "${caddy_wait}" -lt 15 ]; do
+    if [ "$(docker inspect -f '{{.State.Running}}' "${CADDY_CONTAINER}" 2>/dev/null)" = "true" ]; then
+      sleep 1
+      if [ "$(docker inspect -f '{{.State.Running}}' "${CADDY_CONTAINER}" 2>/dev/null)" = "true" ]; then
+        info "Caddy restarted and running with the new configuration."
+        return 0
+      fi
+    fi
+    caddy_wait=$((caddy_wait + 1))
+    sleep 1
+  done
+
+  info "ERROR: Caddy did not stay running after the restart."
+  return 1
+}
+
 restore_caddy_config_on_failure() {
   if [ "${CADDY_CONFIG_REPLACED}" -eq 1 ] && [ -n "${CADDY_CONFIG_BACKUP}" ] && [ -f "${CADDY_CONFIG_BACKUP}" ]; then
     info "Restoring the previous Caddyfile and reloading Caddy..."
-    if cp "${CADDY_CONFIG_BACKUP}" "${CADDY_CONFIG_FILE}" 2>/dev/null &&
-       docker exec "${CADDY_CONTAINER}" caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
-      info "Previous Caddyfile restored and reloaded."
+    if cp "${CADDY_CONFIG_BACKUP}" "${CADDY_CONFIG_FILE}" 2>/dev/null && apply_caddy_config; then
+      info "Previous Caddyfile restored and applied."
       CADDY_CONFIG_REPLACED=0
     else
       info "WARNING: could not automatically restore the previous Caddyfile. It is preserved at ${CADDY_CONFIG_BACKUP}"
@@ -1269,11 +1313,10 @@ if [ "${DEPLOY_CADDY_CONFIG}" -eq 1 ]; then
     CADDY_CONFIG_REPLACED=1
     info "New Caddyfile installed."
 
-    if ! docker exec "${CADDY_CONTAINER}" caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+    if ! apply_caddy_config; then
       restore_caddy_config_on_failure
-      fail "Caddy reload failed with the new configuration; the previous Caddyfile was restored."
+      fail "Caddy would not accept the new configuration; the previous Caddyfile was restored."
     fi
-    info "Caddy reloaded with the new configuration."
   fi
 fi
 
