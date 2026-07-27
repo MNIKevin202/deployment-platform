@@ -57,13 +57,44 @@ _verify_probe() {
 #
 # Node is already present in the API image, so no extra image or network
 # change is needed. Any deliberate HTTP status proves the server is
-# listening and serving: /api/auth/session answers 401 when
-# unauthenticated, which is a perfectly healthy response. Connection
-# refusal, timeout, and a crashed process all remain unhealthy. Nothing
-# from the response — no body, no headers, no cookies — is ever read or
-# printed; only the status code is inspected, and only in-process.
-API_HEALTH_CHECK_PATH="/api/auth/session"
+# listening and serving.
+#
+# The path is the REAL backend route, /auth/session — NOT /api/auth/session.
+# The API registers its routes without an /api prefix; the /api prefix is
+# a Caddy-facing concern that handle_path strips before proxying. The
+# previous probe asked the container for /api/auth/session, which matches
+# no route, so the authentication hook answered 401 — and because 401 was
+# on the "healthy" list, a completely mis-routed API was reported as
+# passing verification. That is exactly how this defect reached a live
+# install with every check green.
+#
+# Correctness is now judged semantically, not just by status class: an
+# unauthenticated GET /auth/session must return HTTP 200 with a JSON body
+# whose "authenticated" field is exactly false. Anything else is
+# classified and reported distinctly — auth-hook rejection, 404, a
+# malformed/unparseable body, or a connectivity failure — rather than
+# collapsed into "some response arrived, good enough".
+#
+# Only the parsed shape is inspected. No cookie, header, or body text is
+# ever printed; the diagnostic carries a fixed reason token and at most a
+# status code.
+API_HEALTH_CHECK_PATH="/auth/session"
 API_HEALTH_CHECK_TIMEOUT_MS=5000
+
+# The public path the same endpoint is served on through Caddy. Used by
+# the public verification stage to prove the /api prefix is stripped.
+API_PUBLIC_HEALTH_CHECK_PATH="/api/auth/session"
+
+# The public login path, used by the end-to-end authentication smoke test.
+#
+# The smoke test posts DELIBERATELY WRONG credentials. The values below are
+# fixed, non-secret placeholders that can never be the operator's real
+# credentials, so nothing sensitive reaches argv, logs, or the shell
+# history. A successful login is NOT tested here — that would require the
+# real password, and the operator confirms it interactively instead.
+API_PUBLIC_LOGIN_PATH="/api/auth/login"
+API_LOGIN_SMOKE_USERNAME="installer-verification-not-a-real-user"
+API_LOGIN_SMOKE_PASSWORD="installer-verification-not-a-real-password"
 
 # Bounded, secret-free reason for the last probe attempt. Set by
 # verify_api_http_responds and logged only on failure.
@@ -86,7 +117,6 @@ const http = require("node:http");
 const port = Number(process.env.DP_VERIFY_PORT);
 const path = process.env.DP_VERIFY_PATH;
 const timeoutMs = Number(process.env.DP_VERIFY_TIMEOUT_MS);
-const healthy = [200, 401, 403, 404];
 
 if (
   !Number.isInteger(port) || port <= 0 ||
@@ -101,18 +131,63 @@ const request = http.request(
   { host: "127.0.0.1", port: port, path: path, method: "GET", timeout: timeoutMs },
   (response) => {
     const code = response.statusCode;
-    // Body is drained and discarded — never read, buffered, or printed.
-    response.resume();
+
     if (!Number.isInteger(code)) {
+      response.resume();
       process.stdout.write("reason=malformed-http-status");
       process.exit(1);
     }
-    if (healthy.indexOf(code) >= 0) {
-      process.stdout.write("reason=http-status status=" + code);
+
+    // The body is read ONLY to confirm the session shape. It is parsed
+    // in-process and never printed; an unauthenticated session body
+    // contains no secret, and an authenticated one is never produced by
+    // this unauthenticated probe.
+    let body = "";
+    response.setEncoding("utf8");
+    response.on("data", (chunk) => {
+      // Bounded: a healthy body is a few dozen bytes. Anything larger is
+      // not the endpoint we are looking for.
+      if (body.length < 4096) { body += chunk; }
+    });
+    response.on("end", () => {
+      if (code === 404) {
+        process.stdout.write("reason=route-not-found status=404 path-not-registered");
+        process.exit(1);
+      }
+      if (code === 401 || code === 403) {
+        // The authentication hook answered instead of the session
+        // handler. /auth/session is a public route, so this means the
+        // request never reached it — the classic mis-routing signature.
+        process.stdout.write("reason=auth-hook-rejected status=" + code);
+        process.exit(1);
+      }
+      if (code !== 200) {
+        process.stdout.write("reason=unexpected-http-status status=" + code);
+        process.exit(1);
+      }
+
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch (error) {
+        process.stdout.write("reason=malformed-json-body status=200");
+        process.exit(1);
+      }
+
+      if (parsed === null || typeof parsed !== "object") {
+        process.stdout.write("reason=unexpected-json-shape status=200");
+        process.exit(1);
+      }
+      if (parsed.authenticated !== false) {
+        // Either the field is missing (not the session endpoint) or it is
+        // true (an unauthenticated probe must never be authenticated).
+        process.stdout.write("reason=unexpected-session-state status=200");
+        process.exit(1);
+      }
+
+      process.stdout.write("reason=unauthenticated-session status=200");
       process.exit(0);
-    }
-    process.stdout.write("reason=unexpected-http-status status=" + code);
-    process.exit(1);
+    });
   }
 );
 
@@ -201,7 +276,7 @@ verify_local_platform() {
     # surfaced on failure instead of being swallowed with the output.
     local api_http_status=0
     verify_api_http_responds || api_http_status=$?
-    _verify_check "API HTTP server responds inside its container (${API_HEALTH_CHECK_PATH}; 401 when unauthenticated is healthy)" \
+    _verify_check "API serves its real backend route inside the container (GET ${API_HEALTH_CHECK_PATH} -> 200 {\"authenticated\":false})" \
       "$api_http_status"
     if [ "$api_http_status" -ne 0 ]; then
       log_fail "  API probe detail: ${API_HTTP_CHECK_DETAIL:-no diagnostic captured}"
@@ -269,6 +344,134 @@ verify_public_domain() {
 # captures its own status, and the two section calls below are explicitly
 # guarded so a failing section cannot abort the run under `set -e`
 # before the summary is printed.
+# Proves the /api prefix contract END TO END through Caddy: the panel
+# serves the API under /api/*, while the API itself registers the route
+# without that prefix. This is the check that would have caught the
+# mis-routing that made login impossible — the container-side probe alone
+# cannot see it, because the container is served the already-stripped
+# path.
+#
+# Deliberately asserts the SEMANTIC response, not just "some status
+# arrived": an unauthenticated GET must yield 200 with
+# "authenticated":false. A 401 here means Caddy forwarded /api intact and
+# the request fell through to the authentication hook.
+verify_public_api_prefix() {
+  local domain="$1"
+  local url="https://${domain}${API_PUBLIC_HEALTH_CHECK_PATH}"
+  local body="" status="" curl_status=0
+
+  # -w appends the status on its own final line so body and status are
+  # separated without a second request.
+  body="$(curl -sS --connect-timeout 10 --max-time 20 -w '\n%{http_code}' "$url" 2>/dev/null)" || curl_status=$?
+
+  if [ "$curl_status" -ne 0 ] || [ -z "$body" ]; then
+    log_fail "Public API prefix check: ${url} -> no response (curl exit ${curl_status})"
+    VERIFY_FAILURES=$((VERIFY_FAILURES + 1))
+    return 1
+  fi
+
+  status="$(printf '%s' "$body" | tail -n 1)"
+  local payload
+  payload="$(printf '%s' "$body" | sed '$d')"
+
+  case "$status" in
+    200) ;;
+    401|403)
+      log_fail "Public API prefix check: ${url} -> HTTP ${status}. The /api prefix is reaching the API instead of being stripped, so the request hit the authentication hook rather than the session route. Check that the generated Caddyfile uses 'handle_path /api/*', not 'handle /api/*'."
+      VERIFY_FAILURES=$((VERIFY_FAILURES + 1))
+      return 1
+      ;;
+    404)
+      log_fail "Public API prefix check: ${url} -> HTTP 404 (no route matched after proxying)."
+      VERIFY_FAILURES=$((VERIFY_FAILURES + 1))
+      return 1
+      ;;
+    *)
+      log_fail "Public API prefix check: ${url} -> HTTP ${status} (expected 200)."
+      VERIFY_FAILURES=$((VERIFY_FAILURES + 1))
+      return 1
+      ;;
+  esac
+
+  # Shape check only; the unauthenticated body carries no secret.
+  case "$payload" in
+    *'"authenticated"'*'false'*)
+      _verify_check "Public API prefix check: ${url} -> 200 with an unauthenticated session (the /api prefix is stripped correctly)" 0
+      return 0
+      ;;
+  esac
+
+  log_fail "Public API prefix check: ${url} -> HTTP 200 but the body is not an unauthenticated session response."
+  VERIFY_FAILURES=$((VERIFY_FAILURES + 1))
+  return 1
+}
+
+# End-to-end authentication smoke test.
+#
+# Proves that a login attempt actually reaches the login handler and is
+# rejected by it — not by the authentication hook, not by a 404. The
+# distinction matters: before the /api prefix fix, every login returned
+# 401 "Authentication required" from the hook, which is indistinguishable
+# from a rejected login unless the message is inspected.
+verify_public_login_rejection() {
+  local domain="$1"
+  local url="https://${domain}${API_PUBLIC_LOGIN_PATH}"
+  local body="" status="" payload="" curl_status=0
+
+  # The credentials are the fixed placeholders defined above, passed on
+  # stdin rather than argv so no password-shaped string is ever visible in
+  # a process listing — even a deliberately invalid one.
+  body="$(printf '{"username":"%s","password":"%s"}' \
+    "$API_LOGIN_SMOKE_USERNAME" "$API_LOGIN_SMOKE_PASSWORD" \
+    | curl -sS --connect-timeout 10 --max-time 20 \
+        -X POST -H 'Content-Type: application/json' \
+        --data-binary @- -w '\n%{http_code}' "$url" 2>/dev/null)" || curl_status=$?
+
+  if [ "$curl_status" -ne 0 ] || [ -z "$body" ]; then
+    log_fail "Login rejection smoke test: ${url} -> no response (curl exit ${curl_status})"
+    VERIFY_FAILURES=$((VERIFY_FAILURES + 1))
+    return 1
+  fi
+
+  status="$(printf '%s' "$body" | tail -n 1)"
+  payload="$(printf '%s' "$body" | sed '$d')"
+
+  # 429 still proves the request reached the login route: the rate limit is
+  # configured on that route only. Treat it as inconclusive, not a failure,
+  # so repeated verification runs do not turn red.
+  if [ "$status" = "429" ]; then
+    _verify_check "Login rejection smoke test: ${url} -> HTTP 429 (rate limited; the login route was reached, retry in a minute for a full check)" 0
+    return 0
+  fi
+
+  case "$payload" in
+    *'Invalid username or password'*)
+      _verify_check "Login rejection smoke test: ${url} -> HTTP ${status} 'Invalid username or password' (the login handler ran and rejected the attempt)" 0
+      return 0
+      ;;
+    *'Authentication required'*)
+      log_fail "Login rejection smoke test: ${url} -> HTTP ${status} 'Authentication required'. The request was rejected by the authentication hook before reaching the login handler, which means the /api prefix is not being stripped. Check that the generated Caddyfile uses 'handle_path /api/*', not 'handle /api/*'."
+      VERIFY_FAILURES=$((VERIFY_FAILURES + 1))
+      return 1
+      ;;
+  esac
+
+  case "$status" in
+    404)
+      log_fail "Login rejection smoke test: ${url} -> HTTP 404 (no login route matched after proxying)."
+      ;;
+    200)
+      # Must never happen: the placeholder credentials are not real.
+      log_fail "Login rejection smoke test: ${url} -> HTTP 200. A deliberately invalid credential pair was ACCEPTED. Treat this as a security incident and rotate the administrator password."
+      ;;
+    *)
+      log_fail "Login rejection smoke test: ${url} -> HTTP ${status} with an unrecognised response body."
+      ;;
+  esac
+  VERIFY_FAILURES=$((VERIFY_FAILURES + 1))
+  return 1
+}
+
 run_full_verification() {
   local panel_domain="$1"
   if [ -z "$panel_domain" ]; then
@@ -283,6 +486,8 @@ run_full_verification() {
 
   log_stage "PUBLIC VERIFICATION"
   verify_public_domain "$panel_domain" || true
+  verify_public_api_prefix "$panel_domain" || true
+  verify_public_login_rejection "$panel_domain" || true
 
   if [ "$VERIFY_FAILURES" -eq 0 ]; then
     log_pass "All verification checks passed."

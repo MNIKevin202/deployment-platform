@@ -327,3 +327,224 @@ generate_secrets() {
 
   log_pass "Secrets generated and stored at $AUTH_FILE_PATH (mode 600). Values are never printed or logged."
 }
+
+# ============================================================
+# Administrator password rotation
+# ============================================================
+#
+# Backs `deployment-platform reset-admin-password`.
+#
+# Rotation must RECREATE the API container, not merely restart it:
+# auth.env is supplied via `docker create --env-file`, and Docker reads
+# that file once, at creation time. A `docker restart` would keep serving
+# the old hash from the container's baked-in environment and the
+# rotation would silently appear to do nothing.
+#
+# Everything except ADMIN_PASSWORD_HASH is preserved byte-for-byte —
+# ADMIN_USERNAME, SESSION_SECRET, COOKIE_SECURE, and especially
+# CREDENTIAL_ENCRYPTION_KEY, which must never be rotated here: doing so
+# would make every stored provider credential permanently undecryptable.
+#
+# The plaintext password never reaches argv, a log line, the environment
+# of any container, or Git. It exists only in a mode-600 temp file that
+# is removed on every exit path, exactly as during a fresh install.
+
+# Rewrites auth.env with a new ADMIN_PASSWORD_HASH, atomically, keeping
+# every other line untouched and in order.
+_write_rotated_auth_file() {
+  local new_hash="$1"
+  local tmp_auth_file
+  tmp_auth_file="$(mktemp "${INSTALL_ROOT}/config/.auth.env.XXXXXX")"
+  chmod 600 "$tmp_auth_file"
+
+  # Replaces only the hash line; every other line is copied verbatim, so
+  # unknown/future keys survive a rotation untouched.
+  local replaced=0
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ADMIN_PASSWORD_HASH=*)
+        printf 'ADMIN_PASSWORD_HASH=%s\n' "$new_hash" >> "$tmp_auth_file"
+        replaced=1
+        ;;
+      *)
+        printf '%s\n' "$line" >> "$tmp_auth_file"
+        ;;
+    esac
+  done < "$AUTH_FILE_PATH"
+
+  if [ "$replaced" -ne 1 ]; then
+    rm -f "$tmp_auth_file"
+    fatal "Could not find an ADMIN_PASSWORD_HASH line in $AUTH_FILE_PATH. Refusing to guess; nothing was changed."
+  fi
+
+  chmod 600 "$tmp_auth_file"
+  sync "$tmp_auth_file" 2>/dev/null || true
+  mv -f "$tmp_auth_file" "$AUTH_FILE_PATH"
+  chmod 600 "$AUTH_FILE_PATH"
+}
+
+# Recreates the API container with exactly the arguments
+# ensure_api_container uses, so the rotated auth.env is read afresh.
+_recreate_api_container_for_rotation() {
+  local api_image="$1"
+  local platform_env_file="${INSTALL_ROOT}/config/platform.env"
+
+  docker rm -f "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
+
+  docker create --name "$API_CONTAINER_NAME" \
+    --network "$PLATFORM_NETWORK_NAME" \
+    --restart unless-stopped \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v "${API_DATA_VOLUME_NAME}:/data" \
+    -v "${INSTALL_ROOT}/caddy/routes:/app/caddy-routes" \
+    --env-file "${INSTALL_ROOT}/config/auth.env" \
+    --env-file "$platform_env_file" \
+    "$api_image" >/dev/null || return 1
+
+  docker network connect "$APPS_NETWORK_NAME" "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker start "$API_CONTAINER_NAME" >/dev/null || return 1
+
+  wait_for_log_marker "$API_CONTAINER_NAME" "listening at" \
+    "Waiting for the API to restart with the rotated password"
+}
+
+# Confirms the API came back up AND that the login handler actually
+# runs — a wrong password must be rejected by the handler with its own
+# message, not by the authentication hook. No password is sent.
+_verify_rotation_health() {
+  local status=0
+  verify_api_http_responds || status=$?
+  if [ "$status" -ne 0 ]; then
+    log_fail "API session route did not respond correctly after rotation: ${API_HTTP_CHECK_DETAIL:-no diagnostic}"
+    return 1
+  fi
+
+  # Deliberately uses a throwaway wrong password, never the real one.
+  local login_probe
+  login_probe="$(docker exec \
+    -e DP_PROBE_PORT="${API_INTERNAL_PORT:-3001}" \
+    "$API_CONTAINER_NAME" node -e '
+const http = require("node:http");
+const payload = JSON.stringify({ username: "rotation-probe", password: "definitely-not-the-password" });
+const request = http.request(
+  { host: "127.0.0.1", port: Number(process.env.DP_PROBE_PORT), path: "/auth/login", method: "POST",
+    headers: { "content-type": "application/json", "content-length": Buffer.byteLength(payload) }, timeout: 5000 },
+  (response) => {
+    let body = "";
+    response.setEncoding("utf8");
+    response.on("data", (c) => { if (body.length < 4096) { body += c; } });
+    response.on("end", () => {
+      let parsed = null;
+      try { parsed = JSON.parse(body); } catch (e) { parsed = null; }
+      const message = parsed && typeof parsed.message === "string" ? parsed.message : "";
+      process.stdout.write("status=" + response.statusCode + " message=" + message);
+      process.exit(0);
+    });
+  }
+);
+request.on("timeout", () => { request.destroy(); process.stdout.write("status=timeout"); process.exit(0); });
+request.on("error", () => { process.stdout.write("status=error"); process.exit(0); });
+request.write(payload);
+request.end();' 2>&1 || true)"
+
+  case "$login_probe" in
+    *"Invalid username or password"*)
+      log_pass "Login handler is reachable and rejects wrong credentials correctly."
+      return 0
+      ;;
+    *"Authentication required"*)
+      log_fail "The login route is being intercepted by the authentication hook — routing is broken, not the password."
+      return 1
+      ;;
+    *)
+      log_fail "Login handler did not respond as expected after rotation (${login_probe})."
+      return 1
+      ;;
+  esac
+}
+
+rotate_admin_password() {
+  log_stage "ADMIN PASSWORD ROTATION"
+
+  local password_file_option="${1:-}"
+
+  require_root
+
+  if ! auth_file_looks_valid; then
+    fatal "No valid secrets file at $AUTH_FILE_PATH — nothing to rotate. Run the installer first."
+  fi
+  if ! docker inspect "$API_CONTAINER_NAME" >/dev/null 2>&1; then
+    fatal "API container not found: $API_CONTAINER_NAME. Start the platform before rotating the password."
+  fi
+
+  local api_image
+  api_image="$(docker inspect --format '{{.Config.Image}}' "$API_CONTAINER_NAME" 2>/dev/null || true)"
+  [ -n "$api_image" ] || fatal "Could not determine the running API image; refusing to recreate the container."
+  log_info "Current API image: $api_image (unchanged by this operation)"
+
+  # --- collect the new password ---
+  local password_file=""
+  local created_password_file=0
+  if [ -n "$password_file_option" ]; then
+    # Non-interactive path: a mode-600 file only. A plaintext password is
+    # never accepted as a command-line argument.
+    if ! admin_password_file_is_valid "$password_file_option"; then
+      fatal "The provided administrator password file is not usable (reason above). Nothing was changed."
+    fi
+    password_file="$password_file_option"
+  else
+    log_action "Enter a NEW administrator password. It is never echoed, logged, or stored in plaintext."
+    local new_password
+    new_password="$(prompt_password "New administrator password (min. 12 characters)")"
+    password_file="$(mktemp)"
+    chmod 600 "$password_file"
+    printf '%s' "$new_password" > "$password_file"
+    unset new_password
+    created_password_file=1
+    if command -v track_temp_file >/dev/null 2>&1; then
+      track_temp_file "$password_file"
+    fi
+  fi
+
+  ensure_node_helper_image
+
+  log_info "Computing the new password hash (scrypt, inside the sandboxed helper container)."
+  local new_hash
+  if ! new_hash="$(compute_password_hash "$password_file")"; then
+    [ "$created_password_file" -eq 1 ] && rm -f "$password_file"
+    fatal "Failed to compute the new password hash. Nothing was changed."
+  fi
+  [ "$created_password_file" -eq 1 ] && rm -f "$password_file"
+
+  # --- back up, write, recreate, verify, roll back on failure ---
+  local auth_backup="${AUTH_FILE_PATH}.backup-$(date -u +%Y%m%dT%H%M%SZ)"
+  cp "$AUTH_FILE_PATH" "$auth_backup"
+  chmod 600 "$auth_backup"
+  log_info "Previous secrets file backed up (mode 600) alongside $AUTH_FILE_PATH"
+
+  _write_rotated_auth_file "$new_hash"
+  unset new_hash
+  log_pass "Secrets file updated. ADMIN_USERNAME, SESSION_SECRET, COOKIE_SECURE and CREDENTIAL_ENCRYPTION_KEY are unchanged."
+
+  log_info "Recreating the API container so it reads the rotated secrets file..."
+  if ! _recreate_api_container_for_rotation "$api_image"; then
+    log_fail "The API container did not come back up with the new password. Restoring the previous secrets file..."
+    cp "$auth_backup" "$AUTH_FILE_PATH"
+    chmod 600 "$AUTH_FILE_PATH"
+    _recreate_api_container_for_rotation "$api_image" || true
+    fatal "Password rotation failed and the previous password was restored. The backup remains at $auth_backup"
+  fi
+
+  if ! _verify_rotation_health; then
+    log_fail "Post-rotation verification failed. Restoring the previous secrets file..."
+    cp "$auth_backup" "$AUTH_FILE_PATH"
+    chmod 600 "$AUTH_FILE_PATH"
+    _recreate_api_container_for_rotation "$api_image" || true
+    fatal "Password rotation was rolled back. The backup remains at $auth_backup"
+  fi
+
+  log_pass "Administrator password rotated successfully."
+  log_info "The previous secrets file is preserved at $auth_backup — delete it yourself once you have confirmed the new password works."
+  log_action "Log in at your panel with the new password to confirm."
+}

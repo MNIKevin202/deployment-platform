@@ -142,9 +142,64 @@ deployment-platform verify
 Checks, locally: Docker daemon reachability, the two required
 networks, the database volume, all three containers running,
 `CREDENTIAL_ENCRYPTION_KEY` validity (without ever printing it), the
-database migration count, and Caddy config validity. Publicly: the
-panel domain returns HTTP 200 over HTTPS (retried with backoff, since
-TLS issuance can take a minute after DNS first resolves).
+database migration count, Caddy config validity, and that the API
+answers its **real backend route** inside the container — `GET
+/auth/session` must return HTTP 200 with `{"authenticated":false}`.
+
+That last check is deliberately strict. It used to probe
+`/api/auth/session` in-container and accept 200, 401, 403, or 404 as
+"healthy", which meant it reported green while every panel login was
+failing. The prefixed path does not exist inside the container (see the
+`/api` prefix contract in `docs/RELEASE_AUTOMATION.md`), and each
+outcome is now classified separately: an unauthenticated session, an
+authentication-hook rejection, a missing route, a malformed body, an
+unexpected shape, or a connectivity/timeout failure. Only the first is
+healthy, and the failure message names the likely cause.
+
+Publicly, over HTTPS against the panel domain:
+
+- the panel returns HTTP 200 (retried with backoff, since TLS issuance
+  can take a minute after DNS first resolves),
+- `GET /api/auth/session` returns 200 `{"authenticated":false}`, which
+  proves Caddy is stripping the `/api` prefix,
+- `POST /api/auth/login` with deliberately invalid placeholder
+  credentials returns the login handler's own `Invalid username or
+  password`. If it returns `Authentication required` instead, the
+  request was stopped by the authentication hook before reaching the
+  handler and the prefix is not being stripped.
+
+The login smoke test never uses real credentials: the placeholders are
+fixed, self-evidently fake strings, and they are piped on stdin rather
+than passed in argv so nothing password-shaped appears in a process
+listing. A successful login is not automated — confirm that yourself in
+the browser after a release.
+
+## Rotating the administrator password
+
+```bash
+sudo deployment-platform reset-admin-password
+```
+
+Prompts twice (hidden input), enforces the minimum length, and computes
+the hash with the same hardened scrypt helper the installer uses. A
+plaintext password is **never** accepted as a command-line argument. For
+unattended use, pass a mode-600 file instead:
+
+```bash
+sudo deployment-platform reset-admin-password --password-file /root/newpw
+```
+
+What it does, in order: backs up `auth.env`, rewrites only the
+`ADMIN_PASSWORD_HASH` line (username, `SESSION_SECRET`, `COOKIE_SECURE`,
+and `CREDENTIAL_ENCRYPTION_KEY` are copied through verbatim), atomically
+replaces the file at mode 600, **recreates** the API container, and
+verifies that the API starts and that the login handler rejects a wrong
+password. Any failure restores the previous `auth.env` and container.
+
+The container is recreated rather than restarted on purpose: `docker
+create --env-file` reads the file once, at creation time, so a restarted
+container would keep serving the old hash. Neither the password nor the
+hash is ever printed or logged.
 
 ## Logs
 

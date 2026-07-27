@@ -21,6 +21,10 @@ MODE=""
 SOURCE_DIR=""
 AUTH_FILE=""
 CADDY_ROUTES_DIR=""
+DEPLOY_CADDY_CONFIG=0
+PANEL_DOMAIN=""
+CADDY_CONTAINER="deployment-platform-caddy"
+CADDY_CONFIG_FILE=""
 API_CONTAINER=""
 WEB_CONTAINER=""
 API_IMAGE_REPO=""
@@ -43,6 +47,10 @@ while [ "$#" -gt 0 ]; do
     --source-dir) SOURCE_DIR="$2"; shift 2 ;;
     --auth-file) AUTH_FILE="$2"; shift 2 ;;
     --caddy-routes-dir) CADDY_ROUTES_DIR="$2"; shift 2 ;;
+    --deploy-caddy-config) DEPLOY_CADDY_CONFIG=1; shift ;;
+    --panel-domain) PANEL_DOMAIN="$2"; shift 2 ;;
+    --caddy-container) CADDY_CONTAINER="$2"; shift 2 ;;
+    --caddy-config-file) CADDY_CONFIG_FILE="$2"; shift 2 ;;
     --api-container) API_CONTAINER="$2"; shift 2 ;;
     --web-container) WEB_CONTAINER="$2"; shift 2 ;;
     --api-image-repo) API_IMAGE_REPO="$2"; shift 2 ;;
@@ -91,13 +99,31 @@ is_valid_semver() {
   [[ "$1" =~ ${SEMVER_PATTERN} ]]
 }
 
+# "caddy" is a CONFIG-ONLY mode: it deploys a regenerated Caddyfile and
+# reloads Caddy, and builds/swaps no images at all. It exists because a
+# Caddy routing change is a real, deployable change to a running server
+# that touches neither apps/api nor apps/web — previously such a change
+# was classified as local-only and silently never reached the VPS, which
+# is how a broken /api prefix stayed live.
 case "${MODE}" in
   api|web|both) ;;
+  caddy)
+    DEPLOY_CADDY_CONFIG=1
+    ;;
   *)
-    printf 'ERROR: --mode must be one of: api, web, both (got: %s)\n' "${MODE}" >&2
+    printf 'ERROR: --mode must be one of: api, web, both, caddy (got: %s)\n' "${MODE}" >&2
     exit 1
     ;;
 esac
+
+if [ "${DEPLOY_CADDY_CONFIG}" -eq 1 ]; then
+  for caddy_required in PANEL_DOMAIN CADDY_CONTAINER CADDY_CONFIG_FILE; do
+    if [ -z "${!caddy_required}" ]; then
+      printf 'ERROR: --deploy-caddy-config requires --%s\n' "$(printf '%s' "${caddy_required}" | tr '[:upper:]_' '[:lower:]-')" >&2
+      exit 1
+    fi
+  done
+fi
 
 # URL_WIZARD_TEST and URL_SQLITE_TEST are deliberately NOT in this list.
 # They point at deployed test apps, which do not exist on a freshly
@@ -114,6 +140,7 @@ for required in SOURCE_DIR AUTH_FILE CADDY_ROUTES_DIR API_CONTAINER WEB_CONTAINE
   fi
 done
 
+# Config-only mode builds no image, so it needs no version at all.
 if [ "${MODE}" = "api" ] || [ "${MODE}" = "both" ]; then
   is_valid_semver "${API_VERSION}" || { printf 'ERROR: --api-version invalid: %s\n' "${API_VERSION}" >&2; exit 1; }
 fi
@@ -356,6 +383,13 @@ trigger_rollback() {
 
   print_header "AUTOMATIC ROLLBACK"
   info "Reason: ${reason}"
+
+  # A deployed Caddy configuration is rolled back first: it is the
+  # cheapest thing to undo and, unlike the containers, leaving it in a
+  # new state while the containers revert would be inconsistent.
+  if declare -F restore_caddy_config_on_failure >/dev/null 2>&1; then
+    restore_caddy_config_on_failure
+  fi
 
   local api_rollback_ok=1
   local web_rollback_ok=1
@@ -1154,6 +1188,93 @@ if [ "${MODE}" = "web" ] || [ "${MODE}" = "both" ]; then
     fail "Web container is not running the expected image (${WEB_IMAGE_REPO}:${WEB_VERSION})."
   fi
   info "Web image verified."
+fi
+
+# ============================================================
+# 4b. CADDY CONFIGURATION DEPLOY
+# ============================================================
+#
+# Renders the Caddyfile from the template in THIS release directory,
+# validates it with Caddy itself before anything live is touched, backs
+# up the current file, installs the new one, and reloads. Any failure
+# restores the backup and reloads again, so a bad config can never be
+# left serving.
+#
+# Deliberately config-only: no image is built, no container is
+# created/removed, and the Caddy container is reloaded in place rather
+# than replaced. Per-app route files under routes/ are never touched.
+
+CADDY_CONFIG_BACKUP=""
+CADDY_CONFIG_REPLACED=0
+
+restore_caddy_config_on_failure() {
+  if [ "${CADDY_CONFIG_REPLACED}" -eq 1 ] && [ -n "${CADDY_CONFIG_BACKUP}" ] && [ -f "${CADDY_CONFIG_BACKUP}" ]; then
+    info "Restoring the previous Caddyfile and reloading Caddy..."
+    if cp "${CADDY_CONFIG_BACKUP}" "${CADDY_CONFIG_FILE}" 2>/dev/null &&
+       docker exec "${CADDY_CONTAINER}" caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+      info "Previous Caddyfile restored and reloaded."
+      CADDY_CONFIG_REPLACED=0
+    else
+      info "WARNING: could not automatically restore the previous Caddyfile. It is preserved at ${CADDY_CONFIG_BACKUP}"
+    fi
+  fi
+}
+
+if [ "${DEPLOY_CADDY_CONFIG}" -eq 1 ]; then
+  print_header "CADDY CONFIGURATION DEPLOY"
+
+  CADDY_TEMPLATE="${SOURCE_DIR}/installer/templates/Caddyfile.template"
+  if [ ! -f "${CADDY_TEMPLATE}" ]; then
+    fail "Caddy template not found in this release: ${CADDY_TEMPLATE}"
+  fi
+  if [ ! -f "${CADDY_CONFIG_FILE}" ]; then
+    fail "Live Caddyfile not found: ${CADDY_CONFIG_FILE}"
+  fi
+  if ! docker inspect "${CADDY_CONTAINER}" >/dev/null 2>&1; then
+    fail "Caddy container not found: ${CADDY_CONTAINER}"
+  fi
+
+  CADDY_CANDIDATE="$(new_tmp_file)"
+  # Same substitutions the installer's render_caddyfile performs, so the
+  # generated file is byte-identical to what a fresh install produces.
+  sed \
+    -e "s|__PANEL_DOMAIN__|${PANEL_DOMAIN}|g" \
+    -e "s|__API_CONTAINER__|${API_CONTAINER}|g" \
+    -e "s|__API_PORT__|3001|g" \
+    -e "s|__WEB_CONTAINER__|${WEB_CONTAINER}|g" \
+    -e "s|__WEB_PORT__|80|g" \
+    "${CADDY_TEMPLATE}" > "${CADDY_CANDIDATE}"
+
+  if grep -q '__[A-Z_]\{2,\}__' "${CADDY_CANDIDATE}"; then
+    fail "Rendered Caddyfile still contains unreplaced template placeholders."
+  fi
+
+  if cmp -s "${CADDY_CANDIDATE}" "${CADDY_CONFIG_FILE}"; then
+    info "Caddy configuration is already identical to the live file — nothing to deploy."
+  else
+    info "Validating the candidate Caddyfile with Caddy before touching the live file..."
+    if ! docker exec -i "${CADDY_CONTAINER}" caddy validate --adapter caddyfile --config - \
+      < "${CADDY_CANDIDATE}" >/dev/null 2>&1; then
+      info "Candidate Caddyfile failed validation. Live configuration untouched."
+      fail "Caddy configuration validation failed; nothing was changed."
+    fi
+    info "Candidate Caddyfile is valid."
+
+    CADDY_CONFIG_BACKUP="${CADDY_CONFIG_FILE}.backup-${RELEASE_TIMESTAMP}"
+    cp "${CADDY_CONFIG_FILE}" "${CADDY_CONFIG_BACKUP}"
+    info "Previous Caddyfile backed up to ${CADDY_CONFIG_BACKUP}"
+
+    cp "${CADDY_CANDIDATE}" "${CADDY_CONFIG_FILE}"
+    chmod 644 "${CADDY_CONFIG_FILE}"
+    CADDY_CONFIG_REPLACED=1
+    info "New Caddyfile installed."
+
+    if ! docker exec "${CADDY_CONTAINER}" caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+      restore_caddy_config_on_failure
+      fail "Caddy reload failed with the new configuration; the previous Caddyfile was restored."
+    fi
+    info "Caddy reloaded with the new configuration."
+  fi
 fi
 
 # ============================================================

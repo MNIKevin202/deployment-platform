@@ -32,6 +32,7 @@ WEB_IMAGE_REPOSITORY="deployment-platform-web"
 PLATFORM_NETWORK="deployment-platform"
 MANAGED_APPS_NETWORK="deployment-apps"
 API_DATA_VOLUME="deployment-platform-api-data"
+CADDY_CONTAINER="deployment-platform-caddy"
 # The panel URL is MANDATORY: it is the platform's own dashboard, it
 # exists on every installation, and a release that cannot serve it is not
 # a successful release.
@@ -245,6 +246,7 @@ load_config_file() {
       PLATFORM_NETWORK) PLATFORM_NETWORK="${value}" ;;
       MANAGED_APPS_NETWORK) MANAGED_APPS_NETWORK="${value}" ;;
       API_DATA_VOLUME) API_DATA_VOLUME="${value}" ;;
+      CADDY_CONTAINER) CADDY_CONTAINER="${value}" ;;
       PUBLIC_URL_PANEL) PUBLIC_URL_PANEL="${value}" ;;
       PUBLIC_URL_WIZARD_TEST) PUBLIC_URL_WIZARD_TEST="${value}" ;;
       PUBLIC_URL_SQLITE_TEST) PUBLIC_URL_SQLITE_TEST="${value}" ;;
@@ -382,6 +384,24 @@ classify_path_scope() {
       printf 'none'
       ;;
   esac
+}
+
+# Files that determine the CONTENT of the generated live Caddyfile. A
+# change to any of them is a real, deployable change to a running server
+# even though it touches neither apps/api nor apps/web. Without this,
+# such a change was classified as documentation/script-only, committed
+# locally, and never reached the VPS — which is exactly how a broken
+# /api prefix stayed live while every check reported success.
+#
+# Per-app route files are NOT here: those are generated at runtime by the
+# platform API itself, not by this repository.
+is_caddy_config_path() {
+  case "$1" in
+    installer/templates/Caddyfile.template|installer/lib/caddy.sh)
+      return 0
+      ;;
+  esac
+  return 1
 }
 
 extract_tag() {
@@ -615,6 +635,21 @@ run_remote_deploy_and_report() {
     --url-panel "${PUBLIC_URL_PANEL}"
     --current-symlink "${VPS_SOURCE_DIR}/current"
   )
+
+  # Caddy configuration deployment. The panel domain is derived from the
+  # already-configured panel URL, and the live Caddyfile sits alongside
+  # the routes directory, so no new operator configuration is required.
+  if [ "${CADDY_CONFIG_CHANGED}" = "yes" ]; then
+    local panel_domain_only="${PUBLIC_URL_PANEL#https://}"
+    panel_domain_only="${panel_domain_only#http://}"
+    panel_domain_only="${panel_domain_only%%/*}"
+    remote_args+=(
+      --deploy-caddy-config
+      --panel-domain "${panel_domain_only}"
+      --caddy-container "${CADDY_CONTAINER}"
+      --caddy-config-file "$(dirname "${CADDY_ROUTES_DIR}")/Caddyfile"
+    )
+  fi
 
   # Optional smoke-test URLs are only passed when actually configured.
   # Passing an empty value would look like a supplied-but-blank required
@@ -1108,6 +1143,7 @@ fi
 API_CHANGED="no"
 WEB_CHANGED="no"
 INSTALLER_CHANGED="no"
+CADDY_CONFIG_CHANGED="no"
 
 for path in "${ALL_CHANGED_PATHS[@]:-}"; do
   [ -n "${path:-}" ] || continue
@@ -1121,16 +1157,22 @@ for path in "${ALL_CHANGED_PATHS[@]:-}"; do
       INSTALLER_CHANGED="yes"
       ;;
   esac
+  if is_caddy_config_path "${path}"; then
+    CADDY_CONFIG_CHANGED="yes"
+  fi
 done
 
+# A Caddy configuration change is deployable even with no API/web
+# change, so it must not be folded into the local-commit-only path.
 DOCS_ONLY="no"
-if [ "${API_CHANGED}" = "no" ] && [ "${WEB_CHANGED}" = "no" ]; then
+if [ "${API_CHANGED}" = "no" ] && [ "${WEB_CHANGED}" = "no" ] && [ "${CADDY_CONFIG_CHANGED}" = "no" ]; then
   DOCS_ONLY="yes"
 fi
 
 info "API changed: ${API_CHANGED}"
 info "Web changed: ${WEB_CHANGED}"
 info "Installer changed: ${INSTALLER_CHANGED}"
+info "Caddy configuration changed: ${CADDY_CONFIG_CHANGED}"
 info "Documentation/script-only change: ${DOCS_ONLY}"
 
 # The exact set of files this release would stage. Computed here (not
@@ -1555,11 +1597,16 @@ info "Source sync verified. This release will build from ${REMOTE_RELEASE_DIR} o
 # 8. REMOTE PRE-FLIGHT / DEPLOY / RELEASE COMPLETE
 # ============================================================
 
+# "caddy" is a configuration-only deploy: no image is built and no
+# container is swapped. It is selected when the release changes the Caddy
+# configuration but neither application image.
 DEPLOY_MODE="api"
 if [ "${API_CHANGED}" = "yes" ] && [ "${WEB_CHANGED}" = "yes" ]; then
   DEPLOY_MODE="both"
 elif [ "${WEB_CHANGED}" = "yes" ]; then
   DEPLOY_MODE="web"
+elif [ "${API_CHANGED}" = "no" ]; then
+  DEPLOY_MODE="caddy"
 fi
 
 if run_remote_deploy_and_report; then

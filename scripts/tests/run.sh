@@ -470,6 +470,17 @@ run_plan_only() {
   ) 2>&1 || true
 }
 
+# The version-proposal previews below only render when the API is part of
+# the release. Rather than depending on whatever the working tree happens
+# to contain, this stages a throwaway API-scoped marker file for the
+# duration of these tests and removes it immediately afterwards. Without
+# it, a tree containing only installer changes would silently skip every
+# version assertion.
+API_SCOPE_MARKER="$PROJECT_DIR/apps/api/.release-scope-test-marker"
+cleanup_api_scope_marker() { rm -f "$API_SCOPE_MARKER"; }
+trap 'cleanup_api_scope_marker; restore_release_config; rm -rf "$TMP_ROOT"' EXIT
+printf 'release-scope test marker; safe to delete\n' > "$API_SCOPE_MARKER"
+
 PLAN_DISABLED="$(run_plan_only "" "")"
 assert_contains "--plan-only reports the panel URL as mandatory" "$PLAN_DISABLED" "Panel (mandatory):      https://panel.devminted.com"
 assert_contains "--plan-only reports a disabled wizard check" "$PLAN_DISABLED" "Wizard test:            skipped (not configured)"
@@ -516,6 +527,14 @@ assert_contains "an explicit override beats the bootstrap initial version" "$PLA
 
 assert_failure "an invalid override is rejected before anything runs" \
   bash -c "cd '$PROJECT_DIR' && PATH='$FAKE_BIN:$REAL_PATH' bash ./release.sh --plan-only --api-version not-a-version"
+
+# With the marker removed, this repository's real tree is exercised. The
+# Caddy template IS part of this change, so the plan must report a Caddy
+# configuration change and must NOT fall into the local-commit-only path.
+cleanup_api_scope_marker
+PLAN_CADDY_SCOPE="$(run_plan_only "" "")"
+assert_contains "the plan reports the Caddy configuration scope" "$PLAN_CADDY_SCOPE" "Caddy configuration changed:"
+assert_contains "a Caddy config change is not documentation/script-only" "$PLAN_CADDY_SCOPE" "docs/script-only: no"
 
 echo "=== release-remote.sh argument validation with optional URLs ==="
 # Direct argument-validation regression: the first release after an
@@ -794,6 +813,91 @@ assert_failure "an SSH_KEY containing whitespace is rejected up front" \
   bash -c "source '$HELPERS_FILE'; SSH_KEY='/tmp/my key'; validate_ssh_key_path"
 assert_success "an ordinary SSH_KEY path is accepted" \
   bash -c "source '$HELPERS_FILE'; SSH_KEY='/Users/x/.ssh/id_ed25519'; validate_ssh_key_path"
+
+
+echo "=== Caddy configuration deployment scope ==="
+# A Caddy routing change touches neither apps/api nor apps/web, so the
+# old scope logic classified it as documentation/script-only, committed
+# it locally, and never contacted the VPS. That is how a broken /api
+# prefix stayed live. These assertions pin the corrected contract.
+assert_success "release.sh classifies the Caddy template as config" \
+  bash -c "source '$HELPERS_FILE'; is_caddy_config_path installer/templates/Caddyfile.template"
+assert_success "release.sh classifies the Caddy library as config" \
+  bash -c "source '$HELPERS_FILE'; is_caddy_config_path installer/lib/caddy.sh"
+assert_failure "an unrelated installer file is not a Caddy config change" \
+  bash -c "source '$HELPERS_FILE'; is_caddy_config_path installer/lib/packages.sh"
+assert_failure "an API source file is not a Caddy config change" \
+  bash -c "source '$HELPERS_FILE'; is_caddy_config_path apps/api/src/server.ts"
+assert_failure "a doc is not a Caddy config change" \
+  bash -c "source '$HELPERS_FILE'; is_caddy_config_path docs/RELEASE_AUTOMATION.md"
+
+RELEASE_TEXT="$(cat "$RELEASE_SH")"
+assert_contains "a Caddy config change is excluded from the local-only path" "$RELEASE_TEXT" \
+  '[ "${CADDY_CONFIG_CHANGED}" = "no" ]'
+assert_contains "a Caddy-only change selects the config-only deploy mode" "$RELEASE_TEXT" 'DEPLOY_MODE="caddy"'
+assert_contains "the deploy passes the caddy config flag" "$RELEASE_TEXT" "--deploy-caddy-config"
+assert_contains "the deploy passes the panel domain" "$RELEASE_TEXT" "--panel-domain"
+assert_contains "the deploy passes the caddy container" "$RELEASE_TEXT" "--caddy-container"
+assert_contains "the deploy passes the live Caddyfile path" "$RELEASE_TEXT" "--caddy-config-file"
+assert_contains "change detection reports the Caddy scope" "$RELEASE_TEXT" "Caddy configuration changed:"
+
+REMOTE_TEXT="$(cat "$REMOTE_SH")"
+assert_contains "the remote script accepts the caddy mode" "$REMOTE_TEXT" "api, web, both, caddy"
+assert_contains "the remote validates the candidate before touching the live file" "$REMOTE_TEXT" "caddy validate --adapter caddyfile --config -"
+assert_contains "the remote backs up the previous Caddyfile" "$REMOTE_TEXT" "CADDY_CONFIG_BACKUP"
+assert_contains "the remote reloads Caddy rather than replacing the container" "$REMOTE_TEXT" "caddy reload --config /etc/caddy/Caddyfile"
+assert_contains "a failed reload restores the previous configuration" "$REMOTE_TEXT" "restore_caddy_config_on_failure"
+assert_contains "config rollback is wired into the automatic rollback path" "$REMOTE_TEXT" "restore_caddy_config_on_failure"
+assert_contains "the rendered candidate is checked for leftover placeholders" "$REMOTE_TEXT" "unreplaced template placeholders"
+assert_contains "an identical config is a no-op" "$REMOTE_TEXT" "already identical to the live file"
+assert_contains "caddy mode requires the panel domain" "$REMOTE_TEXT" "--deploy-caddy-config requires --"
+
+# Config-only mode must build and swap nothing.
+assert_failure "caddy mode is not treated as an image-building mode" \
+  bash -c "grep -qE '\\\[ \"\\\$\\{MODE\\}\" = \"caddy\" \\\] \\|\\| \\\[ \"\\\$\\{MODE\\}\" = \"both\" \\\]' '$REMOTE_SH'"
+
+# Argument validation: caddy mode needs no semantic version at all.
+REMOTE_CADDY_ARGS="$(
+  bash "$REMOTE_SH" \
+    --mode caddy \
+    --source-dir /nonexistent/release-dir \
+    --auth-file /nonexistent/auth.env \
+    --caddy-routes-dir /nonexistent/routes \
+    --api-container deployment-platform-api \
+    --web-container deployment-platform-web \
+    --api-image-repo deployment-platform-api \
+    --web-image-repo deployment-platform-web \
+    --platform-network deployment-platform \
+    --apps-network deployment-apps \
+    --api-data-volume deployment-platform-api-data \
+    --url-panel https://panel.example.com \
+    --deploy-caddy-config \
+    --panel-domain panel.example.com \
+    --caddy-container deployment-platform-caddy \
+    --caddy-config-file /nonexistent/Caddyfile \
+    --current-symlink /nonexistent/current 2>&1 || true
+)"
+assert_not_contains "caddy mode does not demand an api version" "$REMOTE_CADDY_ARGS" "--api-version invalid"
+assert_not_contains "caddy mode does not demand a web version" "$REMOTE_CADDY_ARGS" "--web-version invalid"
+assert_not_contains "caddy mode is an accepted mode" "$REMOTE_CADDY_ARGS" "--mode must be one of"
+
+REMOTE_CADDY_MISSING="$(
+  bash "$REMOTE_SH" \
+    --mode caddy \
+    --source-dir /nonexistent/release-dir \
+    --auth-file /nonexistent/auth.env \
+    --caddy-routes-dir /nonexistent/routes \
+    --api-container deployment-platform-api \
+    --web-container deployment-platform-web \
+    --api-image-repo deployment-platform-api \
+    --web-image-repo deployment-platform-web \
+    --platform-network deployment-platform \
+    --apps-network deployment-apps \
+    --api-data-volume deployment-platform-api-data \
+    --url-panel https://panel.example.com \
+    --current-symlink /nonexistent/current 2>&1 || true
+)"
+assert_contains "caddy mode without a panel domain is rejected" "$REMOTE_CADDY_MISSING" "requires --panel-domain"
 
 
 echo "=== Secrets never appear in release output ==="

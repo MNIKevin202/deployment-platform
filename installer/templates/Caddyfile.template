@@ -12,7 +12,28 @@
 __PANEL_DOMAIN__ {
 	encode gzip
 
-	handle /api/* {
+	# handle_path, NOT handle: the API registers its routes WITHOUT an
+	# /api prefix (/auth/login, /auth/session, /apps, /health, ...) while
+	# the browser calls them under /api/*. handle_path strips exactly the
+	# matched prefix before proxying, so:
+	#
+	#   browser /api/auth/login   -> API /auth/login
+	#   browser /api/apps?x=1     -> API /apps?x=1   (query untouched)
+	#   browser /api/             -> API /
+	#
+	# With plain `handle`, the /api prefix was forwarded intact, no API
+	# route matched, and every call fell through to the authentication
+	# hook — which answered 401 {"success":false,"message":"Authentication
+	# required"} even for the login request itself, making login
+	# impossible. The fix belongs here and NOT in the API's public-path
+	# allowlist: adding /api/... entries there would paper over the proxy
+	# defect while leaving every other endpoint mis-routed.
+	#
+	# A bare /api (no trailing slash) does not match /api/* and therefore
+	# falls through to the web handler below. That is deliberate: the
+	# frontend never requests it, and keeping the matcher narrow avoids
+	# widening the surface that reaches the backend.
+	handle_path /api/* {
 		reverse_proxy __API_CONTAINER__:__API_PORT__
 	}
 

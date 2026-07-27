@@ -197,8 +197,9 @@ made now but want to deploy later (or deploy manually).
 
 ## Script-only / documentation-only releases
 
-If the computed release scope touches neither `apps/api/` nor
-`apps/web/` (a docs or tooling-only change), `release.sh`:
+If the computed release scope touches neither `apps/api/`, `apps/web/`,
+nor any Caddy configuration source (a docs or tooling-only change),
+`release.sh`:
 
 - still runs the full local build and test suite (`--verify-only`
   behavior is unaffected),
@@ -213,6 +214,100 @@ You'll see a `Local-only release` summary instead of a deployment
 report. There is currently no flag to force a script-only change to also
 contact the VPS — that is intentionally left for a future, explicit
 option rather than being inferred automatically.
+
+## Caddy configuration releases
+
+A change to the reverse-proxy configuration is neither an API change nor
+a web change, but it still has to reach the server. Without an explicit
+scope for it, a Caddyfile fix would be classified as script-only and
+committed locally forever while the live server kept its old routing.
+
+`release.sh` therefore recognises a third deployable scope. These paths
+are Caddy configuration sources:
+
+- `installer/templates/Caddyfile.template`
+- `installer/lib/caddy.sh`
+
+When one of them changes and no application code does, the plan reports:
+
+```
+API changed: no
+Web changed: no
+Caddy configuration changed: yes
+Documentation/script-only change: no
+```
+
+and the release runs in `caddy` deploy mode:
+
+- no image is built, and **no version number is requested** — there is
+  no artifact to version,
+- source is still synced into a new immutable release directory, so the
+  server's checkout matches the commit,
+- the Caddyfile is re-rendered on the server **from the synced
+  template**, never hand-edited, with the same placeholder substitution
+  the installer performs,
+- rendering fails loudly if any `__PLACEHOLDER__` survives,
+- the result is validated with the running Caddy binary
+  (`caddy validate --adapter caddyfile`) *before* it is installed,
+- an identical render is a no-op (no reload, no backup churn),
+- the previous file is backed up to
+  `<Caddyfile>.backup-<release-timestamp>` and restored automatically if
+  installation, reload, or verification fails,
+- the restore is also the first action taken by the normal rollback path,
+  so a Caddy change can never be left half-applied,
+- verification runs exactly as it does for an application release.
+
+If the same release also changes application code, the Caddy stage runs
+in addition to the image deploy, immediately before verification.
+
+## The `/api` prefix contract
+
+The panel's browser bundle calls the API at `/api/...`. The API itself
+registers its routes **without** a prefix (`/auth/login`, `/auth/session`,
+`/apps`, …). Caddy is the component responsible for reconciling the two,
+and the generated Caddyfile does it with:
+
+```
+handle_path /api/* {
+	reverse_proxy <api-container>:<api-port>
+}
+
+handle {
+	reverse_proxy <web-container>:<web-port>
+}
+```
+
+`handle_path` is `handle` plus an implicit `uri strip_prefix /api`, so
+exactly one leading `/api` segment is removed and the remainder of the
+path — and the entire query string — is forwarded unchanged:
+
+| Public request        | Reaches the API as |
+| --------------------- | ------------------ |
+| `/api/auth/login`     | `/auth/login`      |
+| `/api/auth/session`   | `/auth/session`    |
+| `/api/apps?x=1`       | `/apps?x=1`        |
+| `/api/api/apps`       | `/api/apps`        |
+
+Two deliberate properties:
+
+- **Bare `/api` (no trailing slash) is not matched.** Caddy's `/api/*`
+  path matcher matches `/api/` and below, not `/api` itself, so a bare
+  `/api` falls through to the web app like any other non-API path. The
+  frontend never requests it; leaving it with the web app avoids
+  advertising the backend at a path nothing uses.
+- **Per-app routes are unaffected.** `import /etc/caddy/routes/*.caddy`
+  brings in each managed app's own site block, which is matched by host
+  before any of these path handlers are considered.
+
+This belongs in Caddy, not in the API. The historical failure mode was
+`handle /api/*`, which forwarded the prefix unchanged: the API saw
+`/api/auth/login`, no route matched, and the authentication hook returned
+`401 {"message":"Authentication required"}` for every login attempt. The
+tempting "fix" — adding `/api/auth/login` to the authentication hook's
+public path allowlist — would have papered over a proxy defect by
+widening the security boundary, and would have left every other endpoint
+(`/api/apps`, `/api/health`, …) broken. `installer/tests/run.sh` asserts
+that no such allowlist entry exists.
 
 ## Version overrides
 

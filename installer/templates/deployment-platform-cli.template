@@ -25,7 +25,23 @@ Usage: deployment-platform <command>
   show-config            Show non-secret configuration (never secret values)
   logs api|web|caddy     Tail a container's logs
   backup-database         Back up the SQLite database now
+  reset-admin-password    Rotate the administrator password (interactive, hidden input)
   uninstall-preview       Show what an uninstall would remove, without changing anything
+
+reset-admin-password:
+  Prompts for a new administrator password (hidden, confirmed, minimum 12
+  characters), computes the canonical scrypt hash in the same sandboxed
+  helper container the installer uses, atomically updates
+  ADMIN_PASSWORD_HASH, and recreates the API container so it reads the new
+  value. ADMIN_USERNAME, SESSION_SECRET, COOKIE_SECURE and
+  CREDENTIAL_ENCRYPTION_KEY are preserved unchanged. The previous secrets
+  file is backed up, and any failure rolls back to it automatically.
+
+  Non-interactive use accepts a mode-600 file only — never a password on
+  the command line, which would be visible in the process list and shell
+  history:
+
+    sudo deployment-platform reset-admin-password --password-file /root/new-password
 EOF
 }
 
@@ -88,6 +104,46 @@ case "$cmd" in
     # shellcheck source=/dev/null
     source "${INSTALLER_DIR}/lib/platform.sh"
     backup_database
+    ;;
+  reset-admin-password)
+    require_root_for reset-admin-password
+    password_file_arg=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        (--password-file)
+          password_file_arg="${2:-}"
+          shift 2
+          ;;
+        (*)
+          echo "Unknown option for reset-admin-password: $1" >&2
+          echo "A plaintext password is never accepted as an argument; use --password-file <mode-600-file>." >&2
+          exit 1
+          ;;
+      esac
+    done
+    # Sourced rather than re-implemented: rotation reuses the installer's
+    # own hardened hashing helper and container-creation arguments.
+    export DEPLOYMENT_PLATFORM_INSTALLER_ROOT="${INSTALLER_DIR}"
+    export INSTALL_ROOT
+    export DRY_RUN=0
+    # shellcheck source=/dev/null
+    source "${INSTALLER_DIR}/lib/common.sh"
+    # shellcheck source=/dev/null
+    source "${INSTALLER_DIR}/lib/prompts.sh"
+    # shellcheck source=/dev/null
+    source "${INSTALLER_DIR}/lib/docker.sh"
+    # shellcheck source=/dev/null
+    source "${INSTALLER_DIR}/lib/caddy.sh"
+    # shellcheck source=/dev/null
+    source "${INSTALLER_DIR}/lib/platform.sh"
+    # shellcheck source=/dev/null
+    source "${INSTALLER_DIR}/lib/verify.sh"
+    # shellcheck source=/dev/null
+    source "${INSTALLER_DIR}/lib/secrets.sh"
+    # shellcheck source=/dev/null
+    source "${INSTALLER_DIR}/lib/rollback.sh"
+    install_trap_handlers
+    rotate_admin_password "${password_file_arg}"
     ;;
   uninstall-preview)
     require_root_for uninstall-preview

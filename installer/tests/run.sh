@@ -1463,10 +1463,44 @@ docker() {
   esac
   return 0
 }
+# Serves three different callers:
+#  - verify_public_domain, which asks only for %{http_code}
+#  - verify_public_api_prefix, which asks for the body plus a trailing
+#    status line and requires an unauthenticated session shape
+#  - verify_public_login_rejection, which POSTs and requires the login
+#    handler's own rejection message
 curl() {
+  local wants_body=0 is_login=0
+  for arg in "$@"; do
+    case "$arg" in
+      (*'%{http_code}'*)
+        case "$arg" in
+          (*'\n'*) wants_body=1 ;;
+        esac
+        ;;
+      (*/api/auth/login) is_login=1 ;;
+    esac
+  done
+  # Drain the piped request body only for the POST caller; other callers
+  # share the harness's stdin and must not have it consumed.
+  if [ "$is_login" -eq 1 ]; then
+    cat >/dev/null 2>&1 || true
+  fi
   if [ "${FAKE_VERIFY_MODE:-healthy}" = "broken" ]; then
+    if [ "$wants_body" -eq 1 ]; then
+      printf '{"success":false,"message":"Authentication required"}\n401'
+      return 0
+    fi
     printf '000'
     return 7
+  fi
+  if [ "$is_login" -eq 1 ]; then
+    printf '{"success":false,"message":"Invalid username or password"}\n401'
+    return 0
+  fi
+  if [ "$wants_body" -eq 1 ]; then
+    printf '{"authenticated":false}\n200'
+    return 0
   fi
   printf '200'
   return 0
@@ -1529,8 +1563,8 @@ API_PROBE_SRC="$(cat "$INSTALLER_DIR/lib/verify.sh")"
 assert_contains "the API check runs inside the API container" "$API_PROBE_SRC" 'docker exec "$API_CONTAINER_NAME" node -e'
 assert_contains "the API check targets 127.0.0.1 in-container" "$API_PROBE_SRC" 'host: "127.0.0.1"'
 assert_contains "the API check queries the session endpoint" "$API_PROBE_SRC" '/api/auth/session'
-assert_contains "the API check accepts 200/401/403/404 as healthy" "$API_PROBE_SRC" "[200, 401, 403, 404]"
-assert_contains "the API check description states what it proves" "$API_PROBE_SRC" "API HTTP server responds inside its container"
+assert_contains "the API check requires an unauthenticated session, not any status" "$API_PROBE_SRC" "reason=unauthenticated-session status=200"
+assert_contains "the API check description states what it proves" "$API_PROBE_SRC" "API serves its real backend route inside the container"
 assert_failure "no host-local curl to 127.0.0.1:3001 remains" \
   bash -c "grep -v '^[[:space:]]*#' '$INSTALLER_DIR/lib/verify.sh' | grep -q 'curl.*127\.0\.0\.1'"
 assert_failure "the node -e process.exit(0) placeholder check is gone" \
@@ -2026,7 +2060,7 @@ hash -r
 API_PROBE_ARGS="$(cat "$API_PROBE_ARGV")"
 assert_contains "the probe runs docker exec" "$API_PROBE_ARGS" "exec"
 assert_contains "DP_VERIFY_PORT is passed as a docker exec environment variable" "$API_PROBE_ARGS" "DP_VERIFY_PORT=3001"
-assert_contains "DP_VERIFY_PATH is passed as a docker exec environment variable" "$API_PROBE_ARGS" "DP_VERIFY_PATH=/api/auth/session"
+assert_contains "DP_VERIFY_PATH is passed as a docker exec environment variable" "$API_PROBE_ARGS" "DP_VERIFY_PATH=/auth/session"
 assert_contains "DP_VERIFY_TIMEOUT_MS is passed as a docker exec environment variable" "$API_PROBE_ARGS" "DP_VERIFY_TIMEOUT_MS=5000"
 assert_contains "the probe targets the API container" "$API_PROBE_ARGS" "deployment-platform-api"
 assert_contains "the probe invokes node with -e" "$API_PROBE_ARGS" "node"
@@ -2038,7 +2072,8 @@ assert_contains "the probe script reads its port from the environment" "$API_PRO
 assert_contains "the probe script reads its path from the environment" "$API_PROBE_SCRIPT" "process.env.DP_VERIFY_PATH"
 assert_contains "the probe script reads its timeout from the environment" "$API_PROBE_SCRIPT" "process.env.DP_VERIFY_TIMEOUT_MS"
 assert_contains "the probe connects to 127.0.0.1 inside the container" "$API_PROBE_SCRIPT" 'host: "127.0.0.1"'
-assert_contains "the probe accepts 200/401/403/404" "$API_PROBE_SCRIPT" "[200, 401, 403, 404]"
+assert_contains "the probe requires authenticated:false" "$API_PROBE_SCRIPT" "parsed.authenticated !== false"
+assert_contains "the probe classifies an auth-hook rejection" "$API_PROBE_SCRIPT" "reason=auth-hook-rejected"
 assert_contains "the probe discards the response body" "$API_PROBE_SCRIPT" "response.resume()"
 assert_failure "no host-published API port is required (no host-side curl remains)" \
   bash -c "grep -v '^[[:space:]]*#' '$INSTALLER_DIR/lib/verify.sh' | grep -q 'curl.*127\.0\.0\.1'"
@@ -2098,16 +2133,28 @@ const listen = (h) => new Promise((res) => {
   s.listen(0, "127.0.0.1", () => res({ s, port: s.address().port }));
 });
 const lines = [];
-for (const code of [200, 401, 403, 404, 500]) {
+// The healthy case is HTTP 200 with an unauthenticated session body.
+// Every other shape must be rejected and classified.
+const cases = [
+  ["healthy", 200, JSON.stringify({ authenticated: false })],
+  ["authhook", 401, JSON.stringify({ success: false, message: "Authentication required" })],
+  ["forbidden", 403, JSON.stringify({ success: false })],
+  ["notfound", 404, JSON.stringify({ message: "Route not found" })],
+  ["servererror", 500, JSON.stringify({ error: "boom" })],
+  ["malformed", 200, "this is not json"],
+  ["wrongshape", 200, JSON.stringify({ authenticated: true, username: "someone" })],
+  ["missingfield", 200, JSON.stringify({ ok: true })]
+];
+for (const [label, code, payload] of cases) {
   const { s, port } = await listen((q, r) => {
-    r.writeHead(code, { "Set-Cookie": "sess=MUST_NOT_APPEAR" });
-    r.end("BODY_MUST_NOT_APPEAR");
+    r.writeHead(code, { "Set-Cookie": "sess=MUST_NOT_APPEAR", "content-type": "application/json" });
+    r.end(payload);
   });
-  const r = await run({ DP_VERIFY_PORT: String(port), DP_VERIFY_PATH: "/api/auth/session", DP_VERIFY_TIMEOUT_MS: "5000" });
+  const r = await run({ DP_VERIFY_PORT: String(port), DP_VERIFY_PATH: "/auth/session", DP_VERIFY_TIMEOUT_MS: "5000" });
   s.close();
-  lines.push(`http${code} exit=${r.code} out=${r.out}`);
+  lines.push(`${label} exit=${r.code} out=${r.out}`);
 }
-let r = await run({ DP_VERIFY_PORT: "1", DP_VERIFY_PATH: "/api/auth/session", DP_VERIFY_TIMEOUT_MS: "5000" });
+let r = await run({ DP_VERIFY_PORT: "1", DP_VERIFY_PATH: "/auth/session", DP_VERIFY_TIMEOUT_MS: "5000" });
 lines.push(`refused exit=${r.code} out=${r.out}`);
 const hang = await listen(() => {});
 r = await run({ DP_VERIFY_PORT: String(hang.port), DP_VERIFY_PATH: "/x", DP_VERIFY_TIMEOUT_MS: "300" });
@@ -2118,15 +2165,21 @@ lines.push(`badconfig exit=${r.code} out=${r.out}`);
 console.log(lines.join("\n"));
 HARNESSEOF
   REAL_PROBE_OUT="$(node "$REAL_PROBE_HARNESS" "$REAL_PROBE_JS" 2>/dev/null || true)"
-  for healthy_code in 200 401 403 404; do
-    assert_contains "real probe: HTTP ${healthy_code} exits 0" "$REAL_PROBE_OUT" "http${healthy_code} exit=0"
-  done
-  assert_contains "real probe: HTTP 500 exits 1" "$REAL_PROBE_OUT" "http500 exit=1"
+  # Only an unauthenticated 200 session is healthy.
+  assert_contains "real probe: 200 {authenticated:false} is healthy" "$REAL_PROBE_OUT" "healthy exit=0 out=reason=unauthenticated-session status=200"
+  # These four are exactly what the old probe wrongly accepted.
+  assert_contains "real probe: a 401 auth-hook rejection is UNHEALTHY" "$REAL_PROBE_OUT" "authhook exit=1 out=reason=auth-hook-rejected status=401"
+  assert_contains "real probe: a 403 is UNHEALTHY" "$REAL_PROBE_OUT" "forbidden exit=1 out=reason=auth-hook-rejected status=403"
+  assert_contains "real probe: a 404 is UNHEALTHY and named" "$REAL_PROBE_OUT" "notfound exit=1 out=reason=route-not-found status=404"
+  assert_contains "real probe: a 500 is UNHEALTHY" "$REAL_PROBE_OUT" "servererror exit=1 out=reason=unexpected-http-status status=500"
+  assert_contains "real probe: a malformed body is UNHEALTHY and named" "$REAL_PROBE_OUT" "malformed exit=1 out=reason=malformed-json-body status=200"
+  assert_contains "real probe: an authenticated session is UNHEALTHY" "$REAL_PROBE_OUT" "wrongshape exit=1 out=reason=unexpected-session-state status=200"
+  assert_contains "real probe: a missing authenticated field is UNHEALTHY" "$REAL_PROBE_OUT" "missingfield exit=1 out=reason=unexpected-session-state status=200"
   assert_contains "real probe: connection refusal exits 1 with ECONNREFUSED" "$REAL_PROBE_OUT" "refused exit=1 out=reason=connection-error code=ECONNREFUSED"
   assert_contains "real probe: timeout exits 1" "$REAL_PROBE_OUT" "timeout exit=1 out=reason=timeout"
   assert_contains "real probe: missing configuration exits 1" "$REAL_PROBE_OUT" "badconfig exit=1 out=reason=bad-probe-configuration"
-  assert_contains "real probe: environment variables reach the script (status echoed)" "$REAL_PROBE_OUT" "http401 exit=0 out=reason=http-status status=401"
   assert_not_contains "real probe never emits response cookies" "$REAL_PROBE_OUT" "MUST_NOT_APPEAR"
+  assert_not_contains "real probe never emits response bodies" "$REAL_PROBE_OUT" "BODY_MUST_NOT_APPEAR"
 else
   echo "[SKIP] node not installed — skipping real-loopback API probe behaviour checks (fake-docker contract checks above still ran)."
 fi
@@ -2197,6 +2250,167 @@ FOREIGN_PORTS_VIS="$(cat "$VERIFY_VIS")"
 restore_verify_fixture
 hash -r
 assert_contains "an unmanaged listener still produces a conflict warning" "$FOREIGN_PORTS_VIS" "NOT this installer's"
+
+echo
+echo "=== Caddy /api prefix routing contract ==="
+# The live defect: the template used `handle /api/*`, which forwards the
+# /api prefix unchanged. The API registers its routes WITHOUT that prefix,
+# so nothing matched and every call — including login itself — fell
+# through to the authentication hook as 401 "Authentication required".
+CADDY_TEMPLATE_FILE="$INSTALLER_DIR/templates/Caddyfile.template"
+CADDY_TEMPLATE_TEXT="$(cat "$CADDY_TEMPLATE_FILE")"
+
+assert_contains "the template strips the /api prefix with handle_path" "$CADDY_TEMPLATE_TEXT" "handle_path /api/*"
+assert_failure "the template no longer uses the non-stripping handle /api/* form" \
+  bash -c "grep -v '^[[:space:]]*#' '$CADDY_TEMPLATE_FILE' | grep -qE '^[[:space:]]*handle /api/\*'"
+assert_contains "the API container is still the /api upstream" "$CADDY_TEMPLATE_TEXT" "reverse_proxy __API_CONTAINER__:__API_PORT__"
+assert_contains "non-API routes still fall through to the web container" "$CADDY_TEMPLATE_TEXT" "reverse_proxy __WEB_CONTAINER__:__WEB_PORT__"
+assert_contains "per-app route import is still present" "$CADDY_TEMPLATE_TEXT" "import /etc/caddy/routes/*.caddy"
+
+# Render exactly as render_caddyfile does, then assert on the real output.
+CADDY_RENDERED="$TMP_ROOT/rendered.Caddyfile"
+sed \
+  -e "s|__PANEL_DOMAIN__|panel.example.com|g" \
+  -e "s|__API_CONTAINER__|deployment-platform-api|g" \
+  -e "s|__API_PORT__|3001|g" \
+  -e "s|__WEB_CONTAINER__|deployment-platform-web|g" \
+  -e "s|__WEB_PORT__|80|g" \
+  "$CADDY_TEMPLATE_FILE" > "$CADDY_RENDERED"
+CADDY_RENDERED_TEXT="$(cat "$CADDY_RENDERED")"
+assert_failure "the rendered Caddyfile has no unreplaced placeholders" \
+  grep -q '__[A-Z_]\{2,\}__' "$CADDY_RENDERED"
+assert_contains "the rendered Caddyfile strips /api" "$CADDY_RENDERED_TEXT" "handle_path /api/*"
+assert_contains "the rendered Caddyfile proxies the real API container" "$CADDY_RENDERED_TEXT" "reverse_proxy deployment-platform-api:3001"
+assert_contains "the rendered Caddyfile proxies the real web container" "$CADDY_RENDERED_TEXT" "reverse_proxy deployment-platform-web:80"
+
+# Path-mapping contract. handle_path performs `uri strip_prefix /api`,
+# which Caddy's own config adapter emits as
+# "strip_path_prefix": "/api" — confirmed against caddy v2.11.4 during
+# development. These cases encode the mapping the frontend depends on.
+map_api_path() {
+  # Models ONLY the documented strip: a path under /api/ loses exactly
+  # that one leading segment; the query string is not part of the path
+  # and is therefore untouched.
+  local full="$1" path query
+  path="${full%%\?*}"
+  case "$full" in
+    (*\?*) query="?${full#*\?}" ;;
+    (*) query="" ;;
+  esac
+  case "$path" in
+    (/api/*) printf '%s%s' "${path#/api}" "$query" ;;
+    (/api) printf 'NO_MATCH_WEB' ;;
+    (*) printf 'NO_MATCH_WEB' ;;
+  esac
+}
+assert_eq "/api/auth/login maps to the backend /auth/login" "/auth/login" "$(map_api_path /api/auth/login)"
+assert_eq "/api/auth/session maps to the backend /auth/session" "/auth/session" "$(map_api_path /api/auth/session)"
+assert_eq "/api/auth/logout maps to the backend /auth/logout" "/auth/logout" "$(map_api_path /api/auth/logout)"
+assert_eq "/api/apps?x=1 preserves path and query" "/apps?x=1" "$(map_api_path '/api/apps?x=1')"
+assert_eq "/api/apps/123/logs?tail=40 preserves nested path and query" "/apps/123/logs?tail=40" "$(map_api_path '/api/apps/123/logs?tail=40')"
+assert_eq "/api/ maps to the backend root" "/" "$(map_api_path /api/)"
+# Explicitly defined: a bare /api does not match /api/* and is served by
+# the web container. The frontend never requests it.
+assert_eq "a bare /api does not reach the backend" "NO_MATCH_WEB" "$(map_api_path /api)"
+assert_eq "a non-API panel route does not reach the backend" "NO_MATCH_WEB" "$(map_api_path /settings)"
+assert_eq "the panel root does not reach the backend" "NO_MATCH_WEB" "$(map_api_path /)"
+
+# The fix must live in Caddy, NOT in the API's public-path allowlist.
+AUTH_TS="$(cd "$INSTALLER_DIR/.." && pwd)/apps/api/src/auth.ts"
+if [ -f "$AUTH_TS" ]; then
+  assert_failure "no /api/-prefixed route was added to the auth public allowlist" \
+    bash -c "sed -n '/const publicPaths = new Set/,/\]/p' '$AUTH_TS' | grep -q '\"/api/'"
+  assert_contains "the auth allowlist still lists the real login route" "$(cat "$AUTH_TS")" '"/auth/login"'
+  assert_contains "the auth allowlist still lists the real session route" "$(cat "$AUTH_TS")" '"/auth/session"'
+fi
+
+echo
+echo "=== Installer verification probes the REAL backend route ==="
+VERIFY_SRC="$(cat "$INSTALLER_DIR/lib/verify.sh")"
+assert_contains "the container probe targets /auth/session" "$VERIFY_SRC" 'API_HEALTH_CHECK_PATH="/auth/session"'
+assert_failure "the container probe no longer targets /api/auth/session" \
+  bash -c "grep -q 'API_HEALTH_CHECK_PATH=\"/api/auth/session\"' '$INSTALLER_DIR/lib/verify.sh'"
+assert_contains "the public probe targets /api/auth/session through Caddy" "$VERIFY_SRC" 'API_PUBLIC_HEALTH_CHECK_PATH="/api/auth/session"'
+assert_contains "an unauthenticated session is required to be 200" "$VERIFY_SRC" "reason=unauthenticated-session status=200"
+assert_contains "the probe requires authenticated to be exactly false" "$VERIFY_SRC" "parsed.authenticated !== false"
+# 401 must no longer count as healthy — that is what hid this defect.
+assert_contains "an auth-hook rejection is classified distinctly" "$VERIFY_SRC" "reason=auth-hook-rejected"
+assert_contains "a 404 is classified distinctly" "$VERIFY_SRC" "reason=route-not-found"
+assert_contains "a malformed body is classified distinctly" "$VERIFY_SRC" "reason=malformed-json-body"
+assert_contains "a connectivity failure is classified distinctly" "$VERIFY_SRC" "reason=connection-error"
+assert_failure "401 is no longer on a healthy-status list" \
+  bash -c "grep -q 'healthy = \[200, 401' '$INSTALLER_DIR/lib/verify.sh'"
+assert_contains "the public prefix check exists" "$VERIFY_SRC" "verify_public_api_prefix"
+assert_contains "the public prefix check names handle_path in its remedy" "$VERIFY_SRC" "handle_path /api/"
+
+echo
+echo "=== End-to-end authentication smoke test ==="
+assert_contains "the login smoke test exists" "$VERIFY_SRC" "verify_public_login_rejection"
+assert_contains "the login smoke test runs as part of full verification" "$VERIFY_SRC" \
+  'verify_public_login_rejection "$panel_domain"'
+assert_contains "the login smoke test posts to the public /api path" "$VERIFY_SRC" 'API_PUBLIC_LOGIN_PATH="/api/auth/login"'
+assert_contains "the login smoke test expects the handler's rejection message" "$VERIFY_SRC" "Invalid username or password"
+assert_contains "an auth-hook rejection at login is diagnosed as a routing defect" "$VERIFY_SRC" \
+  "rejected by the authentication hook before reaching the login handler"
+assert_contains "an accepted placeholder credential is treated as an incident" "$VERIFY_SRC" \
+  "A deliberately invalid credential pair was ACCEPTED"
+assert_contains "rate limiting does not fail the smoke test" "$VERIFY_SRC" "rate limited; the login route was reached"
+# The credentials used must be self-evidently fake and must never be the
+# operator's. They are also piped on stdin, never placed in argv.
+assert_contains "the smoke test credentials are obvious placeholders" "$VERIFY_SRC" \
+  'API_LOGIN_SMOKE_PASSWORD="installer-verification-not-a-real-password"'
+assert_contains "the smoke test body is sent on stdin, not argv" "$VERIFY_SRC" "--data-binary @-"
+assert_failure "no --data with an inline credential literal in argv" \
+  bash -c "grep -q -- \"--data '{\" '$INSTALLER_DIR/lib/verify.sh'"
+# Both public checks must appear in a healthy run's visible output.
+assert_contains "a healthy run reports the public prefix check" "$HEALTHY_VIS" "the /api prefix is stripped correctly"
+assert_contains "a healthy run reports the login rejection check" "$HEALTHY_VIS" "the login handler ran and rejected the attempt"
+assert_contains "a broken run diagnoses the login path too" "$BROKEN_VIS" "Login rejection smoke test"
+
+echo
+echo "=== Admin password rotation command ==="
+assert_success "rotation prerequisite: rotate_admin_password is defined" declare -F rotate_admin_password
+assert_success "rotation prerequisite: _write_rotated_auth_file is defined" declare -F _write_rotated_auth_file
+SECRETS_SRC="$(cat "$INSTALLER_DIR/lib/secrets.sh")"
+assert_contains "rotation reuses the hardened hashing helper" "$SECRETS_SRC" 'compute_password_hash "$password_file"'
+assert_contains "rotation recreates the API container (env-file is read at create time)" "$SECRETS_SRC" "_recreate_api_container_for_rotation"
+assert_contains "rotation backs up the previous secrets file" "$SECRETS_SRC" "auth_backup"
+assert_contains "rotation rolls back on verification failure" "$SECRETS_SRC" "Password rotation was rolled back"
+assert_contains "rotation verifies the login handler is reachable" "$SECRETS_SRC" "Invalid username or password"
+assert_failure "rotation never accepts a plaintext password argument" \
+  bash -c "grep -q 'reset-admin-password --password ' '$INSTALLER_DIR/templates/deployment-platform-cli.template'"
+CLI_SRC="$(cat "$INSTALLER_DIR/templates/deployment-platform-cli.template")"
+assert_contains "the CLI exposes reset-admin-password" "$CLI_SRC" "reset-admin-password)"
+assert_contains "the CLI requires root for rotation" "$CLI_SRC" "require_root_for reset-admin-password"
+assert_contains "non-interactive rotation accepts only a password file" "$CLI_SRC" "--password-file"
+assert_contains "the CLI rejects any other rotation option" "$CLI_SRC" "A plaintext password is never accepted as an argument"
+
+# _write_rotated_auth_file must preserve every other key exactly.
+ROTATE_FIXTURE_DIR="$TMP_ROOT/rotate/config"
+mkdir -p "$ROTATE_FIXTURE_DIR"
+cat > "$ROTATE_FIXTURE_DIR/auth.env" <<'AUTHFIX'
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD_HASH=oldsalt:oldhash
+SESSION_SECRET=keepthissecret
+COOKIE_SECURE=true
+CREDENTIAL_ENCRYPTION_KEY=keepthiskeytoo
+AUTHFIX
+chmod 600 "$ROTATE_FIXTURE_DIR/auth.env"
+(
+  INSTALL_ROOT="$TMP_ROOT/rotate"
+  AUTH_FILE_PATH="$ROTATE_FIXTURE_DIR/auth.env"
+  _write_rotated_auth_file "newsalt:newhash"
+) >/dev/null 2>&1
+ROTATED_TEXT="$(cat "$ROTATE_FIXTURE_DIR/auth.env")"
+assert_contains "rotation writes the new hash" "$ROTATED_TEXT" "ADMIN_PASSWORD_HASH=newsalt:newhash"
+assert_not_contains "rotation removes the old hash" "$ROTATED_TEXT" "oldsalt:oldhash"
+assert_contains "rotation preserves ADMIN_USERNAME" "$ROTATED_TEXT" "ADMIN_USERNAME=admin"
+assert_contains "rotation preserves SESSION_SECRET" "$ROTATED_TEXT" "SESSION_SECRET=keepthissecret"
+assert_contains "rotation preserves COOKIE_SECURE" "$ROTATED_TEXT" "COOKIE_SECURE=true"
+assert_contains "rotation preserves CREDENTIAL_ENCRYPTION_KEY" "$ROTATED_TEXT" "CREDENTIAL_ENCRYPTION_KEY=keepthiskeytoo"
+assert_eq "the rotated secrets file stays mode 600" "600" "$(get_file_mode "$ROTATE_FIXTURE_DIR/auth.env")"
+assert_eq "the rotated secrets file keeps exactly one hash line" "1" \
+  "$(grep -c '^ADMIN_PASSWORD_HASH=' "$ROTATE_FIXTURE_DIR/auth.env" | tr -d '[:space:]')"
 
 echo
 echo "=== State file: atomic writes and stage tracking ==="
