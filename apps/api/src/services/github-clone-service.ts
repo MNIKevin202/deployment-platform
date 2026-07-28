@@ -100,6 +100,17 @@ export interface CloneOptions {
   signal?: AbortSignal;
   /** Test-only override — see DEFAULT_GIT_EXECUTABLE. */
   gitExecutable?: string;
+  /**
+   * Test-only override for the clone URL — same rationale and the same
+   * guarantees as `gitExecutable`: never exposed through any HTTP
+   * route/schema, never user-configurable, exists purely so tests (and
+   * the local acceptance fixture) can exercise the REAL clone
+   * mechanism — including real HTTP authentication via the real
+   * credential helper — against a local, controlled git server instead
+   * of github.com. Production callers never pass this, so they always
+   * clone from the real `https://github.com/{owner}/{repo}.git`.
+   */
+  cloneUrlOverride?: string;
 }
 
 export interface CloneResult {
@@ -111,11 +122,33 @@ export interface CloneResult {
   commitSha: string;
 }
 
-// Credential helper scripts only ever contain a token already validated
-// by githubTokenSchema (^[A-Za-z0-9_]+$) — this check is redundant
-// defense-in-depth against ever writing an unexpected quote/newline into
-// a shell script we then execute.
-const SAFE_TOKEN_PATTERN = /^[A-Za-z0-9_]+$/;
+// This is a SHELL-SAFETY check, not a token-FORMAT check — it exists only
+// to guarantee `token` cannot break out of the double-quoted
+// `echo "password=${token}"` line below, and it must accept ANY token
+// resolveGithubToken() hands back, regardless of source. Earlier this
+// instead required the token to match the same narrow pattern the
+// manual-PAT entry form validates against (githubTokenSchema, "already
+// validated" by that PAT-only schema) — but a freshly-minted GitHub App
+// installation token (github-token-service.ts's resolveGithubToken,
+// source: "installation") is never entered through that form and was
+// never checked against it, so that assumption was simply wrong for it.
+// The credential helper accepts whatever resolveGithubToken() resolved —
+// installation token or PAT — without re-deriving, re-parsing, or
+// re-validating it against either shape; only genuinely dangerous
+// characters (control characters/newlines, double quotes, backslashes)
+// are rejected.
+function isSafeForCredentialHelperScript(token: string): boolean {
+  if (token.length === 0) {
+    return false;
+  }
+  for (let i = 0; i < token.length; i += 1) {
+    const code = token.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) {
+      return false;
+    }
+  }
+  return !token.includes('"') && !token.includes("\\");
+}
 
 // Implements Git's credential-helper protocol correctly: git invokes the
 // helper as `<helper> get|store|erase`. Only `get` should ever emit
@@ -126,9 +159,9 @@ const SAFE_TOKEN_PATTERN = /^[A-Za-z0-9_]+$/;
 // version's bug) is harmless in practice but not a correct
 // implementation of the protocol, so it is fixed here.
 function buildCredentialHelperScript(token: string): string {
-  if (!SAFE_TOKEN_PATTERN.test(token)) {
+  if (!isSafeForCredentialHelperScript(token)) {
     throw new CloneError(
-      "Stored GitHub token has an unexpected shape",
+      "The resolved GitHub credential contains characters that cannot be used safely for cloning",
       "preparing-checkout",
       noProcessDiagnostics("preparing-checkout")
     );
@@ -176,7 +209,8 @@ export async function cloneRepositoryBranch(options: CloneOptions): Promise<Clon
     // umask on some platforms, so set it explicitly too.
     chmodSync(credentialHelperPath, 0o700);
 
-    const cloneUrl = `https://github.com/${options.repositoryOwner}/${options.repositoryName}.git`;
+    const cloneUrl =
+      options.cloneUrlOverride ?? `https://github.com/${options.repositoryOwner}/${options.repositoryName}.git`;
 
     const env = buildMinimalEnv({
       HOME: isolatedHome,

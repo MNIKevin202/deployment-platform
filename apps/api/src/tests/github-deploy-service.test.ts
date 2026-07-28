@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
@@ -212,5 +212,131 @@ describe("deployFromGithub — guard clauses (no clone/build reached)", () => {
     const metadataJson = JSON.stringify(failedEvent?.metadata ?? {});
     assert.ok(!metadataJson.includes("fake_token_for_tests_only"));
     assert.ok(!/\/tmp\//.test(metadataJson));
+  });
+
+  test("passes a GitHub App installation-sourced credential straight through to the real clone process (regression: 'Stored GitHub token has an unexpected shape')", async () => {
+    const app = makeApp("installation-credential");
+    // The exact roadmapstudio-web fixture shape: repository, subdirectory,
+    // Dockerfile path, and build context all matching the real app.
+    appDatabase.upsertAppSource(app.id, {
+      provider: "github",
+      repositoryOwner: "MNIKevin202",
+      repositoryName: "DeploymentPlatformInstaller",
+      repositoryFullName: "MNIKevin202/DeploymentPlatformInstaller",
+      repositoryCloneUrl: "https://github.com/MNIKevin202/DeploymentPlatformInstaller.git",
+      repositoryId: null,
+      repositoryVisibility: null,
+      branch: "main",
+      subdirectory: "tools/roadmap-studio",
+      deploymentMode: "dockerfile",
+      dockerfilePath: "Dockerfile",
+      buildContext: ".",
+      containerPort: 4319,
+      autoDeploy: false
+    });
+
+    const githubClient: SourceProviderClient = {
+      ...unusedGithubClient(),
+      resolveBranchCommit: async () => "b".repeat(40),
+      listCommits: async () => ({ items: [], hasMore: false })
+    };
+
+    // A fresh, never-persisted installation token shape — resolveGithubToken's
+    // installation branch never validates this against the PAT-only
+    // githubTokenSchema, so it may contain characters that schema would
+    // reject (here: hyphens, a period, a tilde).
+    const installationToken = "ghs_fake-installation.token~for-tests-only";
+
+    const deps: GithubDeployDependencies = {
+      ...baseDeps,
+      githubClient,
+      resolveCredential: async () => ({ success: true, token: installationToken, source: "installation" }),
+      gitExecutable: "/definitely-not-present/deployment-platform-test-git"
+    };
+
+    const result = await deployFromGithub(deps, app.id);
+
+    assert.equal(result.success, false);
+    // Reached the real clone process (ENOENT from the nonexistent git
+    // binary) — NOT rejected earlier by a token-shape check. If the old
+    // "Stored GitHub token has an unexpected shape" bug were still
+    // present, this would fail at "preparing-checkout" with that message
+    // instead.
+    assert.equal(result.message, "Git executable was not found");
+    assert.notEqual(result.message, "Stored GitHub token has an unexpected shape");
+
+    const failedEvent = recordedEvents.find((e) => e.eventType === "github-deploy-failed");
+    assert.ok(failedEvent);
+    assert.equal(failedEvent?.metadata?.stage, "cloning-repository");
+
+    const metadataJson = JSON.stringify(failedEvent?.metadata ?? {});
+    assert.ok(!metadataJson.includes(installationToken));
+  });
+
+  test("resolves a fresh credential on every deployment attempt, never reusing a stale one (redeploy simulation)", async () => {
+    const app = makeApp("fresh-credential-per-deploy");
+    appDatabase.upsertAppSource(app.id, {
+      provider: "github",
+      repositoryOwner: "octocat",
+      repositoryName: "hello-world",
+      repositoryFullName: "octocat/hello-world",
+      repositoryCloneUrl: "https://github.com/octocat/hello-world.git",
+      repositoryId: null,
+      repositoryVisibility: null,
+      branch: "main",
+      subdirectory: ".",
+      deploymentMode: "dockerfile",
+      dockerfilePath: "Dockerfile",
+      buildContext: ".",
+      containerPort: null,
+      autoDeploy: false
+    });
+
+    const githubClient: SourceProviderClient = {
+      ...unusedGithubClient(),
+      resolveBranchCommit: async () => "c".repeat(40),
+      listCommits: async () => ({ items: [], hasMore: false })
+    };
+
+    let mintCount = 0;
+    const resolveCredential = async () => {
+      mintCount += 1;
+      // A distinct token every call — simulates resolveGithubToken minting
+      // a genuinely fresh installation token each time, never a cached one.
+      return { success: true as const, token: `ghs_fresh-token-${mintCount}`, source: "installation" as const };
+    };
+
+    const deps: GithubDeployDependencies = {
+      ...baseDeps,
+      githubClient,
+      resolveCredential,
+      gitExecutable: "/definitely-not-present/deployment-platform-test-git"
+    };
+
+    // First deployment.
+    await deployFromGithub(deps, app.id);
+    assert.equal(mintCount, 1);
+
+    // A second, independent deployment attempt (simulating "Redeploy" or
+    // a later "Deploy from GitHub" click) must resolve credentials again
+    // — not reuse the first call's result.
+    await deployFromGithub(deps, app.id);
+    assert.equal(mintCount, 2);
+  });
+
+  test("never calls legacy stored-PAT decryption once a credential has already been resolved (structural)", () => {
+    // Source-level assertion: the deploy service must accept
+    // resolveCredential's already-resolved `credential.token` directly and
+    // never separately re-read/re-derive it via a legacy PAT-only path
+    // (getDecryptedGithubToken) inside the deployment function itself —
+    // that logic belongs solely inside resolveGithubToken's own PAT
+    // fallback branch, not duplicated here.
+    const source = readFileSync(
+      new URL("../services/github-deploy-service.ts", import.meta.url),
+      "utf8"
+    );
+    assert.ok(!source.includes("getDecryptedGithubToken"));
+    assert.ok(!source.includes("getProviderCredential"));
+    assert.match(source, /token:\s*credential\.token/);
   });
 });

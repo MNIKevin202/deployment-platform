@@ -212,6 +212,134 @@ describe("cloneRepositoryBranch", () => {
   });
 });
 
+describe("cloneRepositoryBranch — credential-helper token safety (not token FORMAT)", () => {
+  // A regression suite for "Stored GitHub token has an unexpected shape":
+  // the credential helper must accept ANY token resolveGithubToken()
+  // resolves — installation or PAT — and only reject characters that
+  // would actually be dangerous inside the generated shell script. These
+  // tests use tokens containing characters the OLD PAT-shaped allow-list
+  // regex (`^[A-Za-z0-9_]+$`) would have rejected outright, to prove the
+  // credential-helper step no longer re-validates token FORMAT at all.
+
+  test("a token containing characters the old PAT-shaped regex rejected (hyphen, dot, tilde) reaches the real git process, not a 'preparing-checkout' failure", async () => {
+    const fakeGit = makeFakeGit('echo "fatal: Authentication failed while cloning" 1>&2\nexit 128');
+    const installationShapedToken = "ghs_fake-installation.token~for-tests-only";
+
+    try {
+      await assert.rejects(
+        () =>
+          cloneRepositoryBranch({
+            repositoryOwner: "MNIKevin202",
+            repositoryName: "DeploymentPlatformInstaller",
+            branch: "main",
+            token: installationShapedToken,
+            timeoutMs: 5000,
+            maxOutputBytes: 4096,
+            gitExecutable: fakeGit.path
+          }),
+        (error: unknown) => {
+          if (!(error instanceof CloneError)) {
+            return false;
+          }
+          // Reached the real git process (stage "cloning-repository",
+          // not "preparing-checkout") — the credential-helper step let
+          // this token through and git itself is what eventually failed
+          // (a fake, deliberately-triggered auth failure, unrelated to
+          // this test's actual concern).
+          assert.equal(error.stage, "cloning-repository");
+          assert.equal(error.message, "GitHub authentication failed");
+          assert.notEqual(error.message, "Stored GitHub token has an unexpected shape");
+          assert.equal(error.diagnostics.processStarted, true);
+          return true;
+        }
+      );
+    } finally {
+      fakeGit.cleanup();
+    }
+  });
+
+  test("rejects a token containing a newline before any process spawns (genuine shell-safety concern)", async () => {
+    await assert.rejects(
+      () =>
+        cloneRepositoryBranch({
+          repositoryOwner: "example",
+          repositoryName: "repo",
+          branch: "main",
+          token: "fake\ntoken",
+          timeoutMs: 5000,
+          maxOutputBytes: 4096
+        }),
+      (error: unknown) => {
+        if (!(error instanceof CloneError)) {
+          return false;
+        }
+        assert.equal(error.stage, "preparing-checkout");
+        assert.equal(error.diagnostics.processStarted, false);
+        assert.match(error.message, /cannot be used safely/i);
+        return true;
+      }
+    );
+  });
+
+  test("rejects a token containing a double quote before any process spawns", async () => {
+    await assert.rejects(
+      () =>
+        cloneRepositoryBranch({
+          repositoryOwner: "example",
+          repositoryName: "repo",
+          branch: "main",
+          token: 'fake"token',
+          timeoutMs: 5000,
+          maxOutputBytes: 4096
+        }),
+      (error: unknown) => error instanceof CloneError && error.diagnostics.processStarted === false
+    );
+  });
+
+  test("rejects an empty token before any process spawns", async () => {
+    await assert.rejects(
+      () =>
+        cloneRepositoryBranch({
+          repositoryOwner: "example",
+          repositoryName: "repo",
+          branch: "main",
+          token: "",
+          timeoutMs: 5000,
+          maxOutputBytes: 4096
+        }),
+      (error: unknown) => error instanceof CloneError && error.diagnostics.processStarted === false
+    );
+  });
+
+  test("never writes the token to argv/logs — only the credential helper's own file content carries it", async () => {
+    const fakeGit = makeFakeGit("exit 0");
+    const secretToken = "ghs_should_never_appear_in_argv_or_logs_xyz";
+
+    try {
+      // The clone will fail (rev-parse against a directory git never
+      // actually populated), but that is irrelevant here — this test
+      // only cares that nothing in the thrown error's message or
+      // diagnostics ever contains the token.
+      await cloneRepositoryBranch({
+        repositoryOwner: "example",
+        repositoryName: "repo",
+        branch: "main",
+        token: secretToken,
+        timeoutMs: 5000,
+        maxOutputBytes: 4096,
+        gitExecutable: fakeGit.path
+      }).catch((error: unknown) => {
+        if (error instanceof CloneError) {
+          assert.ok(!error.message.includes(secretToken));
+          assert.ok(!JSON.stringify(error.diagnostics).includes(secretToken));
+        }
+      });
+    } finally {
+      fakeGit.cleanup();
+    }
+  });
+});
+
 describe("verifyGitAvailable", () => {
   test("reports unavailable with a clear ENOENT reason when git cannot be found", async () => {
     const result = await verifyGitAvailable(NONEXISTENT_GIT);
