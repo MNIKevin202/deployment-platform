@@ -64,15 +64,12 @@ interface DisplayState {
   tone: "positive" | "negative" | "neutral" | "warning";
 }
 
-function deriveDisplayState(
-  source: AppSourceInfo | null,
-  connection: GithubConnectionInfo | null
-): DisplayState {
+function deriveDisplayState(source: AppSourceInfo | null, githubUsable: boolean): DisplayState {
   if (!source) {
     return { label: "No repository linked", tone: "neutral" };
   }
 
-  if (!connection?.connected) {
+  if (!githubUsable) {
     return { label: "GitHub connection required", tone: "warning" };
   }
 
@@ -104,6 +101,17 @@ function deriveDisplayState(
 export default function SourcePanel({ appId }: SourcePanelProps) {
   const [source, setSource] = useState<AppSourceInfo | null>(null);
   const [connection, setConnection] = useState<GithubConnectionInfo | null>(null);
+  // GET /api/integrations/github only ever reflects the advanced/manual
+  // PAT — it has no notion of a GitHub App installation. A GitHub App
+  // installation is an equally valid, and now the PRIMARY, way to reach
+  // GitHub (see github-token-service.ts's resolveGithubToken, which every
+  // actual backend action here already uses). Checking installations here
+  // too — the same pattern RepositoriesPage.tsx and CreateAppWizard.tsx
+  // already use — is what makes this panel's "connected" indicator and
+  // button-disabling agree with what the backend will actually do,
+  // instead of falsely reporting "GitHub is not connected" whenever only
+  // the GitHub App (not a PAT) is configured.
+  const [githubAppInstalled, setGithubAppInstalled] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
 
@@ -130,9 +138,10 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
       setLoading(true);
       setLoadError("");
 
-      const [sourceResponse, connectionResponse] = await Promise.all([
+      const [sourceResponse, connectionResponse, installationsResponse] = await Promise.all([
         fetch(`/api/apps/${appId}/source`),
-        fetch("/api/integrations/github")
+        fetch("/api/integrations/github"),
+        fetch("/api/github/installations")
       ]);
 
       if (!sourceResponse.ok) {
@@ -144,6 +153,13 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
 
       if (connectionResponse.ok) {
         setConnection((await connectionResponse.json()) as GithubConnectionInfo);
+      }
+
+      if (installationsResponse.ok) {
+        const installationsResult = (await installationsResponse.json()) as {
+          installations: { installationId: number }[];
+        };
+        setGithubAppInstalled(installationsResult.installations.length > 0);
       }
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "Unable to load source configuration");
@@ -286,7 +302,12 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
     return <div className="error-banner">{loadError}</div>;
   }
 
-  const display = deriveDisplayState(source, connection);
+  // Ready via either path — the automated GitHub App installation
+  // (primary) or the advanced manual PAT (fallback) — matching the exact
+  // logic github-token-service.ts's resolveGithubToken already uses
+  // server-side for every actual action below.
+  const githubUsable = githubAppInstalled || (connection?.connected ?? false);
+  const display = deriveDisplayState(source, githubUsable);
 
   return (
     <div className="app-detail-tab-panel">
@@ -299,7 +320,7 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
           <StatusBadge label={display.label} tone={display.tone} />
         </div>
 
-        {!connection?.connected && (
+        {!githubUsable && (
           <div className="warning-banner">
             GitHub is not connected. Connect it from the Repositories section before linking or
             validating a source.
@@ -482,8 +503,8 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
                 className="secondary-button compact"
                 type="button"
                 onClick={() => void runInspect()}
-                disabled={inspecting || !connection?.connected}
-                title={!connection?.connected ? "Connect GitHub before inspecting this repository." : undefined}
+                disabled={inspecting || !githubUsable}
+                title={!githubUsable ? "Connect GitHub before inspecting this repository." : undefined}
               >
                 {inspecting ? "Inspecting..." : "Inspect Repository"}
               </button>
@@ -491,9 +512,9 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
                 className="primary-button compact"
                 type="button"
                 onClick={() => setShowDeployConfirm(true)}
-                disabled={!connection?.connected || deployInProgress}
+                disabled={!githubUsable || deployInProgress}
                 title={
-                  !connection?.connected
+                  !githubUsable
                     ? "Connect GitHub before deploying."
                     : deployInProgress
                       ? "A deployment for this app is already in progress."

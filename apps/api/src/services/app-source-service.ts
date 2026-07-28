@@ -4,6 +4,7 @@ import { SourceClientError, type SourceProviderClient } from "./source-provider.
 import type { AppSourceConfigInput } from "../schemas/source.js";
 import type { CredentialStatus } from "./github-credential-service.js";
 import type { ResolvedGithubToken } from "./github-token-service.js";
+import { joinRepoPath } from "./path-security.js";
 
 type AppSourceDatabase = Pick<
   AppDatabase,
@@ -72,7 +73,10 @@ export interface AppSourceValidationResult {
  */
 export async function validateAppSource(
   deps: Pick<AppSourceServiceDeps, "githubClient" | "resolveCredential">,
-  source: Pick<StoredAppSource, "repositoryOwner" | "repositoryName" | "branch" | "deploymentMode" | "dockerfilePath">
+  source: Pick<
+    StoredAppSource,
+    "repositoryOwner" | "repositoryName" | "branch" | "deploymentMode" | "dockerfilePath" | "subdirectory"
+  >
 ): Promise<AppSourceValidationResult> {
   const credential = await deps.resolveCredential();
 
@@ -127,6 +131,24 @@ export async function validateAppSource(
   }
 
   if (source.deploymentMode === "dockerfile") {
+    // The Dockerfile path is relative to the configured subdirectory,
+    // not the repository root (see path-security.ts's joinRepoPath) —
+    // this is the SAME effective path prepareBuildPlan resolves for the
+    // actual build, so "Validate Again" / save always check exactly
+    // what a deploy would actually use.
+    let effectiveDockerfilePath: string;
+    try {
+      effectiveDockerfilePath = joinRepoPath(source.subdirectory, source.dockerfilePath);
+    } catch (error) {
+      return {
+        status: "invalid",
+        error: error instanceof Error ? error.message : "Invalid Dockerfile path",
+        commitSha,
+        repositoryVisibility,
+        repositoryId
+      };
+    }
+
     let exists: boolean;
 
     try {
@@ -135,7 +157,7 @@ export async function validateAppSource(
         source.repositoryOwner,
         source.repositoryName,
         commitSha,
-        source.dockerfilePath
+        effectiveDockerfilePath
       );
     } catch (error) {
       return {
@@ -150,7 +172,7 @@ export async function validateAppSource(
     if (!exists) {
       return {
         status: "invalid",
-        error: `Dockerfile not found at "${source.dockerfilePath}" on branch "${source.branch}"`,
+        error: `Dockerfile not found at "${effectiveDockerfilePath}" on branch "${source.branch}"`,
         commitSha,
         repositoryVisibility,
         repositoryId
@@ -218,7 +240,8 @@ export async function saveAppSource(
       repositoryName: input.repositoryName,
       branch: input.branch,
       deploymentMode: input.deploymentMode,
-      dockerfilePath: input.dockerfilePath
+      dockerfilePath: input.dockerfilePath,
+      subdirectory: input.subdirectory
     });
   } catch (error) {
     // validateAppSource is designed to never throw — this is a last-resort

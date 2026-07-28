@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { BuildStrategy } from "../app-source-database.js";
-import { resolveWithinRoot } from "./path-security.js";
+import { joinRepoPath, resolveWithinRoot } from "./path-security.js";
 import type { SourceProviderClient } from "./source-provider.js";
 
 /**
@@ -616,10 +616,6 @@ export interface RemoteInspectionOptions {
   repositoryName: string;
   ref: string;
   subdirectory: string;
-}
-
-function joinRepoPath(subdirectory: string, file: string): string {
-  return subdirectory === "." ? file : `${subdirectory}/${file}`;
 }
 
 /**

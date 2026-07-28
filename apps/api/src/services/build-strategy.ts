@@ -1,7 +1,7 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { BuildStrategy } from "../app-source-database.js";
-import { resolveWithinRoot } from "./path-security.js";
+import { joinRepoPath, resolveWithinRoot } from "./path-security.js";
 import type { PackageManager } from "./repository-inspection-service.js";
 
 export class BuildPlanError extends Error {
@@ -92,6 +92,8 @@ export interface BuildPlanInput {
   subdirectory: string;
   dockerfilePath: string;
   buildContext: string;
+  /** Only used to phrase a "Dockerfile not found" error consistently with validateAppSource's; optional so existing callers/tests need not supply it. */
+  branch?: string;
   nodejs?: NodejsPlanInput;
 }
 
@@ -111,10 +113,24 @@ export function prepareBuildPlan(input: BuildPlanInput): BuildPlan {
   }
 
   if (input.strategy === "dockerfile") {
-    return {
-      dockerfilePath: resolveWithinRoot(input.checkoutDir, input.dockerfilePath),
-      buildContextPath: resolveWithinRoot(input.checkoutDir, input.buildContext)
-    };
+    // dockerfilePath/buildContext are relative to the configured
+    // subdirectory, not the repository root — the SAME effective path
+    // validateAppSource checks and inspectRepositoryRemote/
+    // inspectCheckoutDirectory probe, via the one shared joinRepoPath
+    // (path-security.ts). A divergent resolution here is exactly the
+    // defect this comment exists to prevent from coming back.
+    const effectiveDockerfilePath = joinRepoPath(input.subdirectory, input.dockerfilePath);
+    const effectiveBuildContext = joinRepoPath(input.subdirectory, input.buildContext);
+
+    const dockerfilePath = resolveWithinRoot(input.checkoutDir, effectiveDockerfilePath);
+    const buildContextPath = resolveWithinRoot(input.checkoutDir, effectiveBuildContext);
+
+    if (!existsSync(dockerfilePath)) {
+      const branchSuffix = input.branch ? ` on branch "${input.branch}"` : "";
+      throw new BuildPlanError(`Dockerfile not found at "${effectiveDockerfilePath}"${branchSuffix}`);
+    }
+
+    return { dockerfilePath, buildContextPath };
   }
 
   const buildContextPath = resolveWithinRoot(input.checkoutDir, input.subdirectory);

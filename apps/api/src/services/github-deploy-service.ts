@@ -451,6 +451,7 @@ export async function deployFromGithub(
         subdirectory: source.subdirectory,
         dockerfilePath: source.dockerfilePath,
         buildContext: source.buildContext,
+        branch: source.branch,
         nodejs: detection.packageJson
           ? {
               packageManager: detection.packageJson.packageManager,

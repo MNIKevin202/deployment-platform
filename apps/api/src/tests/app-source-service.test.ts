@@ -32,7 +32,10 @@ interface FakeGithubOptions {
   pathExistsFails?: SourceClientError;
 }
 
-function createFakeGithubClient(options: FakeGithubOptions = {}): SourceProviderClient {
+function createFakeGithubClient(
+  options: FakeGithubOptions = {},
+  pathExistsCalls?: string[]
+): SourceProviderClient {
   const repo: SourceRepository = {
     id: "1",
     owner: "octocat",
@@ -75,7 +78,8 @@ function createFakeGithubClient(options: FakeGithubOptions = {}): SourceProvider
       }
       return options.branchSha ?? "abc1234567890";
     },
-    async pathExists() {
+    async pathExists(_token, _owner, _repo, _ref, path) {
+      pathExistsCalls?.push(path);
       if (options.pathExistsFails) {
         throw options.pathExistsFails;
       }
@@ -113,7 +117,8 @@ describe("validateAppSource", () => {
     repositoryName: "hello-world",
     branch: "main",
     deploymentMode: "dockerfile" as const,
-    dockerfilePath: "Dockerfile"
+    dockerfilePath: "Dockerfile",
+    subdirectory: "."
   };
 
   test("succeeds for a fully valid linked source and resolves the current commit", async () => {
@@ -194,6 +199,66 @@ describe("validateAppSource", () => {
     assert.match(result.error ?? "", /Dockerfile not found/);
     // The commit was still resolved even though the Dockerfile is missing.
     assert.equal(result.commitSha, "commit123");
+  });
+
+  test("checks the Dockerfile inside the configured subdirectory, not the repo root", async () => {
+    const pathExistsCalls: string[] = [];
+    const githubClient = createFakeGithubClient({ dockerfileExists: true }, pathExistsCalls);
+
+    const result = await validateAppSource(
+      { githubClient, resolveCredential: availableCredential },
+      { ...baseSource, subdirectory: "tools/roadmap-studio", dockerfilePath: "Dockerfile" }
+    );
+
+    assert.equal(result.status, "valid");
+    assert.deepEqual(pathExistsCalls, ["tools/roadmap-studio/Dockerfile"]);
+  });
+
+  test("regression fixture: roadmapstudio-web (subdirectory tools/roadmap-studio, dockerfilePath Dockerfile) validates against the effective nested path", async () => {
+    const pathExistsCalls: string[] = [];
+    const githubClient = createFakeGithubClient({ dockerfileExists: true }, pathExistsCalls);
+
+    const result = await validateAppSource(
+      { githubClient, resolveCredential: availableCredential },
+      {
+        repositoryOwner: "MNIKevin202",
+        repositoryName: "DeploymentPlatformInstaller",
+        branch: "main",
+        deploymentMode: "dockerfile",
+        dockerfilePath: "Dockerfile",
+        subdirectory: "tools/roadmap-studio"
+      }
+    );
+
+    assert.equal(result.status, "valid");
+    assert.deepEqual(pathExistsCalls, ["tools/roadmap-studio/Dockerfile"]);
+  });
+
+  test("a Dockerfile missing from the configured subdirectory fails with the EFFECTIVE path shown, not the raw dockerfilePath (requirement 8)", async () => {
+    const pathExistsCalls: string[] = [];
+    const githubClient = createFakeGithubClient({ dockerfileExists: false }, pathExistsCalls);
+
+    const result = await validateAppSource(
+      { githubClient, resolveCredential: availableCredential },
+      { ...baseSource, subdirectory: "tools/roadmap-studio", dockerfilePath: "Dockerfile" }
+    );
+
+    assert.equal(result.status, "invalid");
+    assert.match(result.error ?? "", /Dockerfile not found at "tools\/roadmap-studio\/Dockerfile"/);
+    assert.deepEqual(pathExistsCalls, ["tools/roadmap-studio/Dockerfile"]);
+  });
+
+  test("a nested Dockerfile path resolves relative to the subdirectory, not the repo root", async () => {
+    const pathExistsCalls: string[] = [];
+    const githubClient = createFakeGithubClient({ dockerfileExists: true }, pathExistsCalls);
+
+    const result = await validateAppSource(
+      { githubClient, resolveCredential: availableCredential },
+      { ...baseSource, subdirectory: "tools/roadmap-studio", dockerfilePath: "docker/Dockerfile.prod" }
+    );
+
+    assert.equal(result.status, "valid");
+    assert.deepEqual(pathExistsCalls, ["tools/roadmap-studio/docker/Dockerfile.prod"]);
   });
 
   test("skips the Dockerfile check entirely for prebuilt-image mode", async () => {
@@ -309,6 +374,65 @@ describe("saveAppSource / revalidateAppSource / removeAppSource", () => {
     const failureEvent = events.find((e) => e.eventType === "source-validation-failed");
     assert.ok(failureEvent);
     assert.equal(failureEvent?.severity, "warning");
+  });
+
+  test("saveAppSource validates against the configured subdirectory, matching the app's real roadmapstudio-web fixture", async () => {
+    const app = makeApp("roadmapstudio-web");
+    const { recordEvent, events } = createEventTracker();
+    const pathExistsCalls: string[] = [];
+
+    const result = await saveAppSource(
+      deps({
+        recordEvent,
+        githubClient: createFakeGithubClient({ dockerfileExists: true }, pathExistsCalls)
+      }),
+      app.id,
+      {
+        repositoryOwner: "MNIKevin202",
+        repositoryName: "DeploymentPlatformInstaller",
+        branch: "main",
+        subdirectory: "tools/roadmap-studio",
+        deploymentMode: "dockerfile",
+        dockerfilePath: "Dockerfile",
+        buildContext: ".",
+        autoDeploy: false
+      }
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.source?.validationStatus, "valid");
+    assert.equal(result.source?.validationError, null);
+    assert.deepEqual(pathExistsCalls, ["tools/roadmap-studio/Dockerfile"]);
+    assert.ok(events.some((e) => e.eventType === "source-validation-succeeded"));
+  });
+
+  test("revalidateAppSource (\"Validate Again\") re-checks against the same subdirectory-joined path as the original save", async () => {
+    const app = makeApp("roadmapstudio-web-revalidate");
+    const pathExistsCalls: string[] = [];
+
+    await saveAppSource(
+      deps({ githubClient: createFakeGithubClient({ dockerfileExists: true }) }),
+      app.id,
+      {
+        repositoryOwner: "MNIKevin202",
+        repositoryName: "DeploymentPlatformInstaller",
+        branch: "main",
+        subdirectory: "tools/roadmap-studio",
+        deploymentMode: "dockerfile",
+        dockerfilePath: "Dockerfile",
+        buildContext: ".",
+        autoDeploy: false
+      }
+    );
+
+    const result = await revalidateAppSource(
+      deps({ githubClient: createFakeGithubClient({ dockerfileExists: true }, pathExistsCalls) }),
+      app.id
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.source?.validationStatus, "valid");
+    assert.deepEqual(pathExistsCalls, ["tools/roadmap-studio/Dockerfile"]);
   });
 
   test("records source-updated (not source-linked) when replacing an existing link", async () => {
