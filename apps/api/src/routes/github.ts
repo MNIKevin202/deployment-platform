@@ -38,13 +38,17 @@ interface OwnerRepoParams {
   repo: string;
 }
 
-// No "search" field — GitHub's /user/repos listing has no
-// repository-name search parameter. Name filtering happens client-side
-// over whatever page(s) have already been loaded (see RepositoriesPage.tsx
-// / SourcePanel.tsx), so the query contract here only ever describes
-// pagination that GitHub actually honors.
+// No "search" field — GitHub's /user/repos and /installation/repositories
+// listings have no repository-name search parameter. Search instead
+// happens client-side over the FULL repository collection, which the web
+// client assembles by walking every page (see useGithubRepositories.ts) —
+// so the query contract here only ever describes pagination that GitHub
+// actually honors. `page`'s upper bound is a generous safety cap, not a
+// meaningful limit: at perPage 50 it allows up to 100,000 repositories,
+// far beyond any real installation — it exists only so a malformed/huge
+// query can't be used to make the API loop indefinitely against GitHub.
 const repositoriesQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).max(100).optional().default(1),
+  page: z.coerce.number().int().min(1).max(2000).optional().default(1),
   perPage: z.coerce.number().int().min(1).max(50).optional().default(20)
 });
 

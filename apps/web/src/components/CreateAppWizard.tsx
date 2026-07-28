@@ -10,7 +10,6 @@ import type {
   DeploymentMode,
   GithubBranchesResponse,
   GithubConnectionInfo,
-  GithubRepositoriesResponse,
   InspectSourceResponse,
   MaskedGlobalEnvVar,
   RepositoryInspectionResult,
@@ -30,6 +29,7 @@ import {
   validateEnvVars,
   validateStorageMounts
 } from "../lib/wizardValidation";
+import { useGithubRepositories } from "../hooks/useGithubRepositories";
 import { PROJECT_TYPE_LABELS } from "./SourcePanel";
 
 interface CreateAppWizardProps {
@@ -161,9 +161,6 @@ export default function CreateAppWizard({
   const [githubConnection, setGithubConnection] = useState<GithubConnectionInfo | null>(null);
   const [githubAppConfigured, setGithubAppConfigured] = useState(false);
   const [githubAppInstalled, setGithubAppInstalled] = useState(false);
-  const [githubRepos, setGithubRepos] = useState<SourceRepository[]>([]);
-  const [githubReposLoading, setGithubReposLoading] = useState(false);
-  const [githubReposError, setGithubReposError] = useState("");
   const [githubRepo, setGithubRepo] = useState<SourceRepository | null>(null);
   const [githubBranches, setGithubBranches] = useState<SourceBranch[]>([]);
   const [githubBranch, setGithubBranch] = useState("");
@@ -327,37 +324,28 @@ export default function CreateAppWizard({
     };
   }, [open]);
 
-  const loadGithubRepos = useCallback(async () => {
-    try {
-      setGithubReposLoading(true);
-      setGithubReposError("");
-
-      const response = await fetch("/api/integrations/github/repositories?page=1&perPage=20");
-
-      if (!response.ok) {
-        throw new Error(await readApiError(response, "Unable to load repositories"));
-      }
-
-      const result = (await response.json()) as GithubRepositoriesResponse;
-      setGithubRepos(result.repositories);
-    } catch (error) {
-      setGithubReposError(error instanceof Error ? error.message : "Unable to load repositories");
-    } finally {
-      setGithubReposLoading(false);
-    }
-  }, []);
-
   // Ready via either path: the automated GitHub App installation (primary)
   // or the advanced manual PAT (fallback) — the wizard doesn't care which
   // one produced a usable token, only whether repositories are reachable.
   const githubReady = githubAppInstalled || (githubConnection?.connected ?? false);
 
-  useEffect(() => {
-    if (open && step === 0 && sourceType === "github" && githubReady) {
-      void loadGithubRepos();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, step, sourceType, githubReady]);
+  // The shared loader (also used by RepositoriesPage) walks every page
+  // automatically and exposes a search filter over the complete,
+  // deduplicated collection — so a repository outside GitHub's first page
+  // is always reachable here, not just on the separate Repositories page.
+  // Enabled as soon as GitHub source + a usable credential are both picked
+  // (not gated on the current step) so the list stays loaded, without a
+  // refetch/flicker, if the operator steps forward and back.
+  const {
+    filteredRepos: githubRepos,
+    searchQuery: githubRepoSearch,
+    setSearchQuery: setGithubRepoSearch,
+    loading: githubReposLoading,
+    loadingMore: githubReposLoadingMore,
+    error: githubReposError,
+    rateLimited: githubReposRateLimited,
+    repos: githubReposAll
+  } = useGithubRepositories(open && sourceType === "github" && githubReady);
 
   const selectGithubRepo = async (repo: SourceRepository) => {
     setGithubRepo(repo);
@@ -884,11 +872,31 @@ export default function CreateAppWizard({
                         </div>
                       ) : !githubRepo ? (
                         <>
+                          <label>
+                            <span>Search repositories</span>
+                            <input
+                              value={githubRepoSearch}
+                              onChange={(event) => setGithubRepoSearch(event.target.value)}
+                              placeholder="Search by name, owner, or owner/repo..."
+                              disabled={githubReposLoading && githubReposAll.length === 0}
+                            />
+                          </label>
+
                           {githubReposError && <div className="error-banner">{githubReposError}</div>}
+                          {githubReposRateLimited && (
+                            <div className="warning-banner">
+                              GitHub's rate limit was reached. Try refreshing again shortly.
+                            </div>
+                          )}
+
                           {githubReposLoading ? (
                             <div className="empty-state">Loading repositories...</div>
+                          ) : githubReposAll.length === 0 ? (
+                            !githubReposError && (
+                              <div className="empty-state">No accessible repositories were found.</div>
+                            )
                           ) : githubRepos.length === 0 ? (
-                            <div className="empty-state">No accessible repositories were found.</div>
+                            <div className="empty-state">No repositories match this search.</div>
                           ) : (
                             <div className="wizard-row-list">
                               {githubRepos.map((repo) => (
@@ -905,6 +913,10 @@ export default function CreateAppWizard({
                                 </button>
                               ))}
                             </div>
+                          )}
+
+                          {githubReposLoadingMore && (
+                            <p className="text-faint">Loading more repositories...</p>
                           )}
                         </>
                       ) : (

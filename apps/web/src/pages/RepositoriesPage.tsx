@@ -1,21 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import GitHubSettingsPanel from "../components/GitHubSettingsPanel";
 import GithubAppConnectPanel from "../components/GithubAppConnectPanel";
-import type { ApiError, GithubAppInstallation, GithubConnectionInfo, SourceRepository } from "../types/api";
+import { useGithubRepositories } from "../hooks/useGithubRepositories";
+import type { GithubAppInstallation, GithubConnectionInfo } from "../types/api";
 
 interface RepositoriesPageProps {
   onSelectRepository: (owner: string, name: string) => void;
-}
-
-const PER_PAGE = 20;
-
-async function readApiError(response: Response, fallback: string): Promise<string> {
-  try {
-    const result = (await response.json()) as ApiError;
-    return result.message || fallback;
-  } catch {
-    return fallback;
-  }
 }
 
 function formatRelativeOrAbsolute(value: string | null): string {
@@ -85,14 +75,6 @@ export default function RepositoriesPage({ onSelectRepository }: RepositoriesPag
   const [callbackNotice, setCallbackNotice] = useState("");
   const [callbackError, setCallbackError] = useState("");
 
-  const [repos, setRepos] = useState<SourceRepository[]>([]);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState("");
-  const [rateLimited, setRateLimited] = useState(false);
-
   const [search, setSearch] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
 
@@ -155,50 +137,21 @@ export default function RepositoriesPage({ onSelectRepository }: RepositoriesPag
   const connectedViaApp = installations.length > 0;
   const connectedViaPat = connection?.connected ?? false;
 
-  // GitHub's repository-listing endpoint has no name-search parameter, so
-  // "search" here only ever filters repositories that have already been
-  // loaded into `repos` — it is not sent to the server. Load More expands
-  // the set available to search/filter over.
-  const loadRepos = useCallback(async (targetPage: number, append: boolean) => {
-    try {
-      append ? setLoadingMore(true) : setLoading(true);
-      setError("");
-      setRateLimited(false);
-
-      const params = new URLSearchParams({
-        page: String(targetPage),
-        perPage: String(PER_PAGE)
-      });
-
-      const response = await fetch(`/api/integrations/github/repositories?${params.toString()}`);
-
-      if (response.status === 429) {
-        setRateLimited(true);
-        return;
-      }
-
-      if (!response.ok) {
-        throw new Error(await readApiError(response, "Unable to load repositories"));
-      }
-
-      const result = (await response.json()) as { repositories: SourceRepository[]; hasMore: boolean };
-
-      setRepos((current) => (append ? [...current, ...result.repositories] : result.repositories));
-      setHasMore(result.hasMore);
-      setPage(targetPage);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Unable to load repositories");
-    } finally {
-      append ? setLoadingMore(false) : setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (connectedViaApp || connectedViaPat) {
-      void loadRepos(1, false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectedViaApp, connectedViaPat]);
+  // The shared loader walks every page automatically — see
+  // useGithubRepositories.ts — so `repos` here is always the complete,
+  // deduplicated collection (never just whatever page happened to be
+  // loaded), and both filters below apply against all of it, not just a
+  // partially-loaded subset.
+  const {
+    repos,
+    loading,
+    loadingMore,
+    complete,
+    error,
+    rateLimited,
+    refresh: refreshRepos,
+    reset: resetRepos
+  } = useGithubRepositories(connectedViaApp || connectedViaPat);
 
   const visibleRepos = useMemo(() => {
     const searchNeedle = search.trim().toLowerCase();
@@ -228,9 +181,9 @@ export default function RepositoriesPage({ onSelectRepository }: RepositoriesPag
           repositoryCount={connectedViaApp ? repos.length : null}
           onDisconnected={() => {
             void loadInstallations();
-            setRepos([]);
+            resetRepos();
           }}
-          onRefreshRepositories={() => void loadRepos(1, false)}
+          onRefreshRepositories={refreshRepos}
           refreshing={loading}
         />
 
@@ -246,11 +199,16 @@ export default function RepositoriesPage({ onSelectRepository }: RepositoriesPag
             <div>
               <p className="eyebrow">Repositories</p>
               <h2>Accessible GitHub Repositories</h2>
+              {complete && repos.length > 0 && (
+                <p className="text-faint">
+                  {repos.length} repositor{repos.length === 1 ? "y" : "ies"} loaded
+                </p>
+              )}
             </div>
             <button
               className="secondary-button compact"
               type="button"
-              onClick={() => void loadRepos(1, false)}
+              onClick={refreshRepos}
               disabled={loading}
             >
               Refresh
@@ -261,12 +219,12 @@ export default function RepositoriesPage({ onSelectRepository }: RepositoriesPag
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Filter loaded repositories by name..."
+              placeholder="Search all repositories by name..."
             />
             <input
               value={ownerFilter}
               onChange={(event) => setOwnerFilter(event.target.value)}
-              placeholder="Filter loaded repositories by owner..."
+              placeholder="Filter all repositories by owner..."
             />
           </div>
 
@@ -340,17 +298,8 @@ export default function RepositoriesPage({ onSelectRepository }: RepositoriesPag
             </div>
           )}
 
-          {hasMore && !loading && (
-            <div className="form-actions form-actions-start">
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => void loadRepos(page + 1, true)}
-                disabled={loadingMore}
-              >
-                {loadingMore ? "Loading..." : "Load More"}
-              </button>
-            </div>
+          {loadingMore && (
+            <p className="text-faint">Loading more repositories...</p>
           )}
         </section>
       )}
