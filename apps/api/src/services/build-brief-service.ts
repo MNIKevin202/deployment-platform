@@ -27,7 +27,8 @@ export interface BuildBriefStorageMount {
 
 export interface BuildBriefInput {
   appName: string;
-  domain: string;
+  /** Null for an internal-only app — it has no public URL/domain to route. */
+  domain: string | null;
   /** Empty/omitted means no image was decided yet — Claude should propose a Dockerfile. */
   image?: string;
   containerPort: number;
@@ -90,7 +91,9 @@ export function generateBuildBrief(input: BuildBriefInput): string {
       "This is a PREPARATION request, not a deployment notification — the application has NOT been deployed yet. Please prepare the application's code, Dockerfile, and configuration so it is ready to hand off to a self-hosted deployment platform.",
       "",
       `App name: ${input.appName}`,
-      `Planned public URL: https://${input.domain}`,
+      input.domain
+        ? `Planned public URL: https://${input.domain}`
+        : "This app is INTERNAL ONLY — it will have no public URL/domain and is reachable only from other apps on the platform's private network.",
       `Runtime/framework selected in the deployment wizard: ${runtimeLabel}`
     ].join("\n")
   );
@@ -108,7 +111,9 @@ export function generateBuildBrief(input: BuildBriefInput): string {
       "## Configuration the platform already provides — do not implement these yourself",
       "",
       "- Public HTTPS and TLS certificates are obtained, renewed, and terminated automatically by the platform's reverse proxy. The application must NOT attempt to manage TLS, certificates, or HTTPS itself.",
-      `- Domain routing to this app is automatic once deployed, at https://${input.domain}. No in-app routing/domain configuration is needed.`,
+      input.domain
+        ? `- Domain routing to this app is automatic once deployed, at https://${input.domain}. No in-app routing/domain configuration is needed.`
+        : "- This app is internal-only: it receives no domain, no route, and no TLS certificate. Other apps reach it over the platform's private Docker network by its container name; it must not assume it is reachable from the public internet.",
       "- Persistent storage is provided through Docker named volumes, mounted at fixed container paths chosen during deployment (listed below). The platform creates and manages these volumes — the application does not need to create or configure them.",
       "- Environment variables (listed below) are injected into the container's environment by the platform at container start.",
       "- There are no host bind mounts and no Docker socket access available to the application container, and none should be assumed or required.",

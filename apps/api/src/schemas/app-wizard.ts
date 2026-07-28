@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   appNameSchema,
   containerPortSchema,
+  customDomainSchema,
   imageSchema,
   restartPolicySchema
 } from "./app.js";
@@ -35,6 +36,8 @@ export const createAppWizardSchema = z.object({
   image: imageSchema,
   containerPort: containerPortSchema,
   restartPolicy: restartPolicySchema.optional().default("unless-stopped"),
+  internalOnly: z.boolean().optional().default(false),
+  customDomain: customDomainSchema.optional(),
   environmentVariables: z
     .array(wizardEnvVarSchema)
     .max(MAX_WIZARD_ENV_VARS)
@@ -74,6 +77,8 @@ export const buildBriefRequestSchema = z.object({
   appName: appNameSchema,
   image: imageSchema.optional().default(""),
   containerPort: containerPortSchema,
+  internalOnly: z.boolean().optional().default(false),
+  customDomain: customDomainSchema.optional(),
   runtime: z.enum([
     "nodejs",
     "python",

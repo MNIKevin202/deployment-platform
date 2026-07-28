@@ -20,6 +20,7 @@ function makeApp(overrides: Partial<StoredApp>): StoredApp {
     image: "nginx:alpine",
     containerPort: 80,
     domain: "app-one.apps.example.com",
+    internalOnly: false,
     status: "running",
     desiredStatus: "running",
     restartPolicy: "unless-stopped",

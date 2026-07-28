@@ -12,6 +12,7 @@ function makeApp(overrides: Partial<StoredApp>): StoredApp {
     image: "nginx:alpine",
     containerPort: 80,
     domain: "sqlite-test.apps.hookstats.com",
+    internalOnly: false,
     status: "running",
     desiredStatus: "running",
     restartPolicy: "unless-stopped",

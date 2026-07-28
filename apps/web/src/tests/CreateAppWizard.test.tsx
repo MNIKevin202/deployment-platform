@@ -31,6 +31,7 @@ function createdApp(overrides: Partial<CreatedAppSummary> = {}): CreatedAppSumma
     image: "nginx:alpine",
     containerPort: 3000,
     domain: "routing-test.apps.devminted.com",
+    internalOnly: false,
     containerId: "container-abc123",
     status: "running",
     routingReady: true,

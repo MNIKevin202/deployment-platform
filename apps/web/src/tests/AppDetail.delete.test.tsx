@@ -36,6 +36,7 @@ function appDetail(overrides: Partial<AppDetailData> = {}): AppDetailData {
     image: "nginx:alpine",
     containerPort: 3000,
     domain: "routing-test.apps.devminted.com",
+    internalOnly: false,
     routingReady: true,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",

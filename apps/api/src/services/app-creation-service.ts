@@ -1,4 +1,5 @@
 import type { AppDatabase, StoredApp } from "../database.js";
+import { resolveAppDomainChoice } from "../domain.js";
 import {
   errorMessage,
   type RedeployDockerOps,
@@ -37,6 +38,19 @@ export interface CreateAppWithConfigInput {
   environmentVariables?: AppCreationEnvVarInput[];
   storageMounts?: AppCreationVolumeInput[];
   /**
+   * When true, this app never receives a public domain/route — see
+   * domain.ts's resolveAppDomainChoice. Mutually exclusive with
+   * `customDomain`. Defaults to false (the existing, unchanged behavior:
+   * every app gets the generated default domain).
+   */
+  internalOnly?: boolean;
+  /**
+   * An operator-supplied custom domain (e.g. `roadmapstudio.xyz`) instead
+   * of the generated `${name}.${APPS_DOMAIN}` default. Ignored/rejected
+   * when `internalOnly` is true.
+   */
+  customDomain?: string;
+  /**
    * A browser-generated key identifying this create ATTEMPT (one user
    * action, including any transport-level retry of that same underlying
    * request). Optional for backward compatibility with callers that don't
@@ -65,6 +79,7 @@ export interface CreatedAppSummary {
   image: string;
   containerPort: number;
   domain: string | null;
+  internalOnly: boolean;
   containerId: string | null;
   status: string;
   routingReady: boolean;
@@ -226,7 +241,23 @@ async function performCreateAppWithConfig(
   } = deps;
 
   const containerName = `app-${input.name}`;
-  const domain = buildDomain(input.name);
+
+  const domainChoice = resolveAppDomainChoice(
+    input.name,
+    { internalOnly: input.internalOnly ?? false, customDomain: input.customDomain },
+    process.env,
+    buildDomain
+  );
+
+  if (!domainChoice.ok) {
+    return {
+      success: false,
+      statusCode: domainChoice.statusCode,
+      message: domainChoice.error
+    };
+  }
+
+  const { domain, internalOnly } = domainChoice;
   const exposedPort = `${input.containerPort}/tcp`;
   const restartPolicy = input.restartPolicy || "unless-stopped";
   const envVars = input.environmentVariables ?? [];
@@ -240,7 +271,7 @@ async function performCreateAppWithConfig(
     };
   }
 
-  if (appDatabase.getAppByDomain(domain)) {
+  if (domain && appDatabase.getAppByDomain(domain)) {
     return {
       success: false,
       statusCode: 409,
@@ -313,6 +344,7 @@ async function performCreateAppWithConfig(
         containerPort: input.containerPort,
         containerName,
         domain,
+        internalOnly,
         restartPolicy
       });
 
@@ -503,6 +535,7 @@ async function performCreateAppWithConfig(
       image: finalApp.image,
       containerPort: finalApp.containerPort,
       domain: finalApp.domain,
+      internalOnly: finalApp.internalOnly,
       containerId: finalApp.containerId,
       status: finalApp.status,
       routingReady: isRoutingReady(finalApp.domain !== null),

@@ -23,6 +23,7 @@ import type {
 import {
   isValidAppName,
   isValidContainerPath,
+  isValidCustomDomain,
   isValidImage,
   isValidPort,
   isValidVolumeName,
@@ -187,6 +188,9 @@ export default function CreateAppWizard({
   const [globalVars, setGlobalVars] = useState<MaskedGlobalEnvVar[]>([]);
   const [globalVarsLoaded, setGlobalVarsLoaded] = useState(false);
 
+  const [routingChoice, setRoutingChoice] = useState<"public" | "internal">("public");
+  const [domainChoice, setDomainChoice] = useState<"default" | "custom">("default");
+  const [customDomain, setCustomDomain] = useState("");
   const [domain, setDomain] = useState<string | null>(null);
   const [brief, setBrief] = useState("");
   const [briefLoading, setBriefLoading] = useState(false);
@@ -228,6 +232,9 @@ export default function CreateAppWizard({
     setHealthCheckPath("");
     setEnvRows([]);
     setVolumeRows([]);
+    setRoutingChoice("public");
+    setDomainChoice("default");
+    setCustomDomain("");
     setDomain(null);
     setBrief("");
     setBriefError("");
@@ -421,21 +428,33 @@ export default function CreateAppWizard({
   const storageValidationError = validateStorageMounts(volumesForValidation);
   const storageValid = storageValidationError === null;
 
+  const trimmedCustomDomain = customDomain.trim();
+  const domainValid =
+    routingChoice === "internal" ||
+    domainChoice === "default" ||
+    isValidCustomDomain(trimmedCustomDomain);
+
   const stepValid = [
     sourceValid,
     basicsValid,
     runtimeValid,
     environmentValid,
     storageValid,
-    true,
+    domainValid,
     true
   ][step];
+
+  const briefInternalOnly = routingChoice === "internal";
+  const briefCustomDomain =
+    routingChoice === "public" && domainChoice === "custom" ? trimmedCustomDomain : undefined;
 
   const buildBriefPayload = useCallback(
     (): BuildBriefRequestPayload => ({
       appName: trimmedName,
       image: trimmedImage,
       containerPort: parsedPort,
+      internalOnly: briefInternalOnly,
+      customDomain: briefCustomDomain || undefined,
       runtime,
       description: description.trim() || undefined,
       startCommand: startCommand.trim() || undefined,
@@ -451,6 +470,8 @@ export default function CreateAppWizard({
       trimmedName,
       trimmedImage,
       parsedPort,
+      briefInternalOnly,
+      briefCustomDomain,
       runtime,
       description,
       startCommand,
@@ -461,7 +482,7 @@ export default function CreateAppWizard({
   );
 
   const fetchBrief = useCallback(async () => {
-    if (!basicsValid || !runtimeValid) {
+    if (!basicsValid || !runtimeValid || !domainValid) {
       return;
     }
 
@@ -495,7 +516,7 @@ export default function CreateAppWizard({
   }, [basicsValid, runtimeValid, buildBriefPayload]);
 
   useEffect(() => {
-    if (open && step >= 5 && basicsValid && runtimeValid) {
+    if (open && step >= 5 && basicsValid && runtimeValid && domainValid) {
       void fetchBrief();
     }
     // fetchBrief's own dependency list already captures every field that
@@ -503,7 +524,7 @@ export default function CreateAppWizard({
     // change alone is what makes entering the Domain or Review step
     // auto-generate it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, open, basicsValid, runtimeValid, fetchBrief]);
+  }, [step, open, basicsValid, runtimeValid, domainValid, fetchBrief]);
 
   if (!open) {
     return null;
@@ -557,6 +578,8 @@ export default function CreateAppWizard({
         image: trimmedImage,
         containerPort: parsedPort,
         restartPolicy,
+        internalOnly: routingChoice === "internal",
+        customDomain: briefCustomDomain || undefined,
         environmentVariables: envRows.map((row) => ({
           key: row.key,
           value: row.value,
@@ -725,11 +748,13 @@ export default function CreateAppWizard({
                 {createdApp.name} was created successfully.
               </h3>
               <p className="section-description">
-                {createdApp.domain
-                  ? createdApp.routingReady
-                    ? `It will be reachable at https://${createdApp.domain} once DNS and routing finish propagating.`
-                    : `Its domain (${createdApp.domain}) is assigned, but routing is not fully ready yet.`
-                  : "No domain was assigned to this app."}
+                {createdApp.internalOnly
+                  ? "This app is internal only — it has no public domain, route, or TLS certificate. Other apps can reach it on the platform's private network by its container name."
+                  : createdApp.domain
+                    ? createdApp.routingReady
+                      ? `It will be reachable at https://${createdApp.domain} once DNS and routing finish propagating.`
+                      : `Its domain (${createdApp.domain}) is assigned, but routing is not fully ready yet.`
+                    : "No domain was assigned to this app."}
               </p>
 
               {postCreateNotice && <div className="notice-banner">{postCreateNotice}</div>}
@@ -1332,30 +1357,119 @@ export default function CreateAppWizard({
               )}
 
               {step === 5 && (
-                <>
+                <div className="wizard-form-grid">
+                  <fieldset className="wizard-fieldset">
+                    <legend>Routing</legend>
+
+                    <label className="radio-field">
+                      <input
+                        type="radio"
+                        name="routing-choice"
+                        checked={routingChoice === "public"}
+                        onChange={() => setRoutingChoice("public")}
+                      />
+                      <span>
+                        <strong>Public app</strong> — reachable at a domain over
+                        HTTPS.
+                      </span>
+                    </label>
+                    <label className="radio-field">
+                      <input
+                        type="radio"
+                        name="routing-choice"
+                        checked={routingChoice === "internal"}
+                        onChange={() => setRoutingChoice("internal")}
+                      />
+                      <span>
+                        <strong>Internal-only app</strong> — no public domain, no
+                        route, no TLS certificate. Reachable only from other apps
+                        on the platform's private network, by container name.
+                      </span>
+                    </label>
+                  </fieldset>
+
+                  {routingChoice === "public" && (
+                    <fieldset className="wizard-fieldset">
+                      <legend>Domain</legend>
+
+                      <label className="radio-field">
+                        <input
+                          type="radio"
+                          name="domain-choice"
+                          checked={domainChoice === "default"}
+                          onChange={() => setDomainChoice("default")}
+                        />
+                        <span>Use the platform's generated domain</span>
+                      </label>
+                      <label className="radio-field">
+                        <input
+                          type="radio"
+                          name="domain-choice"
+                          checked={domainChoice === "custom"}
+                          onChange={() => setDomainChoice("custom")}
+                        />
+                        <span>Use a custom domain</span>
+                      </label>
+
+                      {domainChoice === "custom" && (
+                        <label>
+                          <span>Custom domain</span>
+                          <input
+                            type="text"
+                            value={customDomain}
+                            onChange={(event) => setCustomDomain(event.target.value)}
+                            placeholder="roadmapstudio.xyz"
+                            spellCheck={false}
+                            autoCapitalize="off"
+                          />
+                          {trimmedCustomDomain.length > 0 &&
+                            !isValidCustomDomain(trimmedCustomDomain) && (
+                              <small className="text-faint">
+                                Enter a plain hostname with no scheme, path,
+                                port, or wildcard (e.g. roadmapstudio.xyz).
+                              </small>
+                            )}
+                          <small className="text-faint">
+                            DNS for this domain must already point (or be
+                            pointed) at this server — the platform does not
+                            configure DNS automatically.
+                          </small>
+                        </label>
+                      )}
+                    </fieldset>
+                  )}
+
                   <dl className="wizard-review-grid">
                     <div>
-                      <dt>Public domain</dt>
-                      <dd>{domain ?? "Generating..."}</dd>
+                      <dt>{routingChoice === "internal" ? "Public URL" : "Public domain"}</dt>
+                      <dd>
+                        {routingChoice === "internal"
+                          ? "Internal only, no public URL"
+                          : (domainChoice === "custom" ? trimmedCustomDomain || "—" : domain ?? "Generating...")}
+                      </dd>
                     </div>
                     <div>
                       <dt>HTTPS</dt>
-                      <dd>Automatic — the platform manages TLS certificates.</dd>
+                      <dd>
+                        {routingChoice === "internal"
+                          ? "Not applicable — this app has no public route."
+                          : "Automatic — the platform manages TLS certificates."}
+                      </dd>
                     </div>
                     <div>
                       <dt>Routing</dt>
-                      <dd>Configured automatically once the app is created.</dd>
+                      <dd>
+                        {routingChoice === "internal"
+                          ? "No Caddy route is created for this app."
+                          : "Configured automatically once the app is created."}
+                      </dd>
                     </div>
                     <div>
                       <dt>Docker network</dt>
-                      <dd>Managed by the platform — no manual configuration.</dd>
+                      <dd>Managed by the platform — reachable from other apps by container name.</dd>
                     </div>
                   </dl>
-                  <p className="section-description">
-                    There's nothing to configure here — public HTTPS and domain
-                    routing are set up automatically for every app.
-                  </p>
-                </>
+                </div>
               )}
 
               {step === 6 && (
@@ -1388,8 +1502,14 @@ export default function CreateAppWizard({
                       <dd>{restartPolicy}</dd>
                     </div>
                     <div>
-                      <dt>Domain</dt>
-                      <dd>{domain ?? "—"}</dd>
+                      <dt>Routing</dt>
+                      <dd>
+                        {routingChoice === "internal"
+                          ? "Internal only, no public URL"
+                          : domainChoice === "custom"
+                            ? trimmedCustomDomain || "—"
+                            : (domain ?? "—")}
+                      </dd>
                     </div>
                     <div>
                       <dt>Environment variables</dt>

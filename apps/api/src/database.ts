@@ -66,6 +66,15 @@ export interface StoredApp {
   image: string;
   containerPort: number;
   domain: string | null;
+  /**
+   * Persisted, explicit "this app never gets a public domain/route" flag —
+   * distinct from `domain === null`, which (for apps predating this column)
+   * only means "no domain assigned yet" and is still eligible for
+   * `backfillMissingAppDomains()` in server.ts. An internal-only app's
+   * `domain` is always null, but a null `domain` does not imply
+   * internal-only.
+   */
+  internalOnly: boolean;
   status: string;
   desiredStatus: string;
   restartPolicy: string;
@@ -83,6 +92,7 @@ interface AppRow {
   image: string;
   container_port: number;
   domain: string | null;
+  internal_only: number;
   status: string;
   desired_status: string;
   restart_policy: string;
@@ -100,6 +110,7 @@ const APP_COLUMNS = `
   image,
   container_port,
   domain,
+  internal_only,
   status,
   desired_status,
   restart_policy,
@@ -118,6 +129,7 @@ function mapApp(row: AppRow): StoredApp {
     image: row.image,
     containerPort: row.container_port,
     domain: row.domain,
+    internalOnly: row.internal_only === 1,
     status: row.status,
     desiredStatus: row.desired_status,
     restartPolicy: row.restart_policy,
@@ -134,6 +146,7 @@ export interface CreateAppInput {
   containerPort: number;
   containerName: string;
   domain?: string | null;
+  internalOnly?: boolean;
   restartPolicy?: string;
 }
 
@@ -184,9 +197,10 @@ export function createAppDatabase(databasePath: string) {
     return row ? mapApp(row) : null;
   }
 
+  /** Case-insensitive: two apps may not use the same domain regardless of casing. */
   function getAppByDomain(domain: string): StoredApp | null {
     const row = db
-      .prepare(`SELECT ${APP_COLUMNS} FROM apps WHERE domain = ?`)
+      .prepare(`SELECT ${APP_COLUMNS} FROM apps WHERE LOWER(domain) = LOWER(?)`)
       .get(domain) as unknown as AppRow | undefined;
 
     return row ? mapApp(row) : null;
@@ -201,11 +215,12 @@ export function createAppDatabase(databasePath: string) {
           container_port,
           container_name,
           domain,
+          internal_only,
           status,
           desired_status,
           restart_policy
         )
-        VALUES (?, ?, ?, ?, ?, 'created', 'running', ?)
+        VALUES (?, ?, ?, ?, ?, ?, 'created', 'running', ?)
       `
     ).run(
       input.name,
@@ -213,6 +228,7 @@ export function createAppDatabase(databasePath: string) {
       input.containerPort,
       input.containerName,
       input.domain ?? null,
+      input.internalOnly ? 1 : 0,
       input.restartPolicy ?? "unless-stopped"
     );
 
@@ -273,6 +289,25 @@ export function createAppDatabase(databasePath: string) {
         WHERE id = ?
       `
     ).run(domain, id);
+  }
+
+  /**
+   * Sets domain and internal_only together, atomically — the pair the
+   * public/internal toggle and custom-domain edit route always change as a
+   * unit (see resolveAppDomainChoice in domain.ts), so there is no
+   * intermediate state where one is updated and not the other.
+   */
+  function updateAppRouting(
+    id: number,
+    input: { domain: string | null; internalOnly: boolean }
+  ): void {
+    db.prepare(
+      `
+        UPDATE apps
+        SET domain = ?, internal_only = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `
+    ).run(input.domain, input.internalOnly ? 1 : 0, id);
   }
 
   function updateAppImage(id: number, image: string): void {
@@ -360,6 +395,7 @@ export function createAppDatabase(databasePath: string) {
     updateAppStatus,
     updateAppDesiredStatus,
     updateAppDomain,
+    updateAppRouting,
     updateAppImage,
     deleteApp,
     touchAppEnvironment,

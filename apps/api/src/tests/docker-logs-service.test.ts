@@ -21,6 +21,7 @@ function fakeApp(overrides: Partial<StoredApp> = {}): StoredApp {
     image: "nginx:alpine",
     containerPort: 80,
     domain: null,
+    internalOnly: false,
     status: "running",
     desiredStatus: "running",
     restartPolicy: "unless-stopped",

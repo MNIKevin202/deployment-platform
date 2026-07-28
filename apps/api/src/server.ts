@@ -4,13 +4,14 @@ import { z } from "zod";
 import { docker } from "./docker.js";
 import { registerAuthentication } from "./auth.js";
 import { createAppDatabase } from "./database.js";
-import { buildAppDomain } from "./domain.js";
-import { createAppSchema } from "./schemas/app.js";
+import { buildAppDomain, resolveAppDomainChoice, shouldBackfillAppDomain } from "./domain.js";
+import { createAppSchema, updateAppRoutingSchema } from "./schemas/app.js";
 import {
   createAppWizardSchema,
   buildBriefRequestSchema
 } from "./schemas/app-wizard.js";
 import { createRoutingService } from "./services/routing-service.js";
+import { updateAppRouting } from "./services/app-routing-service.js";
 import {
   buildAppDetail,
   type ContainerInspection
@@ -83,11 +84,17 @@ const app = Fastify({
  * Apps created before automatic domains existed (Phase 2) have a NULL
  * domain. Assign one deterministically on every boot so pre-existing apps
  * such as sqlite-test become routable without a manual repair step.
+ *
+ * Explicitly internal-only apps (Phase 13 — `internal_only`) are permanently
+ * excluded: their null domain is a deliberate, persisted choice, not a
+ * legacy gap, so they must never be assigned a domain here — otherwise an
+ * app created with no public route would silently become public again on
+ * the platform's next restart.
  */
 function backfillMissingAppDomains(): void {
   const appsWithoutDomain = appDatabase
     .listApps()
-    .filter((storedApp) => storedApp.domain === null);
+    .filter(shouldBackfillAppDomain);
 
   for (const storedApp of appsWithoutDomain) {
     const domain = buildAppDomain(storedApp.name);
@@ -442,6 +449,73 @@ app.post<{ Params: AppIdParams }>(
   }
 );
 
+/**
+ * Toggles an app between public (generated default domain, or a custom
+ * domain) and internal-only (no domain, never routed), or changes a public
+ * app's domain. Container and volumes are untouched — see
+ * services/app-routing-service.ts.
+ */
+app.patch<{ Params: AppIdParams }>(
+  "/apps/:id/routing",
+  {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: "1 minute"
+      }
+    }
+  },
+  async (request, reply) => {
+    const parsedParams = appIdParamSchema.safeParse(request.params);
+
+    if (!parsedParams.success) {
+      return reply.code(400).send({
+        success: false,
+        message: "Invalid app id"
+      });
+    }
+
+    const parsedBody = updateAppRoutingSchema.safeParse(request.body);
+
+    if (!parsedBody.success) {
+      return reply.code(400).send({
+        success: false,
+        message: "Invalid routing configuration",
+        errors: parsedBody.error.flatten()
+      });
+    }
+
+    const result = await updateAppRouting(
+      {
+        appDatabase,
+        reconcileRouting: (db) => routingService.reconcile(db),
+        recordEvent
+      },
+      parsedParams.data.id,
+      {
+        internalOnly: parsedBody.data.internalOnly,
+        ...(parsedBody.data.customDomain ? { customDomain: parsedBody.data.customDomain } : {})
+      }
+    );
+
+    if (!result.success) {
+      app.log.error({ appId: parsedParams.data.id, message: result.message }, "App routing update failed");
+
+      return reply.code(result.statusCode ?? 502).send({
+        success: false,
+        message: result.message
+      });
+    }
+
+    return reply.send({
+      success: true,
+      message: result.message,
+      domain: result.domain,
+      internalOnly: result.internalOnly
+    });
+  }
+);
+
 app.get("/routing/status", async () => {
   return routingService.getStatus();
 });
@@ -596,6 +670,8 @@ app.post(
       name: parsedBody.data.name,
       image: parsedBody.data.image,
       containerPort: parsedBody.data.containerPort,
+      internalOnly: parsedBody.data.internalOnly,
+      ...(parsedBody.data.customDomain ? { customDomain: parsedBody.data.customDomain } : {}),
       ...(idempotency.present ? { idempotencyKey: idempotency.key } : {})
     });
 
@@ -619,6 +695,7 @@ app.post(
         image: result.app.image,
         containerPort: result.app.containerPort,
         domain: result.app.domain,
+        internalOnly: result.app.internalOnly,
         routingReady: result.app.routingReady,
         state: result.app.status
       }
@@ -671,6 +748,8 @@ app.post(
       restartPolicy: parsedBody.data.restartPolicy,
       environmentVariables: parsedBody.data.environmentVariables,
       storageMounts: parsedBody.data.storageMounts,
+      internalOnly: parsedBody.data.internalOnly,
+      ...(parsedBody.data.customDomain ? { customDomain: parsedBody.data.customDomain } : {}),
       ...(idempotency.present ? { idempotencyKey: idempotency.key } : {})
     });
 
@@ -717,7 +796,19 @@ app.post(
       });
     }
 
-    const domain = buildAppDomain(parsedBody.data.appName);
+    const domainChoice = resolveAppDomainChoice(parsedBody.data.appName, {
+      internalOnly: parsedBody.data.internalOnly,
+      customDomain: parsedBody.data.customDomain
+    });
+
+    if (!domainChoice.ok) {
+      return reply.code(400).send({
+        success: false,
+        message: domainChoice.error
+      });
+    }
+
+    const domain = domainChoice.domain;
 
     const brief = generateBuildBrief({
       appName: parsedBody.data.appName,

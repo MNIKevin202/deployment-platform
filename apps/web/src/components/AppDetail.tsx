@@ -281,10 +281,14 @@ export default function AppDetail({
   }, [appId]);
 
   useEffect(() => {
-    if (activeTab === "storage" && !storageLoaded) {
+    if ((activeTab === "storage" || showDeleteConfirm) && !storageLoaded) {
       void loadStorage();
     }
-  }, [activeTab, storageLoaded, loadStorage]);
+    // Also loaded when the delete dialog opens (not just the Storage tab) so
+    // the internal-only + persistent-volumes delete warning below can know
+    // whether this app has any volumes without requiring the operator to
+    // have visited the Storage tab first.
+  }, [activeTab, showDeleteConfirm, storageLoaded, loadStorage]);
 
   const runAction = async (action: ContainerAction) => {
     if (!detail?.containerId || actionLoading) {
@@ -672,8 +676,14 @@ export default function AppDetail({
             }
           />
           <StatusBadge
-            label={canOpenApp ? "Routing ready" : "Routing not ready"}
-            tone={canOpenApp ? "positive" : "warning"}
+            label={
+              detail.internalOnly
+                ? "Internal only"
+                : canOpenApp
+                  ? "Routing ready"
+                  : "Routing not ready"
+            }
+            tone={detail.internalOnly ? "neutral" : canOpenApp ? "positive" : "warning"}
           />
           <StatusBadge
             label={isConfigPending ? "Changes Pending" : "Config Applied"}
@@ -784,7 +794,9 @@ export default function AppDetail({
             <div>
               <dt>Public domain</dt>
               <dd>
-                {detail.domain ? (
+                {detail.internalOnly ? (
+                  <span className="routing-badge internal-only">Internal only</span>
+                ) : detail.domain ? (
                   <a className="public-domain-link" href={`https://${detail.domain}`} target="_blank" rel="noopener noreferrer">
                     {detail.domain}
                   </a>
@@ -1154,10 +1166,24 @@ export default function AppDetail({
         open={showDeleteConfirm}
         title={`Delete ${detail.name}?`}
         message={
-          <p>
-            This permanently removes the <strong>{detail.name}</strong>{" "}
-            container and its anonymous volumes. This cannot be undone.
-          </p>
+          <>
+            <p>
+              This permanently removes the <strong>{detail.name}</strong>{" "}
+              container and its anonymous volumes. This cannot be undone.
+            </p>
+            {storageVolumes.length > 0 && (
+              <p className="warning-banner">
+                This app has {storageVolumes.length} persistent named volume
+                {storageVolumes.length === 1 ? "" : "s"}. Deleting the app
+                removes its platform metadata only — the named volume
+                {storageVolumes.length === 1 ? "" : "s"} will remain
+                physically present on the server, and the platform cannot
+                currently reattach an orphaned volume automatically.
+                {detail.internalOnly &&
+                  " This is an internal-only app, so note its volume name(s) before deleting if you may need to reattach the data later."}
+              </p>
+            )}
+          </>
         }
         confirmLabel="Delete app"
         confirmingLabel="Deleting..."

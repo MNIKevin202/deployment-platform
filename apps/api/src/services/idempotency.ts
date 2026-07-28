@@ -32,6 +32,8 @@ export function fingerprintCreateAppRequest(input: {
   restartPolicy?: string;
   environmentVariables?: unknown;
   storageMounts?: unknown;
+  internalOnly?: boolean;
+  customDomain?: string;
 }): string {
   const normalized = {
     name: input.name,
@@ -39,6 +41,12 @@ export function fingerprintCreateAppRequest(input: {
     containerPort: input.containerPort,
     restartPolicy: input.restartPolicy ?? null,
     environmentVariables: input.environmentVariables ?? [],
+    // Included so a repeated key with different routing/domain choices is a
+    // mismatch, not a replay — trimmed+lowercased the same way
+    // validateCustomDomain() normalizes it, so two requests differing only
+    // by domain casing/whitespace still fingerprint identically.
+    internalOnly: input.internalOnly ?? false,
+    customDomain: input.customDomain?.trim().toLowerCase() ?? null,
     storageMounts: input.storageMounts ?? []
   };
 

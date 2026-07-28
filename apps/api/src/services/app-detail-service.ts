@@ -23,6 +23,7 @@ export interface AppDetail {
   image: string;
   containerPort: number;
   domain: string | null;
+  internalOnly: boolean;
   routingReady: boolean;
   createdAt: string;
   updatedAt: string;
@@ -76,6 +77,7 @@ export function buildAppDetail(
     image: storedApp.image,
     containerPort: storedApp.containerPort,
     domain: storedApp.domain,
+    internalOnly: storedApp.internalOnly,
     routingReady,
     createdAt: storedApp.createdAt,
     updatedAt: storedApp.updatedAt,

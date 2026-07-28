@@ -9,22 +9,13 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type Docker from "dockerode";
 import type { AppDatabase, StoredApp } from "../database.js";
+import { SAFE_DOMAIN } from "../domain.js";
 
 /**
  * A DNS subdomain label used as an app name. Kept for backward compatibility;
  * domain/upstream values are validated far more strictly below.
  */
 const SAFE_SUBDOMAIN_LABEL = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-/**
- * A full hostname: one or more DNS labels joined by dots, lowercase, total
- * length <= 253, each label 1–63 chars, no leading/trailing hyphen. Crucially
- * this excludes whitespace, `{`, `}`, `#`, and every other character a Caddy
- * directive could hide behind — so a domain value can never break out of its
- * site-address position and inject a directive.
- */
-const SAFE_DOMAIN =
-  /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
 /**
  * A Docker container name (the reverse-proxy upstream host). Docker allows
@@ -119,6 +110,10 @@ export function buildRoutes(apps: StoredApp[]): BuiltRoutes {
   const candidates: RouteEntry[] = [];
 
   for (const app of apps) {
+    // Internal-only apps are never routed, even in the (should-be-impossible)
+    // case their domain column is somehow non-null — internalOnly is the
+    // authoritative signal, checked ahead of and independent from domain.
+    if (app.internalOnly) continue;
     // Apps without a domain are simply not routed — not an error.
     if (!app.domain) continue;
 

@@ -147,18 +147,27 @@ export default function AppCard({
           <dd>{formatPorts(container.ports)}</dd>
         </div>
 
-        {storedApp?.domain && (
+        {storedApp?.internalOnly ? (
           <div>
-            <dt>Domain</dt>
+            <dt>Routing</dt>
             <dd>
-              {storedApp.domain}
-              {!storedApp.routingReady && (
-                <span className="routing-badge not-ready">
-                  Routing not yet active
-                </span>
-              )}
+              <span className="routing-badge internal-only">Internal only</span>
             </dd>
           </div>
+        ) : (
+          storedApp?.domain && (
+            <div>
+              <dt>Domain</dt>
+              <dd>
+                {storedApp.domain}
+                {!storedApp.routingReady && (
+                  <span className="routing-badge not-ready">
+                    Routing not yet active
+                  </span>
+                )}
+              </dd>
+            </div>
+          )
         )}
       </dl>
 

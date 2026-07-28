@@ -56,6 +56,7 @@ export interface StoredApp {
   image: string;
   containerPort: number;
   domain: string | null;
+  internalOnly: boolean;
   status: string;
   desiredStatus: string;
   restartPolicy: string;
@@ -82,6 +83,7 @@ export interface AppDetail {
   image: string;
   containerPort: number;
   domain: string | null;
+  internalOnly: boolean;
   routingReady: boolean;
   createdAt: string;
   updatedAt: string;
@@ -145,7 +147,8 @@ export interface CreateAppResponse {
     containerName: string;
     image: string;
     containerPort: number;
-    domain: string;
+    domain: string | null;
+    internalOnly: boolean;
     routingReady: boolean;
     state: string;
   };
@@ -205,6 +208,8 @@ export interface CreateAppWizardPayload {
   image: string;
   containerPort: number;
   restartPolicy: RestartPolicy;
+  internalOnly: boolean;
+  customDomain?: string;
   environmentVariables: Array<{
     key: string;
     value: string;
@@ -225,6 +230,7 @@ export interface CreatedAppSummary {
   image: string;
   containerPort: number;
   domain: string | null;
+  internalOnly: boolean;
   containerId: string | null;
   status: string;
   routingReady: boolean;
@@ -243,6 +249,8 @@ export interface BuildBriefRequestPayload {
   appName: string;
   image?: string;
   containerPort: number;
+  internalOnly: boolean;
+  customDomain?: string;
   runtime: BuildBriefRuntime;
   description?: string;
   startCommand?: string;
@@ -253,8 +261,20 @@ export interface BuildBriefRequestPayload {
 
 export interface BuildBriefResponse {
   success: boolean;
-  domain: string;
+  domain: string | null;
   brief: string;
+}
+
+export interface UpdateAppRoutingPayload {
+  internalOnly: boolean;
+  customDomain?: string;
+}
+
+export interface UpdateAppRoutingResponse {
+  success: boolean;
+  message: string;
+  domain?: string | null;
+  internalOnly?: boolean;
 }
 
 export type HealthState =

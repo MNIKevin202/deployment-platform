@@ -18,6 +18,7 @@ export type EventType =
   | "health-became-healthy"
   | "health-became-unhealthy"
   | "health-check-error"
+  | "routing-changed"
   | "routing-warning"
   | "cleanup-warning"
   | "source-linked"

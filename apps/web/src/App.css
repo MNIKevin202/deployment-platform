@@ -630,6 +630,12 @@ code {
   margin-left: 8px;
 }
 
+.routing-badge.internal-only {
+  margin-left: 0;
+  color: #aeb6ff;
+  background: var(--color-accent-soft);
+}
+
 /* ---------- Modals / dialogs ---------- */
 
 .modal-backdrop {
@@ -771,6 +777,44 @@ code {
   font-size: 0.85rem !important;
   font-weight: 500 !important;
   color: var(--color-text-muted);
+}
+
+.radio-field {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.radio-field input {
+  width: auto !important;
+  margin-top: 3px;
+  accent-color: var(--color-accent);
+}
+
+.radio-field span {
+  font-size: 0.85rem !important;
+  font-weight: 500 !important;
+  color: var(--color-text-muted);
+}
+
+.wizard-fieldset {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+}
+
+.wizard-fieldset legend {
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 0 4px;
+}
+
+.wizard-form-grid {
+  display: grid;
+  gap: 18px;
 }
 
 .dialog-description {
