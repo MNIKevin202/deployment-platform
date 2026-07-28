@@ -295,6 +295,17 @@ Options:
                           deploying anything.
   --no-deploy             Run checks, stage, and commit. Stops before
                           syncing source or contacting the VPS.
+  --deploy-head           Deploy the CURRENT committed HEAD as a full
+                          API + web release WITHOUT creating a commit. For
+                          releasing an already-committed change through the
+                          normal validated/backed-up/rollback-capable path.
+                          Requires a clean working tree and HEAD in sync
+                          with origin/main. Distinct from the default flow
+                          (which deploys pending changes and commits) and
+                          from --resume-release (which redeploys an
+                          already-synced release directory).
+  --allow-branch-drift    With --deploy-head only: proceed even when local
+                          HEAD does not match origin/main. Explicit opt-in.
   --yes                   Auto-confirm the two interactive prompts (stage
                           and commit; proceed with remote deployment)
                           instead of waiting for y/N input. A commit
@@ -811,6 +822,15 @@ VERIFY_ONLY=0
 # backup, a manual edit — and there must be a supported way to bring them
 # back in line that is not "make a fake change to installer/".
 FORCE_CONFIG_DEPLOY=0
+# --deploy-head: deploy the CURRENT committed HEAD as a full API+web release
+# without creating a new commit. It exists so an already-committed change (one
+# made and reviewed outside this script) can be released through the normal
+# validated/backed-up/rollback-capable path, instead of the default flow which
+# only ever deploys pending working-tree changes and makes its own commit.
+DEPLOY_HEAD=0
+# --allow-branch-drift: the explicit, opt-in override that lets --deploy-head
+# proceed when local HEAD does not match origin/main (normally refused).
+ALLOW_BRANCH_DRIFT=0
 PLAN_ONLY=0
 NO_DEPLOY=0
 AUTO_YES=0
@@ -849,6 +869,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --deploy-config)
       FORCE_CONFIG_DEPLOY=1
+      shift
+      ;;
+    --deploy-head)
+      DEPLOY_HEAD=1
+      shift
+      ;;
+    --allow-branch-drift)
+      ALLOW_BRANCH_DRIFT=1
       shift
       ;;
     --yes)
@@ -905,6 +933,31 @@ if [ -n "${RESUME_RELEASE_DIR}" ]; then
   if [ -n "${COMMIT_MESSAGE}" ]; then
     fail "--resume-release does not create a commit — --message has no effect and cannot be combined with it."
   fi
+fi
+
+# --deploy-head is its own release mode. It is mutually exclusive with the
+# other modes, and — because it never creates a commit — a commit message is
+# meaningless. Rejecting the combinations here keeps the three modes crisply
+# distinct: normal (deploy pending working-tree changes, makes a commit),
+# --deploy-head (deploy the current committed HEAD, no commit), and
+# --resume-release (redeploy an already-synced release directory).
+if [ "${DEPLOY_HEAD}" -eq 1 ]; then
+  if [ -n "${RESUME_RELEASE_DIR}" ]; then
+    fail "--deploy-head cannot be combined with --resume-release (choose one release mode)."
+  fi
+  if [ "${FORCE_CONFIG_DEPLOY}" -eq 1 ]; then
+    fail "--deploy-head cannot be combined with --deploy-config."
+  fi
+  if [ "${NO_DEPLOY}" -eq 1 ]; then
+    fail "--deploy-head deploys the current commit; it cannot be combined with --no-deploy."
+  fi
+  if [ -n "${COMMIT_MESSAGE}" ]; then
+    fail "--deploy-head does not create a commit — --message has no effect and cannot be combined with it."
+  fi
+fi
+
+if [ "${ALLOW_BRANCH_DRIFT}" -eq 1 ] && [ "${DEPLOY_HEAD}" -eq 0 ]; then
+  fail "--allow-branch-drift only applies to --deploy-head."
 fi
 
 load_config_file "${CONFIG_FILE}"
@@ -1130,6 +1183,28 @@ info "Tracked modifications: ${#MODIFIED_TRACKED[@]}"
 info "Tracked deletions: ${#DELETED_TRACKED[@]}"
 info "Untracked files: ${#UNTRACKED[@]}"
 
+# --deploy-head gate: it releases the committed HEAD, so it demands a clean
+# working tree and (unless explicitly overridden) HEAD in sync with origin/main.
+# Both checks run here, before any build/test/sync, so a violation stops the
+# run without side effects.
+if [ "${DEPLOY_HEAD}" -eq 1 ]; then
+  if [ ${#MODIFIED_TRACKED[@]} -gt 0 ] || [ ${#DELETED_TRACKED[@]} -gt 0 ] || [ ${#UNTRACKED[@]} -gt 0 ]; then
+    fail "--deploy-head requires a clean working tree (no pending changes). Commit or stash them, or run a normal release to deploy pending changes."
+  fi
+
+  DEPLOY_HEAD_SHA="$(git rev-parse HEAD)"
+  ORIGIN_MAIN_SHA="$(git rev-parse --verify --quiet origin/main || true)"
+  if [ "${ALLOW_BRANCH_DRIFT}" -eq 1 ]; then
+    info "--deploy-head: branch-drift check overridden (--allow-branch-drift); deploying HEAD ${DEPLOY_HEAD_SHA:0:12}."
+  elif [ -z "${ORIGIN_MAIN_SHA}" ]; then
+    fail "--deploy-head: no origin/main ref found locally. Run 'git fetch origin', or pass --allow-branch-drift to deploy the local HEAD anyway."
+  elif [ "${DEPLOY_HEAD_SHA}" != "${ORIGIN_MAIN_SHA}" ]; then
+    fail "--deploy-head: local HEAD (${DEPLOY_HEAD_SHA:0:12}) does not match origin/main (${ORIGIN_MAIN_SHA:0:12}). Push first (git push origin main), or pass --allow-branch-drift to override."
+  else
+    info "--deploy-head: HEAD matches origin/main (${DEPLOY_HEAD_SHA:0:12})."
+  fi
+fi
+
 # ============================================================
 # 2. CHANGE DETECTION
 # ============================================================
@@ -1206,6 +1281,15 @@ if [ "${FORCE_CONFIG_DEPLOY}" -eq 1 ]; then
   info "--deploy-config: the configuration stages will run regardless of the computed diff scope."
 fi
 
+# --deploy-head deploys the whole committed HEAD, so both application images are
+# rebuilt and swapped regardless of what any diff would have shown.
+if [ "${DEPLOY_HEAD}" -eq 1 ]; then
+  API_CHANGED="yes"
+  WEB_CHANGED="yes"
+  DOCS_ONLY="no"
+  info "--deploy-head: deploying the current committed HEAD as a full API + web release; no commit will be created."
+fi
+
 info "API changed: ${API_CHANGED}"
 info "Web changed: ${WEB_CHANGED}"
 info "Installer changed: ${INSTALLER_CHANGED}"
@@ -1232,7 +1316,11 @@ has_releasable_changes() {
 # skipped and HEAD is synced and deployed as-is.
 SKIP_COMMIT=0
 if ! has_releasable_changes; then
-  if [ "${FORCE_CONFIG_DEPLOY}" -eq 1 ]; then
+  if [ "${DEPLOY_HEAD}" -eq 1 ]; then
+    SKIP_COMMIT=1
+    info ""
+    info "No pending changes — --deploy-head will deploy the current committed HEAD without creating a commit."
+  elif [ "${FORCE_CONFIG_DEPLOY}" -eq 1 ]; then
     SKIP_COMMIT=1
     info ""
     info "No pending changes — --deploy-config will re-apply the configuration from the current commit."

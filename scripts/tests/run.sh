@@ -1056,6 +1056,67 @@ assert_not_contains "no SSH key material is echoed" "$PLAN_DISABLED" "PRIVATE KE
 assert_contains "release.config.example still warns against putting secrets in it" \
   "$(cat "$PROJECT_DIR/release.config.example")" "must never contain secrets"
 
+echo "=== --deploy-head: committed-HEAD release mode ==="
+# Runs release.sh with arbitrary args against the fake VPS transport. The
+# incompatibility guards and the clean-tree/branch gate all fire before any
+# real work, so these never build, deploy, or contact a real host.
+run_release_raw() {
+  write_release_config "" ""
+  : > "$SSH_CALL_LOG"
+  (
+    cd "$PROJECT_DIR"
+    PATH="$FAKE_BIN:$REAL_PATH"
+    export SSH_CALL_LOG
+    bash ./release.sh "$@"
+  ) 2>&1 || true
+}
+
+# Mode incompatibilities are rejected (these exit during argument handling,
+# before config load, VPS contact, or any Git mutation).
+assert_contains "--deploy-head + --resume-release is rejected" \
+  "$(run_release_raw --deploy-head --resume-release /opt/deployment-platform/source/releases/release-x-y)" \
+  "cannot be combined with --resume-release"
+assert_contains "--deploy-head + --deploy-config is rejected" \
+  "$(run_release_raw --deploy-head --deploy-config)" \
+  "cannot be combined with --deploy-config"
+assert_contains "--deploy-head + --no-deploy is rejected" \
+  "$(run_release_raw --deploy-head --no-deploy)" \
+  "cannot be combined with --no-deploy"
+assert_contains "--deploy-head + --message is rejected (it never commits)" \
+  "$(run_release_raw --deploy-head --message "should not be allowed")" \
+  "does not create a commit"
+assert_contains "--allow-branch-drift without --deploy-head is rejected" \
+  "$(run_release_raw --allow-branch-drift)" \
+  "only applies to --deploy-head"
+
+# Clean-tree gate: a deliberately-untracked file makes the tree dirty
+# regardless of ambient state, and --deploy-head must refuse it without
+# contacting the VPS.
+DEPLOY_HEAD_DIRTY_MARKER="$PROJECT_DIR/.deploy-head-dirty-marker"
+printf 'throwaway dirty marker for the deploy-head clean-tree test\n' > "$DEPLOY_HEAD_DIRTY_MARKER"
+DEPLOY_HEAD_DIRTY_OUT="$(run_release_raw --deploy-head --plan-only)"
+DEPLOY_HEAD_DIRTY_SSH="$(cat "$SSH_CALL_LOG")"
+rm -f "$DEPLOY_HEAD_DIRTY_MARKER"
+assert_contains "--deploy-head refuses a dirty working tree" \
+  "$DEPLOY_HEAD_DIRTY_OUT" "requires a clean working tree"
+assert_not_contains "--deploy-head dirty-tree refusal never contacted the VPS" \
+  "$DEPLOY_HEAD_DIRTY_SSH" "ssh stdin"
+
+# Help + source-level guarantees for the mode's behavior.
+DEPLOY_HEAD_HELP="$(cd "$PROJECT_DIR" && bash ./release.sh --help 2>&1 || true)"
+assert_contains "help documents --deploy-head" "$DEPLOY_HEAD_HELP" "--deploy-head"
+assert_contains "help documents --allow-branch-drift" "$DEPLOY_HEAD_HELP" "--allow-branch-drift"
+
+RELEASE_SH_TEXT="$(cat "$RELEASE_SH")"
+assert_contains "--deploy-head forces an API rebuild" "$RELEASE_SH_TEXT" 'API_CHANGED="yes"'
+assert_contains "--deploy-head forces a web rebuild" "$RELEASE_SH_TEXT" 'WEB_CHANGED="yes"'
+assert_contains "--deploy-head skips the commit stage (no new commit)" \
+  "$RELEASE_SH_TEXT" "deploy the current committed HEAD without creating a commit"
+assert_contains "--deploy-head enforces HEAD == origin/main" \
+  "$RELEASE_SH_TEXT" "does not match origin/main"
+assert_contains "--deploy-head has an explicit branch-drift override" \
+  "$RELEASE_SH_TEXT" "branch-drift check overridden"
+
 echo
 echo "=== Syntax validation ==="
 SYNTAX_FAILURES=0
