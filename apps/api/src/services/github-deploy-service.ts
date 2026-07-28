@@ -340,8 +340,16 @@ export async function deployFromGithub(
   let replacementContainerId: string | null = null;
   /** Whatever name the replacement container currently sits under — the temp name until the swap rename succeeds, then the app's real container name. */
   let replacementCurrentName: string | null = null;
-  let replacementStarted = false;
   let anySwapPerformed = false;
+  /**
+   * True only once the *previous* live container has been safely stopped and
+   * renamed aside to rollbackContainerName — i.e. a real, verified rollback
+   * copy exists. This is deliberately separate from anySwapPerformed: a first
+   * deployment (or a recovery where the container is already missing) crosses
+   * the swap boundary with NO previous container to preserve, and its failure
+   * path must NOT masquerade as a rollback failure.
+   */
+  let previousContainerPreserved = false;
   /** Hoisted so the catch block can persist whatever these found even on a verification failure. */
   let internalCheckResult: InternalCheckResult | null = null;
   let publicCheckResult: PublicCheckResult | null = null;
@@ -554,7 +562,6 @@ export async function deployFromGithub(
 
     progress("starting-replacement");
     await dockerOps.startContainer(replacementContainerId);
-    replacementStarted = true;
 
     const inspected = await dockerOps.inspectContainer(replacementContainerId);
     if (!inspected.running) {
@@ -564,9 +571,39 @@ export async function deployFromGithub(
       );
     }
 
-    // Destructive boundary: swap the running container for the
-    // replacement we just confirmed is up.
-    await dockerOps.removeContainer(containerName);
+    // Preserve-then-swap. Everything up to here left the live container
+    // completely untouched (the replacement is running under a temp name).
+    // Now, and only now, do we move the live container out of the way —
+    // and we do it by PRESERVING it (stop + rename to the rollback name),
+    // never by deleting it. The old container is destroyed only after the
+    // replacement is fully verified below, so a rollback always has a real
+    // container to restore.
+    const previousExists = await dockerOps.containerExists(containerName);
+    if (previousExists) {
+      // Stop first (safe, idempotent), then rename aside. If the rename
+      // itself fails we have not yet crossed the swap boundary, so restart
+      // the previous container and fail as a clean pre-swap error — the
+      // live app is left exactly as it was.
+      await dockerOps.stopContainer(containerName).catch(() => undefined);
+      try {
+        await dockerOps.renameContainer(containerName, rollbackContainerName);
+        previousContainerPreserved = true;
+      } catch (preserveError) {
+        await dockerOps.startContainer(containerName).catch(() => undefined);
+        throw new GithubDeployError(
+          `Could not preserve the current container before swapping: ${errorMessage(preserveError)}`,
+          "preserving-current-container"
+        );
+      }
+    }
+    // Case B/C: no previous container exists (a first deployment, or a
+    // recovery where the runtime went missing). There is nothing to
+    // preserve — the live name is simply free to take over.
+
+    // Swap boundary: the live name is now free. Take it over with the
+    // replacement. From here a failure means the app is temporarily down
+    // and must be restored (if a previous version was preserved) or
+    // reported as a recoverable first-deploy failure (if not).
     anySwapPerformed = true;
     await dockerOps.renameContainer(replacementContainerId, containerName);
     replacementCurrentName = containerName;
@@ -685,6 +722,15 @@ export async function deployFromGithub(
       routingWarning = errorMessage(error);
     }
 
+    // Verified success: the replacement is live, healthy, and both the
+    // database and routing now point at it. Only now is it safe to remove
+    // the preserved previous container — never before this point, so a
+    // failure at any earlier step could always roll back to it. Best-effort:
+    // a leftover rollback container is untidy but not a deployment failure.
+    if (previousContainerPreserved && rollbackContainerName) {
+      await dockerOps.removeContainer(rollbackContainerName).catch(() => undefined);
+    }
+
     progress("cleaning-temporary-files");
     cleanupCheckout(cloneResult.workDir);
     workDir = null;
@@ -775,15 +821,47 @@ export async function deployFromGithub(
       return { success: false, rolledBack: false, message, stage };
     }
 
-    // A swap was already performed — the old container is gone. Restore
-    // it from its rollback name.
+    // The swap boundary was crossed but the deployment failed. Always
+    // remove the failed replacement first — it is not a viable app.
+    if (replacementCurrentName) {
+      await dockerOps.removeContainer(replacementCurrentName).catch(() => undefined);
+    }
+
+    if (!previousContainerPreserved) {
+      // Case B/C: there was no previous container to preserve (a first
+      // deployment, or a recovery of an app whose runtime had gone
+      // missing). There is nothing to "roll back" TO — so this is a plain,
+      // recoverable FAILED, never a fake ROLLBACK_FAILED. The app's
+      // database record is deliberately left intact so it stays visible on
+      // the Apps page and can simply be redeployed.
+      recordEvent({
+        appId,
+        eventType: "github-deploy-failed",
+        severity: "error",
+        message: `GitHub deployment failed for "${app.name}" (stage: ${stage}): ${message}. No previous container existed, so there was nothing to roll back — the app has no running container and can be redeployed.`,
+        metadata: eventMetadata
+      });
+
+      // The runtime is gone — reflect that in the app record rather than
+      // leaving a stale "running" status that no live container backs. The
+      // Apps list/detail also cross-check live Docker state, so display is
+      // never driven by this value alone.
+      appDatabase.updateAppStatus(app.id, "missing");
+      appDatabase.updateDeploymentHealthResult(appId, {
+        lastInternalHealthResult: internalCheckResult?.message ?? null,
+        lastPublicHealthResult: publicCheckResult?.message ?? null,
+        lastDeploymentStatus: "FAILED"
+      });
+
+      return { success: false, rolledBack: false, message, stage };
+    }
+
+    // Case A: a previous container was preserved (stopped + renamed aside).
+    // Restore it from its rollback name and bring it back up.
     let restored = false;
     let restoreError: string | null = null;
 
     try {
-      if (replacementStarted && replacementCurrentName) {
-        await dockerOps.removeContainer(replacementCurrentName).catch(() => undefined);
-      }
       if (rollbackContainerName) {
         await dockerOps.renameContainer(rollbackContainerName, app.containerName as string);
         await dockerOps.startContainer(app.containerName as string);

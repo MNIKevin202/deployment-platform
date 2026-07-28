@@ -620,6 +620,17 @@ code {
   background: var(--color-accent-soft);
 }
 
+.type-badge.missing {
+  color: var(--color-danger);
+  background: var(--color-danger-bg);
+}
+
+/* A database-managed app whose container is gone — visually distinct so a
+   recovery-required app never reads as a healthy one. */
+.missing-app-card {
+  border-color: var(--color-danger);
+}
+
 .status-badge.warning,
 .routing-badge {
   color: var(--color-warning);

@@ -324,7 +324,7 @@ export default function AppDetail({
   };
 
   const confirmDelete = async () => {
-    if (!detail?.containerId || deleteLockRef.current) {
+    if (!detail || deleteLockRef.current) {
       return;
     }
     deleteLockRef.current = true;
@@ -333,8 +333,12 @@ export default function AppDetail({
       setActionError("");
       setActionLoading("delete");
 
-      const idempotencyKey = crypto.randomUUID();
-      const response = await deleteAppWithRetry(detail.containerId, idempotencyKey);
+      // When the container is missing there is no live container id to
+      // target, so delete by app id (tolerating an already-gone runtime).
+      // Otherwise use the idempotency-key-safe container-id path.
+      const response = detail.containerExists && detail.containerId
+        ? await deleteAppWithRetry(detail.containerId, crypto.randomUUID())
+        : await fetch(`/api/apps/by-app-id/${appId}`, { method: "DELETE" });
 
       if (!response.ok) {
         throw new Error(await readApiError(response, "Unable to delete app"));
@@ -742,16 +746,14 @@ export default function AppDetail({
             </button>
           )}
 
-          {detail.containerExists && (
-            <button
-              className="danger-button"
-              type="button"
-              onClick={() => setShowDeleteConfirm(true)}
-              disabled={actionLoading !== null}
-            >
-              Delete
-            </button>
-          )}
+          <button
+            className="danger-button"
+            type="button"
+            onClick={() => setShowDeleteConfirm(true)}
+            disabled={actionLoading !== null}
+          >
+            Delete
+          </button>
         </div>
       </div>
 

@@ -113,6 +113,15 @@ function createFakeDockerOps(
       if (settings.ensureVolumeFails) {
         throw new Error(`simulated ensureVolume failure for ${name}`);
       }
+    },
+
+    async containerExists() {
+      // redeployApp never calls this; present only to satisfy the interface.
+      return true;
+    },
+
+    async stopContainer() {
+      // redeployApp never calls this; present only to satisfy the interface.
     }
   };
 

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, test } from "node:test";
 import { createAppDatabase, type AppDatabase } from "../database.js";
 import {
   deleteAppWithIdempotency,
+  deleteManagedAppByAppId,
   type ContainerProtectionInfo,
   type DeletionDockerOps,
   type DeleteAppServiceDependencies
@@ -253,5 +254,94 @@ describe("deleteAppWithIdempotency", () => {
       assert.equal(second.success, false);
       assert.equal(second.statusCode, 404);
     });
+  });
+});
+
+describe("deleteManagedAppByAppId (missing-container recovery deletion)", () => {
+  let tempDir: string;
+  let appDatabase: AppDatabase;
+  let state: FakeDockerState;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "deployment-platform-delete-by-id-test-"));
+    appDatabase = createAppDatabase(join(tempDir, `${randomUUID()}.sqlite`));
+    state = { containers: new Map() };
+  });
+
+  afterEach(() => {
+    appDatabase.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function deps(overrides: Partial<DeleteAppServiceDependencies> = {}): DeleteAppServiceDependencies {
+    return {
+      appDatabase,
+      dockerOps: createFakeOps(state).ops,
+      reconcileRouting: fakeReconcileSuccess,
+      ...overrides
+    };
+  }
+
+  test("deletes a database-managed app whose container is already MISSING, tolerating the 404, and reconciles routing", async () => {
+    const app = appDatabase.createApp({
+      name: "missing-app",
+      image: "nginx:alpine",
+      containerPort: 4319,
+      containerName: "app-missing-app",
+      domain: "missing-app.apps.example.com"
+    });
+    // Deliberately do NOT seed the container into Docker — it is gone.
+    let reconciled = 0;
+
+    const result = await deleteManagedAppByAppId(
+      deps({
+        reconcileRouting: async () => {
+          reconciled += 1;
+          return fakeReconcileSuccess();
+        }
+      }),
+      app.id
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.appName, "missing-app");
+    assert.equal(appDatabase.getAppById(app.id), null, "the database record is removed");
+    assert.equal(reconciled, 1, "routing is reconciled because the app had a domain");
+  });
+
+  test("also removes the container when one still happens to exist, then deletes the record", async () => {
+    const app = appDatabase.createApp({
+      name: "present-app",
+      image: "nginx:alpine",
+      containerPort: 4319,
+      containerName: "app-present-app"
+    });
+    state.containers.set("app-present-app", managedAppContainer("present-app"));
+
+    const result = await deleteManagedAppByAppId(deps(), app.id);
+
+    assert.equal(result.success, true);
+    assert.equal(state.containers.has("app-present-app"), false, "the live container is removed");
+    assert.equal(appDatabase.getAppById(app.id), null);
+  });
+
+  test("returns 404 for an unknown app id", async () => {
+    const result = await deleteManagedAppByAppId(deps(), 9999);
+    assert.equal(result.success, false);
+    assert.equal(result.statusCode, 404);
+  });
+
+  test("refuses to delete an app whose container name is platform-protected", async () => {
+    const app = appDatabase.createApp({
+      name: "protected",
+      image: "nginx:alpine",
+      containerPort: 80,
+      containerName: "deployment-platform-api"
+    });
+
+    const result = await deleteManagedAppByAppId(deps(), app.id);
+    assert.equal(result.success, false);
+    assert.equal(result.statusCode, 403);
+    assert.notEqual(appDatabase.getAppById(app.id), null, "the record is preserved");
   });
 });

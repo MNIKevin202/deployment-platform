@@ -39,6 +39,13 @@ export interface RedeployDockerOps {
   /** Resolves even if the container is already gone (idempotent). */
   removeContainer(nameOrId: string): Promise<void>;
   renameContainer(id: string, newName: string): Promise<void>;
+  /** True if a container with this name/id exists, false on a 404. */
+  containerExists(nameOrId: string): Promise<boolean>;
+  /**
+   * Stops the container if it is running. Idempotent: a container that is
+   * already stopped (304) or already gone (404) resolves successfully.
+   */
+  stopContainer(nameOrId: string): Promise<void>;
   /**
    * Creates the named volume, labeled for this app, if it doesn't exist
    * yet. If it already exists, throws unless it's already labeled as owned
@@ -96,6 +103,31 @@ export function createDockerOps(docker: Docker): RedeployDockerOps {
 
     async renameContainer(id, newName) {
       await docker.getContainer(id).rename({ name: newName });
+    },
+
+    async containerExists(nameOrId) {
+      try {
+        await docker.getContainer(nameOrId).inspect();
+        return true;
+      } catch (error) {
+        if (getErrorStatusCode(error) === 404) {
+          return false;
+        }
+        throw error;
+      }
+    },
+
+    async stopContainer(nameOrId) {
+      try {
+        await docker.getContainer(nameOrId).stop();
+      } catch (error) {
+        const code = getErrorStatusCode(error);
+        // 304 = already stopped, 404 = already gone — both are the state
+        // we want, so neither is an error for an idempotent stop.
+        if (code !== 304 && code !== 404) {
+          throw error;
+        }
+      }
     },
 
     async ensureVolume(name, ownerAppName) {

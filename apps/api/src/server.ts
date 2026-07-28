@@ -26,9 +26,15 @@ import {
 import { createAppWithConfig } from "./services/app-creation-service.js";
 import {
   createDeletionDockerOps,
-  deleteAppWithIdempotency
+  deleteAppWithIdempotency,
+  deleteManagedAppByAppId
 } from "./services/app-deletion-service.js";
 import { readIdempotencyKeyHeader } from "./services/idempotency.js";
+import {
+  buildManagedContainerRuntimeMap,
+  resolveAppRuntime,
+  type AppRuntimeState
+} from "./services/app-runtime-service.js";
 import { generateBuildBrief } from "./services/build-brief-service.js";
 import { getErrorStatusCode } from "./docker-errors.js";
 import { createEventRecorder } from "./services/deployment-event-service.js";
@@ -336,6 +342,30 @@ function isRoutingReady(hasDomain: boolean): boolean {
 }
 
 /**
+ * One Docker call for the whole Apps list (not one per app): returns a map
+ * of managed container name -> its live state. Returns null if Docker is
+ * unreachable, so the list endpoint degrades to stored status instead of
+ * failing outright or wrongly reporting every app as missing. The pure
+ * mapping/resolution lives in app-runtime-service.ts so it can be unit
+ * tested without a Docker daemon.
+ */
+async function loadManagedContainerRuntime(): Promise<Map<string, AppRuntimeState> | null> {
+  try {
+    const containers = await docker.listContainers({ all: true });
+    return buildManagedContainerRuntimeMap(
+      containers.map((container) => ({
+        names: container.Names,
+        state: container.State ?? null,
+        labels: container.Labels ?? undefined
+      }))
+    );
+  } catch (error) {
+    app.log.error(error, "Unable to list containers for app runtime state");
+    return null;
+  }
+}
+
+/**
  * Cheap, DB-only summary for the dashboard's app cards — no Docker calls.
  * Deliberately excludes live CPU/memory (that requires a Docker stats call
  * per app and belongs on the app detail Metrics tab, polled only while
@@ -352,12 +382,18 @@ function latestEventSeverity(appId: number): string | null {
 }
 
 app.get("/apps", async () => {
+  // Cross-check live Docker state so a database-managed app whose container
+  // has gone missing stays listed (with a truthful runtime state) rather
+  // than silently disappearing or reporting a stale "running".
+  const runtimeByName = await loadManagedContainerRuntime();
+
   return {
     apps: appDatabase.listApps().map((storedApp) => ({
       ...storedApp,
       routingReady: isRoutingReady(storedApp.domain !== null),
       health: summarizeAppHealth(storedApp.id),
-      latestEventSeverity: latestEventSeverity(storedApp.id)
+      latestEventSeverity: latestEventSeverity(storedApp.id),
+      runtime: resolveAppRuntime(storedApp.containerName, runtimeByName)
     }))
   };
 });
@@ -1031,6 +1067,40 @@ app.delete<{ Params: ContainerParams }>(
 
     if (!result.success) {
       app.log.error({ message: result.message }, "App deletion failed");
+      return reply.code(result.statusCode ?? 502).send({
+        success: false,
+        message: result.message
+      });
+    }
+
+    return result;
+  }
+);
+
+/**
+ * Recovery deletion by database app id — used by the Apps page / detail for
+ * an app whose Docker container has gone MISSING. The primary DELETE route
+ * above resolves the app from a live container inspection, which is
+ * impossible when there is no container; this one resolves by app id and
+ * tolerates an already-gone runtime, so a database-managed app is never
+ * un-deletable just because its container disappeared.
+ */
+app.delete<{ Params: AppIdParams }>(
+  "/apps/by-app-id/:id",
+  async (request, reply) => {
+    const parsedParams = appIdParamSchema.safeParse(request.params);
+
+    if (!parsedParams.success) {
+      return reply.code(400).send({ success: false, message: "Invalid app id" });
+    }
+
+    const result = await deleteManagedAppByAppId(
+      deletionServiceDeps,
+      parsedParams.data.id
+    );
+
+    if (!result.success) {
+      app.log.error({ message: result.message }, "App deletion (by id) failed");
       return reply.code(result.statusCode ?? 502).send({
         success: false,
         message: result.message

@@ -145,6 +145,69 @@ async function performDeleteApp(
 }
 
 /**
+ * Recovery-oriented deletion keyed by the app's own database id rather than a
+ * live container id. This is the path the Apps page / detail use for an app
+ * whose container has gone MISSING — the container-id path (above) can't be
+ * used because there is no container to inspect. It removes the container by
+ * the app's stored name if one still happens to exist (tolerating a 404 for
+ * an already-gone runtime), then deletes the database record and reconciles
+ * routing. Deliberately never fabricates a container id and never treats an
+ * already-missing container as an error.
+ */
+export async function deleteManagedAppByAppId(
+  deps: DeleteAppServiceDependencies,
+  appId: number
+): Promise<DeleteAppServiceResult> {
+  const { appDatabase, dockerOps, reconcileRouting } = deps;
+
+  const storedApp = appDatabase.getAppById(appId);
+  if (!storedApp) {
+    return { success: false, statusCode: 404, message: "App not found" };
+  }
+
+  if (
+    storedApp.containerName &&
+    PROTECTED_CONTAINER_NAMES.has(storedApp.containerName)
+  ) {
+    return {
+      success: false,
+      statusCode: 403,
+      message: "System containers cannot be deleted"
+    };
+  }
+
+  if (storedApp.containerName) {
+    try {
+      await dockerOps.removeContainer(storedApp.containerName);
+    } catch (error) {
+      // A 404 is exactly the state this path exists to handle — the
+      // container is already gone, which is success, not failure.
+      if (getErrorStatusCode(error) !== 404) {
+        return {
+          success: false,
+          statusCode: getErrorStatusCode(error) ?? 500,
+          message: "Unable to delete app"
+        };
+      }
+    }
+  }
+
+  appDatabase.deleteApp(storedApp.id);
+
+  if (storedApp.domain) {
+    await reconcileRouting(appDatabase);
+  }
+
+  return {
+    success: true,
+    message: `${storedApp.name} was deleted.`,
+    action: "deleted",
+    name: storedApp.containerName ?? storedApp.name,
+    appName: storedApp.name
+  };
+}
+
+/**
  * Public entry point. Wraps `performDeleteApp` with idempotency-key handling
  * when `idempotencyKey` is present; behaves exactly as before when it is
  * absent, so existing callers are unaffected.

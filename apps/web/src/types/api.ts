@@ -66,6 +66,13 @@ export interface StoredApp {
   routingReady: boolean;
   health: { state: HealthState; lastCheckedAt: string | null } | null;
   latestEventSeverity: DeploymentEventSeverity | null;
+  /**
+   * Live Docker runtime state for this app, cross-checked against the actual
+   * container. `present: false` means the database record exists but the
+   * container is gone (recovery required). `null` means Docker could not be
+   * queried, so `status` should be trusted as the best available signal.
+   */
+  runtime?: { present: boolean; running: boolean; status: string | null } | null;
 }
 
 export interface StoredAppsResponse {

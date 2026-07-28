@@ -105,6 +105,17 @@ function App() {
     return map;
   }, [storedApps]);
 
+  // Database-managed apps whose Docker container is gone (runtime.present is
+  // explicitly false). These have no ContainerSummary in the live container
+  // list, so without this they would vanish from the Apps page entirely.
+  // `runtime == null` means Docker state is unknown (couldn't be queried) —
+  // those are NOT treated as missing, to avoid a transient Docker hiccup
+  // flipping every app into a recovery state.
+  const missingApps = useMemo(
+    () => storedApps.filter((storedApp) => storedApp.runtime?.present === false),
+    [storedApps]
+  );
+
   const loadDashboard = useCallback(async () => {
     try {
       const [infoResponse, containersResponse, appsResponse, routingResponse] =
@@ -285,6 +296,41 @@ function App() {
     }
   };
 
+  // Delete for an app whose container is missing: resolved by app id (there
+  // is no live container id to target), tolerating an already-gone runtime.
+  const deleteMissingApp = async (storedApp: StoredApp) => {
+    const confirmed = window.confirm(
+      `Delete ${storedApp.containerName ?? storedApp.name}?\n\nThis removes the app's configuration. Its container is already missing.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setError("");
+      setNotice("");
+      setActionLoading(`app-${storedApp.id}:delete`);
+
+      const response = await fetch(`/api/apps/by-app-id/${storedApp.id}`, {
+        method: "DELETE"
+      });
+
+      if (!response.ok) {
+        throw new Error(await getApiError(response, "Unable to delete app"));
+      }
+
+      setNotice(`${storedApp.name} was deleted.`);
+      await loadDashboard();
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error ? deleteError.message : "Unable to delete app"
+      );
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const openCreateApp = () => {
     setError("");
     setNotice("");
@@ -396,10 +442,12 @@ function App() {
         <AppsPage
           managedApps={managedApps}
           storedAppsByName={storedAppsByName}
+          missingApps={missingApps}
           actionLoading={actionLoading}
           onAction={(container, action) => void runAction(container, action)}
           onOpenLogs={(container) => setSelectedContainer(container)}
           onDeleteApp={(container) => void deleteApp(container)}
+          onDeleteMissingApp={(storedApp) => void deleteMissingApp(storedApp)}
           onViewApp={viewApp}
           onCreateApp={openCreateApp}
         />

@@ -106,7 +106,13 @@ function createFakeOps(
       }
     },
 
-    async renameContainer() {}
+    async renameContainer() {},
+
+    async containerExists() {
+      return false;
+    },
+
+    async stopContainer() {}
   };
 
   return { ops, calls };

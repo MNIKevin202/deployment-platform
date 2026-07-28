@@ -1,4 +1,5 @@
 import AppCard from "../components/AppCard";
+import MissingAppCard from "../components/MissingAppCard";
 import type {
   ContainerAction,
   ContainerSummary,
@@ -8,10 +9,12 @@ import type {
 interface AppsPageProps {
   managedApps: ContainerSummary[];
   storedAppsByName: Map<string, StoredApp>;
+  missingApps: StoredApp[];
   actionLoading: string | null;
   onAction: (container: ContainerSummary, action: ContainerAction) => void;
   onOpenLogs: (container: ContainerSummary) => void;
   onDeleteApp: (container: ContainerSummary) => void;
+  onDeleteMissingApp: (storedApp: StoredApp) => void;
   onViewApp: (storedApp: StoredApp) => void;
   onCreateApp: () => void;
 }
@@ -19,13 +22,17 @@ interface AppsPageProps {
 export default function AppsPage({
   managedApps,
   storedAppsByName,
+  missingApps,
   actionLoading,
   onAction,
   onOpenLogs,
   onDeleteApp,
+  onDeleteMissingApp,
   onViewApp,
   onCreateApp
 }: AppsPageProps) {
+  const hasAnyApp = managedApps.length > 0 || missingApps.length > 0;
+
   return (
     <div className="page">
       <section className="page-section">
@@ -40,7 +47,7 @@ export default function AppsPage({
           </button>
         </div>
 
-        {managedApps.length === 0 ? (
+        {!hasAnyApp ? (
           <div className="empty-state app-empty-state">
             <h3>No managed apps yet</h3>
             <p>Deploy your first application from a Docker image.</p>
@@ -67,6 +74,16 @@ export default function AppsPage({
                 />
               );
             })}
+
+            {missingApps.map((storedApp) => (
+              <MissingAppCard
+                key={`missing-${storedApp.id}`}
+                storedApp={storedApp}
+                actionLoading={actionLoading}
+                onViewApp={onViewApp}
+                onDeleteApp={onDeleteMissingApp}
+              />
+            ))}
           </div>
         )}
       </section>
