@@ -62,7 +62,7 @@ describe("deployFromGithub — guard clauses (no clone/build reached)", () => {
       appDatabase,
       dockerOps: unusedDockerOps(),
       githubClient: unusedGithubClient(),
-      resolveCredential: () => ({ success: false, credentialStatus: "not-configured" }),
+      resolveCredential: async () => ({ success: false, credentialStatus: "not-configured" }),
       reconcileRouting: async () => ({ lastReconcileSucceeded: true, lastError: null }),
       recordEvent
     };
@@ -185,7 +185,7 @@ describe("deployFromGithub — guard clauses (no clone/build reached)", () => {
     const deps: GithubDeployDependencies = {
       ...baseDeps,
       githubClient,
-      resolveCredential: () => ({ success: true, token: "fake_token_for_tests_only" }),
+      resolveCredential: async () => ({ success: true, token: "fake_token_for_tests_only", source: "pat" }),
       // A guaranteed-nonexistent absolute path deterministically forces
       // ENOENT on every platform — unlike clearing PATH, which does not
       // reliably work (macOS in particular falls back to a default

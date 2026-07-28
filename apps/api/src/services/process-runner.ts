@@ -70,17 +70,32 @@ const SANITIZE_LINE_PATTERN =
   /token|authorization|password|secret|credential|encryption[ _-]?key|cookie/i;
 
 /**
+ * Matches the literal shape of every current GitHub token type: classic
+ * PATs (ghp_), fine-grained PATs (github_pat_), OAuth (gho_), GitHub App
+ * user-to-server (ghu_), and GitHub App installation access tokens (ghs_)
+ * — the type this feature introduces. Applied in addition to the
+ * line-based filter below as defense in depth: even if a token literal
+ * ever ended up on a line that doesn't otherwise look credential-shaped
+ * (no adjacent "token"/"password"/etc keyword), the value itself is still
+ * never allowed through verbatim.
+ */
+const GITHUB_TOKEN_LITERAL_PATTERN = /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,255}\b|\bgithub_pat_[A-Za-z0-9_]{20,255}\b/g;
+
+/**
  * Drops any output line that looks like it might carry a credential
- * before it is ever logged or recorded as deployment-event metadata.
- * Deliberately line-based and conservative — losing an unrelated line
- * that happens to mention "password" in passing is an acceptable cost
- * for never persisting a real secret.
+ * before it is ever logged or recorded as deployment-event metadata, and
+ * additionally redacts any literal GitHub-token-shaped substring that
+ * survives (see GITHUB_TOKEN_LITERAL_PATTERN). Deliberately conservative —
+ * losing an unrelated line that happens to mention "password" in passing
+ * is an acceptable cost for never persisting a real secret.
  */
 export function sanitizeProcessOutput(text: string): string {
-  return text
+  const lineFiltered = text
     .split("\n")
     .filter((line) => !SANITIZE_LINE_PATTERN.test(line))
     .join("\n");
+
+  return lineFiltered.replace(GITHUB_TOKEN_LITERAL_PATTERN, "[REDACTED]");
 }
 
 function validateCwd(cwd: string | undefined): void {

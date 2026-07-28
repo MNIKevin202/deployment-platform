@@ -10,6 +10,9 @@ import { createCredentialRepository } from "./credential-database.js";
 import { createAppSourceRepository } from "./app-source-database.js";
 import { createPerformanceDiagnosticsRepository } from "./performance-diagnostics-database.js";
 import { createIdempotencyRepository } from "./idempotency-database.js";
+import { createInstallationRepository } from "./installation-database.js";
+
+export type { StoredGithubAppInstallation, UpsertGithubAppInstallationInput } from "./installation-database.js";
 
 export type {
   StoredGlobalEnvVar,
@@ -383,6 +386,7 @@ export function createAppDatabase(databasePath: string) {
   const appSourceRepository = createAppSourceRepository(db);
   const performanceDiagnosticsRepository = createPerformanceDiagnosticsRepository(db);
   const idempotencyRepository = createIdempotencyRepository(db);
+  const installationRepository = createInstallationRepository(db);
 
   return {
     db,
@@ -410,7 +414,8 @@ export function createAppDatabase(databasePath: string) {
     ...credentialRepository,
     ...appSourceRepository,
     ...performanceDiagnosticsRepository,
-    ...idempotencyRepository
+    ...idempotencyRepository,
+    ...installationRepository
   };
 }
 

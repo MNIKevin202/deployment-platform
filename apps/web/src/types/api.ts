@@ -446,6 +446,26 @@ export interface GithubRepositoriesResponse {
   hasMore: boolean;
   message?: string;
   credentialStatus?: CredentialStatus;
+  /** Which credential the list came from — "installation" (GitHub App) or "pat" (advanced fallback). */
+  source?: "installation" | "pat";
+}
+
+export interface GithubAppInstallation {
+  installationId: number;
+  accountLogin: string;
+  accountType: string;
+  targetType: string;
+  repositorySelection: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GithubAppInstallationsResponse {
+  success: boolean;
+  configured: boolean;
+  missing?: string[];
+  installations: GithubAppInstallation[];
+  message?: string;
 }
 
 export interface GithubRepositoryResponse {

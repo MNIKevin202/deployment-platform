@@ -8,7 +8,7 @@ import type { GithubBuildDockerOps } from "./github-deploy-docker-ops.js";
 import { BuildImageError } from "./github-deploy-docker-ops.js";
 import type { RecordEventFn } from "./deployment-event-service.js";
 import { SourceClientError, type SourceProviderClient } from "./source-provider.js";
-import type { DecryptedTokenResult } from "./github-credential-service.js";
+import type { ResolvedGithubToken } from "./github-token-service.js";
 import { cloneRepositoryBranch, cleanupCheckout, CloneError } from "./github-clone-service.js";
 import { inspectCheckoutDirectory } from "./repository-inspection-service.js";
 import { prepareBuildPlan, BuildPlanError } from "./build-strategy.js";
@@ -210,7 +210,7 @@ export interface GithubDeployDependencies {
   appDatabase: AppDatabase;
   dockerOps: GithubDeployDockerOps;
   githubClient: SourceProviderClient;
-  resolveCredential: () => DecryptedTokenResult;
+  resolveCredential: () => Promise<ResolvedGithubToken>;
   reconcileRouting: (appDatabase: AppDatabase) => Promise<{ lastReconcileSucceeded: boolean | null; lastError: string | null }>;
   recordEvent: RecordEventFn;
   /** Only constructed/used when the app actually has a health check configured. */
@@ -348,7 +348,7 @@ export async function deployFromGithub(
   try {
     progress("resolving-repository");
 
-    const credential = resolveCredential();
+    const credential = await resolveCredential();
     if (!credential.success) {
       throw new GithubDeployError("GitHub is not connected. Connect GitHub in Settings before deploying.", "resolving-repository");
     }

@@ -9,14 +9,14 @@ import {
   type AppSourceServiceDeps
 } from "../services/app-source-service.js";
 import { SourceClientError, type SourceProviderClient } from "../services/source-provider.js";
-import type { DecryptedTokenResult } from "../services/github-credential-service.js";
+import type { ResolvedGithubToken } from "../services/github-token-service.js";
 import { inspectRepositoryRemote, type InspectionDetection } from "../services/repository-inspection-service.js";
 
 interface RegisterSourceRoutesOptions {
   appDatabase: AppDatabase;
   sourceServiceDeps: AppSourceServiceDeps;
   githubClient: SourceProviderClient;
-  resolveCredential: () => DecryptedTokenResult;
+  resolveCredential: () => Promise<ResolvedGithubToken>;
 }
 
 const idParamSchema = z.object({
@@ -225,7 +225,7 @@ export async function registerSourceRoutes(
         return reply.code(404).send({ success: false, message: "No GitHub source is configured for this app" });
       }
 
-      const credential = resolveCredential();
+      const credential = await resolveCredential();
       if (!credential.success) {
         return reply.code(409).send({
           success: false,

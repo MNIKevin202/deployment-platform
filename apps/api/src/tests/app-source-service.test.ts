@@ -18,7 +18,7 @@ import {
   type SourceProviderClient,
   type SourceRepository
 } from "../services/source-provider.js";
-import type { DecryptedTokenResult } from "../services/github-credential-service.js";
+import type { ResolvedGithubToken } from "../services/github-token-service.js";
 import type { RecordEventFn, RecordEventInput } from "../services/deployment-event-service.js";
 
 const FAKE_TOKEN = "github_pat_should_never_leak_into_any_event_or_error";
@@ -97,11 +97,11 @@ function createEventTracker(): { recordEvent: RecordEventFn; events: RecordEvent
   return { events, recordEvent: (input) => events.push(input) };
 }
 
-function availableCredential(): DecryptedTokenResult {
-  return { success: true, token: FAKE_TOKEN };
+async function availableCredential(): Promise<ResolvedGithubToken> {
+  return { success: true, token: FAKE_TOKEN, source: "pat" };
 }
 
-function unavailableCredential(): DecryptedTokenResult {
+async function unavailableCredential(): Promise<ResolvedGithubToken> {
   return { success: false, credentialStatus: "not-configured" };
 }
 

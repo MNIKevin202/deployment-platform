@@ -44,7 +44,29 @@ const SECTION_SUBTITLES: Record<Section, string> = {
 function App() {
   const { username, logout } = useAuth();
 
-  const [section, setSection] = useState<Section>("overview");
+  // The GitHub App callback (routes/github-app.ts) redirects the browser
+  // back to a real page load at /?section=repositories&github=... — a plain
+  // useState("overview") default would silently drop the user on Overview
+  // and hide the connection result RepositoriesPage reads from the same
+  // query string. Read the initial section from it once, synchronously,
+  // so the very first render already lands on the right page.
+  const [section, setSection] = useState<Section>(() => {
+    const requested = new URLSearchParams(window.location.search).get("section");
+    return requested === "apps" ||
+      requested === "repositories" ||
+      requested === "environment" ||
+      requested === "system"
+      ? requested
+      : "overview";
+  });
+  // Captured once, synchronously, in the same initial render as `section`
+  // above — RepositoriesPage strips the "github" query param (via
+  // history.replaceState) in its own effect, and effect ordering between
+  // it and App's isn't something to depend on, so this reads the raw URL
+  // before anything has a chance to mutate it.
+  const [githubJustConnected] = useState<boolean>(
+    () => new URLSearchParams(window.location.search).get("github") === "connected"
+  );
   const [selectedAppId, setSelectedAppId] = useState<number | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<{ owner: string; name: string } | null>(null);
 
@@ -144,6 +166,23 @@ function App() {
 
     return () => window.clearInterval(interval);
   }, [loadDashboard]);
+
+  // Reopens the Create App wizard after a GitHub App connect round trip —
+  // see the matching sessionStorage.setItem in CreateAppWizard.tsx's
+  // "Connect GitHub" link. That navigation is a full page reload (GitHub's
+  // own redirect flow), so this is a best-effort "you were in the middle
+  // of creating an app" signal, not a restoration of every field the
+  // wizard had — the wizard itself always starts fresh, just already open
+  // and past the initial empty state, with GitHub already connected.
+  useEffect(() => {
+    if (window.sessionStorage.getItem("dp_resume_create_app_wizard") === "1") {
+      window.sessionStorage.removeItem("dp_resume_create_app_wizard");
+      if (githubJustConnected) {
+        setShowCreateApp(true);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const getApiError = async (
     response: Response,

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import GitHubSettingsPanel from "../components/GitHubSettingsPanel";
-import type { ApiError, GithubConnectionInfo, SourceRepository } from "../types/api";
+import GithubAppConnectPanel from "../components/GithubAppConnectPanel";
+import type { ApiError, GithubAppInstallation, GithubConnectionInfo, SourceRepository } from "../types/api";
 
 interface RepositoriesPageProps {
   onSelectRepository: (owner: string, name: string) => void;
@@ -46,9 +47,43 @@ function formatRelativeOrAbsolute(value: string | null): string {
   return parsed.toLocaleDateString();
 }
 
+/**
+ * Reads and clears the ?section=repositories&github=connected|error|pending
+ * query the GitHub App callback (routes/github-app.ts) redirects to, so a
+ * page refresh afterward doesn't re-show a stale result. Read exactly once
+ * per mount.
+ */
+function consumeGithubCallbackResult(): { status: string; message: string | null; installation: string | null } | null {
+  const params = new URLSearchParams(window.location.search);
+  const status = params.get("github");
+
+  if (!status) {
+    return null;
+  }
+
+  const message = params.get("message");
+  const installation = params.get("installation");
+
+  params.delete("github");
+  params.delete("message");
+  params.delete("installation");
+  params.delete("section");
+  const remaining = params.toString();
+  window.history.replaceState(null, "", remaining ? `?${remaining}` : window.location.pathname);
+
+  return { status, message, installation };
+}
+
 export default function RepositoriesPage({ onSelectRepository }: RepositoriesPageProps) {
   const [connection, setConnection] = useState<GithubConnectionInfo | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(true);
+
+  const [installations, setInstallations] = useState<GithubAppInstallation[]>([]);
+  const [githubAppConfigured, setGithubAppConfigured] = useState(false);
+  const [githubAppMissing, setGithubAppMissing] = useState<string[]>([]);
+
+  const [callbackNotice, setCallbackNotice] = useState("");
+  const [callbackError, setCallbackError] = useState("");
 
   const [repos, setRepos] = useState<SourceRepository[]>([]);
   const [page, setPage] = useState(1);
@@ -60,6 +95,23 @@ export default function RepositoriesPage({ onSelectRepository }: RepositoriesPag
 
   const [search, setSearch] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
+
+  const loadInstallations = useCallback(async () => {
+    try {
+      const response = await fetch("/api/github/installations");
+      if (!response.ok) return;
+      const result = (await response.json()) as {
+        configured: boolean;
+        missing?: string[];
+        installations: GithubAppInstallation[];
+      };
+      setGithubAppConfigured(result.configured);
+      setGithubAppMissing(result.missing ?? []);
+      setInstallations(result.installations);
+    } catch {
+      // Non-fatal — the connect panel simply shows "not connected".
+    }
+  }, []);
 
   const loadConnection = useCallback(async () => {
     try {
@@ -79,7 +131,29 @@ export default function RepositoriesPage({ onSelectRepository }: RepositoriesPag
 
   useEffect(() => {
     void loadConnection();
-  }, [loadConnection]);
+    void loadInstallations();
+  }, [loadConnection, loadInstallations]);
+
+  useEffect(() => {
+    const result = consumeGithubCallbackResult();
+    if (!result) return;
+
+    if (result.status === "connected") {
+      setCallbackNotice(
+        result.installation
+          ? `GitHub connected (installation #${result.installation}). Repositories appear below.`
+          : "GitHub connected. Repositories appear below."
+      );
+      void loadInstallations();
+    } else if (result.status === "pending") {
+      setCallbackNotice(result.message ?? "Installation is awaiting approval.");
+    } else {
+      setCallbackError(result.message ?? "Unable to complete GitHub authorization.");
+    }
+  }, [loadInstallations]);
+
+  const connectedViaApp = installations.length > 0;
+  const connectedViaPat = connection?.connected ?? false;
 
   // GitHub's repository-listing endpoint has no name-search parameter, so
   // "search" here only ever filters repositories that have already been
@@ -120,11 +194,11 @@ export default function RepositoriesPage({ onSelectRepository }: RepositoriesPag
   }, []);
 
   useEffect(() => {
-    if (connection?.connected) {
+    if (connectedViaApp || connectedViaPat) {
       void loadRepos(1, false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connection?.connected]);
+  }, [connectedViaApp, connectedViaPat]);
 
   const visibleRepos = useMemo(() => {
     const searchNeedle = search.trim().toLowerCase();
@@ -143,11 +217,30 @@ export default function RepositoriesPage({ onSelectRepository }: RepositoriesPag
 
   return (
     <div className="page">
+      {callbackNotice && <div className="notice-banner">{callbackNotice}</div>}
+      {callbackError && <div className="error-banner">{callbackError}</div>}
+
       <section className="page-section">
-        <GitHubSettingsPanel onConnectionChanged={() => void loadConnection()} />
+        <GithubAppConnectPanel
+          configured={githubAppConfigured}
+          missing={githubAppMissing}
+          installations={installations}
+          repositoryCount={connectedViaApp ? repos.length : null}
+          onDisconnected={() => {
+            void loadInstallations();
+            setRepos([]);
+          }}
+          onRefreshRepositories={() => void loadRepos(1, false)}
+          refreshing={loading}
+        />
+
+        <details className="advanced-disclosure">
+          <summary>Advanced: connect with a fine-grained personal access token</summary>
+          <GitHubSettingsPanel onConnectionChanged={() => void loadConnection()} />
+        </details>
       </section>
 
-      {connection?.connected && (
+      {(connectedViaApp || connectedViaPat) && (
         <section className="page-section">
           <div className="section-heading">
             <div>
@@ -189,7 +282,7 @@ export default function RepositoriesPage({ onSelectRepository }: RepositoriesPag
           ) : visibleRepos.length === 0 ? (
             <div className="empty-state">
               {repos.length === 0
-                ? "No accessible repositories were found for this token."
+                ? "No accessible repositories were found."
                 : "No repositories match this filter."}
             </div>
           ) : (

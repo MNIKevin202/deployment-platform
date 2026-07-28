@@ -1024,6 +1024,36 @@ code {
   gap: 12px;
 }
 
+.advanced-disclosure {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border-soft);
+}
+
+.advanced-disclosure summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  list-style: none;
+}
+
+.advanced-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-disclosure summary::before {
+  content: "▸ ";
+}
+
+.advanced-disclosure[open] summary::before {
+  content: "▾ ";
+}
+
+.advanced-disclosure > .env-scope-block {
+  margin-top: 16px;
+}
+
 .env-scope-heading {
   display: flex;
   align-items: center;

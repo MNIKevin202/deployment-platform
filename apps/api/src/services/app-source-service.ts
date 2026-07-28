@@ -2,7 +2,8 @@ import type { AppDatabase, StoredAppSource } from "../database.js";
 import type { RecordEventFn } from "./deployment-event-service.js";
 import { SourceClientError, type SourceProviderClient } from "./source-provider.js";
 import type { AppSourceConfigInput } from "../schemas/source.js";
-import type { CredentialStatus, DecryptedTokenResult } from "./github-credential-service.js";
+import type { CredentialStatus } from "./github-credential-service.js";
+import type { ResolvedGithubToken } from "./github-token-service.js";
 
 type AppSourceDatabase = Pick<
   AppDatabase,
@@ -21,7 +22,7 @@ export interface AppSourceServiceDeps {
   appDatabase: AppSourceDatabase;
   githubClient: SourceProviderClient;
   /** Never returns the token itself to a caller outside this service. */
-  resolveCredential: () => DecryptedTokenResult;
+  resolveCredential: () => Promise<ResolvedGithubToken>;
   recordEvent: RecordEventFn;
   logger: AppSourceLogger;
   now?: () => Date;
@@ -73,7 +74,7 @@ export async function validateAppSource(
   deps: Pick<AppSourceServiceDeps, "githubClient" | "resolveCredential">,
   source: Pick<StoredAppSource, "repositoryOwner" | "repositoryName" | "branch" | "deploymentMode" | "dockerfilePath">
 ): Promise<AppSourceValidationResult> {
-  const credential = deps.resolveCredential();
+  const credential = await deps.resolveCredential();
 
   if (!credential.success) {
     return {

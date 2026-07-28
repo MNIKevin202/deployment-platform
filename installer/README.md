@@ -250,6 +250,87 @@ sudo ./installer/install.sh --uninstall \
 `DELETE EVERYTHING` at an interactive prompt, or passing
 `--confirm-purge` in non-interactive mode.
 
+## GitHub App integration (optional)
+
+The panel's "Connect GitHub" button (Repositories page) authorizes
+repository access through a GitHub App — no personal access token to
+create or paste. This is entirely optional: without it, the panel still
+works for manual-image deployments and the advanced fallback (a
+fine-grained personal access token, collapsed under "Advanced" on the
+Repositories page). Nothing in this section is generated or prompted for
+by the installer; it is added manually, once, by an operator who has
+registered a GitHub App.
+
+**1. Register the GitHub App** at
+`https://github.com/settings/apps/new` (or your organization's
+equivalent). Recommended settings:
+
+- **Callback URL**: `https://<your-panel-domain>/api/github/callback`
+  (must match `GITHUB_APP_CALLBACK_URL` below exactly)
+- **Webhook**: disabled (this integration does not use webhooks)
+- **Repository permissions**: Contents — Read-only, Metadata — Read-only.
+  No other repository or organization permissions are required; do not
+  grant write access unless a future feature explicitly needs it.
+- **Where can this GitHub App be installed?**: "Only on this account"
+  unless you specifically want it installable by other accounts.
+
+After registering, generate a private key (downloads a `.pem` file) and
+note the App ID and the app's slug (the `<slug>` in
+`https://github.com/apps/<slug>`).
+
+**2. Add configuration to the VPS.** Non-secret values go in
+`/opt/deployment-platform/config/platform.env` (mode 644); the private
+key and any OAuth client secret go in
+`/opt/deployment-platform/config/auth.env` (mode 600, alongside
+`CREDENTIAL_ENCRYPTION_KEY`). Neither file is touched by the installer's
+own generation logic — add these lines to each by hand (e.g. `sudo nano
+/opt/deployment-platform/config/auth.env`), never by pasting the private
+key into a chat session or committing it to source control:
+
+```bash
+# platform.env (non-secret)
+GITHUB_APP_ID=123456
+GITHUB_APP_SLUG=your-app-slug
+GITHUB_APP_CALLBACK_URL=https://<your-panel-domain>/api/github/callback
+
+# auth.env (secret, mode 600) — pick ONE of these two for the private key
+GITHUB_APP_PRIVATE_KEY_PATH=/opt/deployment-platform/config/github-app-key.pem
+# — or, if you'd rather not manage a separate file —
+GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+
+# Only needed if you also want user-to-server OAuth identity (not
+# required for the install/authorization flow itself):
+# GITHUB_APP_CLIENT_ID=...
+# GITHUB_APP_CLIENT_SECRET=...
+```
+
+If using `GITHUB_APP_PRIVATE_KEY_PATH`, copy the downloaded `.pem` to
+that path first and set restrictive permissions:
+
+```bash
+sudo install -m 600 -o root -g root github-app-key.pem \
+  /opt/deployment-platform/config/github-app-key.pem
+```
+
+**3. Restart the API container** so it picks up the new environment:
+
+```bash
+docker restart deployment-platform-api
+```
+
+**4. Verify.** `GET /api/github/installations` (visible on the
+Repositories page) should report `configured: true`. If it instead lists
+missing settings, double-check the variable names above — a missing or
+misnamed value is reported there and in the API's own startup log line,
+never as a crash: the panel remains fully usable for manual-image
+deployments and the advanced PAT fallback either way.
+
+Disconnecting from the panel ("Disconnect" on the Repositories page)
+only removes this platform's local record of the installation — it does
+not uninstall the GitHub App or revoke its access. To fully remove
+access or change which repositories are shared, use "Manage access on
+GitHub" (or `https://github.com/settings/installations`) instead.
+
 ## Troubleshooting
 
 - **"Docker daemon is not reachable"** — `systemctl status docker`;

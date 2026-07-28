@@ -20,7 +20,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_PER_PAGE = 20;
 const MAX_PER_PAGE = 50;
 
-function clampPerPage(perPage: number | undefined): number {
+export function clampPerPage(perPage: number | undefined): number {
   if (!perPage || !Number.isFinite(perPage) || perPage < 1) {
     return DEFAULT_PER_PAGE;
   }
@@ -28,7 +28,7 @@ function clampPerPage(perPage: number | undefined): number {
   return Math.min(Math.floor(perPage), MAX_PER_PAGE);
 }
 
-function clampPage(page: number | undefined): number {
+export function clampPage(page: number | undefined): number {
   if (!page || !Number.isFinite(page) || page < 1) {
     return 1;
   }
@@ -47,7 +47,7 @@ function endpointCategory(path: string): string {
   return "other";
 }
 
-function hasNextPage(linkHeader: string | null): boolean {
+export function hasNextPage(linkHeader: string | null): boolean {
   if (!linkHeader) {
     return false;
   }
@@ -198,7 +198,7 @@ interface GithubJsonResult {
 }
 
 /** For endpoints whose response body is needed and safe to parse as JSON. */
-async function githubRequestJson(
+export async function githubRequestJson(
   token: string,
   path: string,
   query: Record<string, string | number | undefined> | undefined,
@@ -373,7 +373,7 @@ function normalizeAccount(raw: unknown): SourceAccount {
   return { username, htmlUrl };
 }
 
-function normalizeRepository(raw: unknown): SourceRepository {
+export function normalizeRepository(raw: unknown): SourceRepository {
   if (!raw || typeof raw !== "object") {
     throw new SourceClientError("malformed-response", "GitHub response is missing a repository body");
   }

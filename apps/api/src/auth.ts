@@ -206,6 +206,56 @@ function clearSessionCookie(reply: FastifyReply): void {
   });
 }
 
+/**
+ * Reads the authenticated operator's username from the session cookie, for
+ * routes that need to know WHO is acting (e.g. GET /github/connect, which
+ * binds the CSRF state it issues to this value) rather than merely THAT
+ * the global auth hook already let the request through. Returns null for
+ * any invalid/expired/missing session — callers that require
+ * authentication are already behind the hook and will never legitimately
+ * see null, but this never throws either way.
+ *
+ * A small, deliberate duplication of registerAuthentication's own
+ * closure-scoped readSession() (same cookie name, same decode/expiry
+ * logic) rather than a refactor to share state across module boundaries —
+ * this repo's existing single-admin session model has no multi-user
+ * identity to get wrong, so the duplication is a few lines, not a second
+ * implementation of anything security-sensitive (verifyPassword,
+ * cookie-signing, and login itself are still only ever written once).
+ */
+export function readAuthenticatedUsername(request: FastifyRequest): string | null {
+  const adminUsername = process.env.ADMIN_USERNAME;
+
+  if (!adminUsername) {
+    return null;
+  }
+
+  const signedCookie = request.cookies[SESSION_COOKIE];
+  if (!signedCookie) {
+    return null;
+  }
+
+  const unsigned = request.unsignCookie(signedCookie);
+  if (!unsigned.valid || !unsigned.value) {
+    return null;
+  }
+
+  const session = decodeSession(unsigned.value);
+  if (!session) {
+    return null;
+  }
+
+  if (session.expiresAt <= Date.now()) {
+    return null;
+  }
+
+  if (session.username !== adminUsername) {
+    return null;
+  }
+
+  return session.username;
+}
+
 export async function registerAuthentication(
   app: FastifyInstance
 ): Promise<void> {
@@ -349,7 +399,15 @@ export async function registerAuthentication(
       "/",
       "/health",
       "/auth/login",
-      "/auth/session"
+      "/auth/session",
+      // GitHub's redirect back from the App-authorization flow is a
+      // top-level cross-site navigation (referrer github.com), so the
+      // SESSION_COOKIE — SameSite=Strict — is never attached to it. This
+      // route's own security comes entirely from the one-time,
+      // server-stored CSRF state it validates (see
+      // github-app-state-service.ts and routes/github-app.ts), not from
+      // the session cookie, which is why it is safe to exempt here.
+      "/github/callback"
     ]);
 
     if (publicPaths.has(pathname)) {

@@ -10,12 +10,13 @@ import {
 } from "../schemas/source.js";
 import {
   deleteGithubCredential,
-  getDecryptedGithubToken,
   getGithubConnectionInfo,
   saveGithubCredential,
   testGithubToken,
   type GithubCredentialDeps
 } from "../services/github-credential-service.js";
+import type { ResolvedGithubToken } from "../services/github-token-service.js";
+import { listInstallationRepositories } from "../services/github-app-service.js";
 import { SourceClientError, type SourceProviderClient } from "../services/source-provider.js";
 import { inspectRepositoryRemote } from "../services/repository-inspection-service.js";
 import { serializeInspection } from "./source.js";
@@ -23,6 +24,8 @@ import { serializeInspection } from "./source.js";
 interface RegisterGithubRoutesOptions {
   credentialDeps: GithubCredentialDeps;
   githubClient: SourceProviderClient;
+  /** GitHub App installation-first, manual PAT fallback — see github-token-service.ts. */
+  resolveCredential: () => Promise<ResolvedGithubToken>;
 }
 
 const ownerRepoParamsSchema = z.object({
@@ -94,7 +97,7 @@ function safeMessage(error: unknown): string {
 
 export async function registerGithubRoutes(
   fastify: FastifyInstance,
-  { credentialDeps, githubClient }: RegisterGithubRoutesOptions
+  { credentialDeps, githubClient, resolveCredential }: RegisterGithubRoutesOptions
 ): Promise<void> {
   fastify.get(
     "/integrations/github",
@@ -163,7 +166,7 @@ export async function registerGithubRoutes(
         return reply.code(400).send({ success: false, message: "Invalid query" });
       }
 
-      const credential = getDecryptedGithubToken({ appDatabase: credentialDeps.appDatabase });
+      const credential = await resolveCredential();
 
       if (!credential.success) {
         return reply.code(409).send({
@@ -174,12 +177,25 @@ export async function registerGithubRoutes(
       }
 
       try {
-        const page = await githubClient.listRepositories(credential.token, {
-          page: parsedQuery.data.page,
-          perPage: parsedQuery.data.perPage
-        });
+        // A GitHub App installation token has no "authenticated user"
+        // context — /user/repos (githubClient.listRepositories) is a PAT-
+        // only endpoint. An installation token instead lists exactly the
+        // repositories the installation was granted, via
+        // /installation/repositories, so the list a GitHub App-connected
+        // operator sees here is never wider than what was actually
+        // authorized during installation.
+        const page =
+          credential.source === "installation"
+            ? await listInstallationRepositories(credential.token, {
+                page: parsedQuery.data.page,
+                perPage: parsedQuery.data.perPage
+              })
+            : await githubClient.listRepositories(credential.token, {
+                page: parsedQuery.data.page,
+                perPage: parsedQuery.data.perPage
+              });
 
-        return { success: true, repositories: page.items, hasMore: page.hasMore };
+        return { success: true, repositories: page.items, hasMore: page.hasMore, source: credential.source };
       } catch (error) {
         return reply.code(statusCodeForClientError(error)).send({ success: false, message: safeMessage(error) });
       }
@@ -196,7 +212,7 @@ export async function registerGithubRoutes(
         return reply.code(400).send({ success: false, message: "Invalid repository" });
       }
 
-      const credential = getDecryptedGithubToken({ appDatabase: credentialDeps.appDatabase });
+      const credential = await resolveCredential();
 
       if (!credential.success) {
         return reply.code(409).send({
@@ -236,7 +252,7 @@ export async function registerGithubRoutes(
         return reply.code(400).send({ success: false, message: "Invalid query" });
       }
 
-      const credential = getDecryptedGithubToken({ appDatabase: credentialDeps.appDatabase });
+      const credential = await resolveCredential();
 
       if (!credential.success) {
         return reply.code(409).send({
@@ -281,7 +297,7 @@ export async function registerGithubRoutes(
         });
       }
 
-      const credential = getDecryptedGithubToken({ appDatabase: credentialDeps.appDatabase });
+      const credential = await resolveCredential();
 
       if (!credential.success) {
         return reply.code(409).send({
@@ -334,7 +350,7 @@ export async function registerGithubRoutes(
         });
       }
 
-      const credential = getDecryptedGithubToken({ appDatabase: credentialDeps.appDatabase });
+      const credential = await resolveCredential();
 
       if (!credential.success) {
         return reply.code(409).send({

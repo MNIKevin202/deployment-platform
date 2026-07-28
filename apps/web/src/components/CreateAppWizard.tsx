@@ -159,6 +159,8 @@ export default function CreateAppWizard({
   const [sourceType, setSourceType] = useState<SourceType>("manual");
 
   const [githubConnection, setGithubConnection] = useState<GithubConnectionInfo | null>(null);
+  const [githubAppConfigured, setGithubAppConfigured] = useState(false);
+  const [githubAppInstalled, setGithubAppInstalled] = useState(false);
   const [githubRepos, setGithubRepos] = useState<SourceRepository[]>([]);
   const [githubReposLoading, setGithubReposLoading] = useState(false);
   const [githubReposError, setGithubReposError] = useState("");
@@ -302,6 +304,24 @@ export default function CreateAppWizard({
       }
     })();
 
+    void (async () => {
+      try {
+        const response = await fetch("/api/github/installations");
+        if (!response.ok || cancelled) return;
+        const result = (await response.json()) as {
+          configured: boolean;
+          installations: { installationId: number }[];
+        };
+        if (!cancelled) {
+          setGithubAppConfigured(result.configured);
+          setGithubAppInstalled(result.installations.length > 0);
+        }
+      } catch {
+        // Non-critical — the Source step falls back to the PAT connection
+        // state and the "Connect GitHub" prompt still degrades gracefully.
+      }
+    })();
+
     return () => {
       cancelled = true;
     };
@@ -327,12 +347,17 @@ export default function CreateAppWizard({
     }
   }, []);
 
+  // Ready via either path: the automated GitHub App installation (primary)
+  // or the advanced manual PAT (fallback) — the wizard doesn't care which
+  // one produced a usable token, only whether repositories are reachable.
+  const githubReady = githubAppInstalled || (githubConnection?.connected ?? false);
+
   useEffect(() => {
-    if (open && step === 0 && sourceType === "github" && githubConnection?.connected) {
+    if (open && step === 0 && sourceType === "github" && githubReady) {
       void loadGithubRepos();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, step, sourceType, githubConnection?.connected]);
+  }, [open, step, sourceType, githubReady]);
 
   const selectGithubRepo = async (repo: SourceRepository) => {
     setGithubRepo(repo);
@@ -823,11 +848,39 @@ export default function CreateAppWizard({
 
                   {sourceType === "github" && (
                     <>
-                      {!githubConnection?.connected ? (
+                      {!githubReady ? (
                         <div className="warning-banner">
-                          GitHub is not connected. Connect it from Settings, then reopen this
-                          wizard — your progress on this step will not be lost if you cancel and
-                          come straight back.
+                          <p>
+                            GitHub is not connected yet. Authorize repository access through GitHub,
+                            then this step will pick up automatically.
+                          </p>
+                          {githubAppConfigured ? (
+                            <a
+                              className="primary-button"
+                              href="/api/github/connect"
+                              onClick={() => {
+                                // Connecting is a real browser navigation
+                                // (GitHub -> our callback -> a fresh page
+                                // load), which discards this component's
+                                // in-memory state no matter what. This is
+                                // the one piece of progress worth
+                                // preserving across that: App.tsx checks
+                                // for it after the redirect back and
+                                // reopens the wizard automatically instead
+                                // of leaving the operator to find their way
+                                // back to Apps -> Create App themselves.
+                                window.sessionStorage.setItem("dp_resume_create_app_wizard", "1");
+                              }}
+                            >
+                              Connect GitHub
+                            </a>
+                          ) : (
+                            <p className="text-faint">
+                              The GitHub App is not configured on this server yet. Use the advanced
+                              personal-access-token option on the Repositories page instead, or ask
+                              an operator to finish GitHub App setup.
+                            </p>
+                          )}
                         </div>
                       ) : !githubRepo ? (
                         <>

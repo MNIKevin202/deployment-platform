@@ -42,8 +42,11 @@ import { registerMetricsRoutes } from "./routes/metrics.js";
 import { registerLogsRoutes } from "./routes/logs.js";
 import { registerEventRoutes } from "./routes/events.js";
 import { createGithubClient } from "./services/github-client.js";
-import { getDecryptedGithubToken } from "./services/github-credential-service.js";
 import { registerGithubRoutes } from "./routes/github.js";
+import { registerGithubAppRoutes } from "./routes/github-app.js";
+import { loadGithubAppConfig, describeGithubAppConfig } from "./services/github-app-config.js";
+import { createGithubAppStateStore } from "./services/github-app-state-service.js";
+import { resolveGithubToken } from "./services/github-token-service.js";
 import { registerSourceRoutes } from "./routes/source.js";
 import { createGithubBuildDockerOps } from "./services/github-deploy-docker-ops.js";
 import type { GithubDeployDependencies } from "./services/github-deploy-service.js";
@@ -161,7 +164,20 @@ const githubCredentialDeps = {
   logger: app.log
 };
 
-const resolveGithubCredential = () => getDecryptedGithubToken({ appDatabase });
+/**
+ * GitHub App configuration is optional at startup — an unconfigured app
+ * means every route below simply reports "not configured" (see
+ * github-app-config.ts) and resolveGithubToken() falls straight through to
+ * the manual PAT, rather than the process failing to start. This keeps the
+ * platform fully usable for manual-image deployments and the advanced PAT
+ * flow with zero GitHub App setup.
+ */
+const githubAppConfig = loadGithubAppConfig();
+app.log.info(describeGithubAppConfig(githubAppConfig), "GitHub App configuration");
+const githubAppStateStore = createGithubAppStateStore();
+
+const resolveGithubCredential = () =>
+  resolveGithubToken({ appDatabase, githubAppConfig, logger: app.log });
 
 const appSourceServiceDeps = {
   appDatabase,
@@ -171,7 +187,13 @@ const appSourceServiceDeps = {
   logger: app.log
 };
 
-await registerGithubRoutes(app, { credentialDeps: githubCredentialDeps, githubClient });
+await registerGithubRoutes(app, { credentialDeps: githubCredentialDeps, githubClient, resolveCredential: resolveGithubCredential });
+await registerGithubAppRoutes(app, {
+  appDatabase,
+  githubAppConfig,
+  stateStore: githubAppStateStore,
+  logger: app.log
+});
 await registerSourceRoutes(app, {
   appDatabase,
   sourceServiceDeps: appSourceServiceDeps,
