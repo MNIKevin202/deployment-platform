@@ -53,10 +53,16 @@ const appDatabase = createAppDatabase(
 );
 
 const routingService = createRoutingService({
-  enabled: process.env.ROUTING_ENABLED === "true",
+  // Default ON: the platform's core value is routing managed apps. It can be
+  // explicitly disabled with ROUTING_ENABLED=false.
+  enabled: (process.env.ROUTING_ENABLED ?? "true") !== "false",
   docker,
-  routesDirInApi: process.env.CADDY_ROUTES_DIR ?? "/caddy-routes",
-  routesDirInCaddy: process.env.CADDY_ROUTES_DIR_IN_CADDY ?? "/etc/caddy",
+  // The host's caddy/routes directory is mounted into the API container at
+  // /app/caddy-routes and into the Caddy container at /etc/caddy/routes, which
+  // is exactly what the main Caddyfile imports (`import
+  // /etc/caddy/routes/*.caddy`). These defaults must match those mounts.
+  routesDirInApi: process.env.CADDY_ROUTES_DIR ?? "/app/caddy-routes",
+  routesDirInCaddy: process.env.CADDY_ROUTES_DIR_IN_CADDY ?? "/etc/caddy/routes",
   caddyContainerName:
     process.env.CADDY_CONTAINER_NAME ?? "deployment-platform-caddy",
   mainCaddyfilePathInCaddy:
@@ -290,13 +296,9 @@ app.get("/database/health", async () => {
 });
 
 function isRoutingReady(hasDomain: boolean): boolean {
-  const routingStatus = routingService.getStatus();
-
-  return (
-    hasDomain &&
-    routingStatus.enabled &&
-    routingStatus.lastReconcileSucceeded === true
-  );
+  // `active` is true only after a real reconciliation validated, applied, and
+  // verified the config — never merely because the feature flag is on.
+  return hasDomain && routingService.getStatus().active;
 }
 
 /**

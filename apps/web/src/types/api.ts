@@ -13,10 +13,13 @@ export interface DockerInfo {
 
 export interface RoutingStatus {
   enabled: boolean;
+  /** True only after a real reconciliation validated, applied, and verified. */
+  active: boolean;
   lastReconciledAt: string | null;
   lastReconcileSucceeded: boolean | null;
   lastError: string | null;
   routedAppCount: number;
+  rejectedRouteCount: number;
 }
 
 export interface ContainerPort {
