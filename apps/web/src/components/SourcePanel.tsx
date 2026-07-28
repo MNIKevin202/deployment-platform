@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ApiError,
   AppSourceInfo,
@@ -720,7 +720,7 @@ export const PORT_SOURCE_LABELS: Record<string, string> = {
   none: "Not detected"
 };
 
-const STRATEGY_INFO: Record<Exclude<BuildStrategy, "unsupported">, { title: string; description: string }> = {
+export const STRATEGY_INFO: Record<Exclude<BuildStrategy, "unsupported">, { title: string; description: string }> = {
   dockerfile: {
     title: "Dockerfile",
     description: "Build using the Dockerfile committed in this repository."
@@ -789,6 +789,25 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
   const [latestCommitMessage, setLatestCommitMessage] = useState<string | null>(null);
   const [inspecting, setInspecting] = useState(false);
   const [inspectError, setInspectError] = useState("");
+
+  // The operator's own explicit strategy choice — inspection's
+  // recommendation is advisory only. Starts from whatever was already
+  // saved (requirement: "Edit Source must preserve an existing
+  // manually-selected strategy on reopen"). strategyManuallySet tracks
+  // whether the operator has ever actively chosen a strategy (either by
+  // clicking a card, or by having a persisted choice from a previous
+  // save) — once true, an inspection rerun must never silently replace
+  // it; only false (the default, "just follow the recommendation" mode)
+  // lets a fresh inspection update the selection automatically.
+  const [selectedStrategy, setSelectedStrategyState] = useState<Exclude<BuildStrategy, "unsupported"> | null>(
+    existing?.selectedStrategy ?? null
+  );
+  const [strategyManuallySet, setStrategyManuallySet] = useState(existing?.selectedStrategy != null);
+
+  const chooseStrategy = (strategy: Exclude<BuildStrategy, "unsupported">) => {
+    setSelectedStrategyState(strategy);
+    setStrategyManuallySet(true);
+  };
 
   const [dockerfilePath, setDockerfilePath] = useState(existing?.dockerfilePath ?? "Dockerfile");
   const [buildContext, setBuildContext] = useState(existing?.buildContext ?? ".");
@@ -906,12 +925,25 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
 
   // Stale-inspection handling: any change to repository, branch, or
   // subdirectory invalidates a prior inspection result outright — an
-  // inspection from one selection must never be reused for another.
+  // inspection from one selection must never be reused for another. A
+  // manual strategy choice tied to that same now-stale combination is
+  // reset back to "follow the recommendation" too — it applied to a
+  // different repository/branch/subdirectory than the one now selected.
+  // Skipped on the very first run (mount) — an Edit Source reopen must
+  // preserve the persisted selectedStrategy it was just initialized
+  // from, not immediately wipe it before the operator does anything.
+  const skipFirstStaleReset = useRef(true);
   useEffect(() => {
+    if (skipFirstStaleReset.current) {
+      skipFirstStaleReset.current = false;
+      return;
+    }
     setInspection(null);
     setInspectedCommitSha(null);
     setLatestCommitMessage(null);
     setInspectError("");
+    setSelectedStrategyState(null);
+    setStrategyManuallySet(false);
   }, [selectedRepo?.fullName, selectedBranch, subdirectory]);
 
   const runInspect = async () => {
@@ -946,6 +978,17 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
 
       setInspection(inspectResult.inspection ?? null);
       setInspectedCommitSha(inspectResult.commitSha ?? null);
+
+      // Inspection recommendations are advisory: only auto-apply the
+      // recommendation while the operator hasn't made an explicit
+      // choice of their own — an inspection rerun must never silently
+      // replace a manual strategy selection.
+      if (!strategyManuallySet) {
+        const recommended = inspectResult.inspection?.recommendedStrategy;
+        if (recommended && recommended !== "unsupported") {
+          setSelectedStrategyState(recommended);
+        }
+      }
 
       // Prefill the container port only from a high-confidence, single,
       // unambiguous detection, and only if the operator hasn't already
@@ -1006,7 +1049,7 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
   };
 
   const nodejsStartScriptMissing =
-    recommendedStrategy === "nodejs" && inspection?.packageJson?.hasStartScript === false;
+    selectedStrategy === "nodejs" && inspection?.packageJson?.hasStartScript === false;
 
   const canContinue =
     step === "provider" ||
@@ -1014,26 +1057,25 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
     (step === "branch" && selectedBranch.length > 0) ||
     (step === "inspect" && inspection !== null) ||
     (step === "deployment" &&
-      recommendedStrategy !== null &&
-      recommendedStrategy !== "unsupported" &&
+      selectedStrategy !== null &&
       !nodejsStartScriptMissing &&
-      (recommendedStrategy !== "dockerfile" || (dockerfilePath.length > 0 && buildContext.length > 0)));
+      (selectedStrategy !== "dockerfile" || (dockerfilePath.length > 0 && buildContext.length > 0)));
 
   const buildSourcePayload = () => {
-    if (!selectedRepo || !recommendedStrategy) {
+    if (!selectedRepo || !selectedStrategy) {
       return null;
     }
 
-    // deploymentMode is the one field the backend actually persists and
-    // acts on for source-save validation (it decides whether Dockerfile
-    // existence is checked). The Node.js and static build strategies are
-    // always auto-detected fresh at deploy time from the real repository
-    // content (see repository-inspection-service.ts / github-deploy-
-    // service.ts) — there is no backend field to "select" them, so they
-    // both map to "prebuilt-image" here, which simply skips the
-    // Dockerfile-existence check that only makes sense for the Dockerfile
-    // strategy.
-    const deploymentMode: DeploymentMode = recommendedStrategy === "dockerfile" ? "dockerfile" : "prebuilt-image";
+    // deploymentMode is what the backend uses for source-save validation
+    // (it decides whether Dockerfile existence is checked) — driven by
+    // the OPERATOR'S selected strategy, not the inspection
+    // recommendation. selectedStrategy itself is what the actual deploy
+    // now builds with (see github-deploy-service.ts): Node.js and static
+    // still auto-detect their own build details (package manager, start
+    // script, etc.) fresh at deploy time, but WHICH of the three
+    // strategies gets used follows the operator's explicit choice, never
+    // silently the inspection's own opinion.
+    const deploymentMode: DeploymentMode = selectedStrategy === "dockerfile" ? "dockerfile" : "prebuilt-image";
 
     return {
       repositoryOwner: selectedRepo.owner,
@@ -1043,6 +1085,7 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
       deploymentMode,
       dockerfilePath,
       buildContext,
+      selectedStrategy,
       containerPort: containerPort.trim() ? Number(containerPort) : undefined,
       // Only ever sent once a port value is actually present — an empty
       // port has no source/confidence to report either.
@@ -1370,28 +1413,40 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
             </>
           )}
 
-          {step === "deployment" && inspection && recommendedStrategy && recommendedStrategy !== "unsupported" && (
+          {step === "deployment" && inspection && !isUnsupported && (
             <>
+              <p className="section-description">
+                Inspection's recommendation is a starting point, not a requirement — choose any
+                supported deployment strategy below.
+              </p>
               <div className="wizard-row-list">
                 {(Object.keys(STRATEGY_INFO) as Array<Exclude<BuildStrategy, "unsupported">>).map((key) => {
-                  const active = recommendedStrategy === key;
+                  const isSelected = selectedStrategy === key;
+                  const isRecommended = recommendedStrategy === key;
                   return (
-                    <div
+                    <button
                       key={key}
-                      className={`wizard-row strategy-card ${active ? "selected" : "disabled"}`}
+                      type="button"
+                      className={`wizard-row strategy-card ${isSelected ? "selected" : ""}`}
+                      onClick={() => chooseStrategy(key)}
+                      aria-pressed={isSelected}
                     >
                       <strong>
                         {STRATEGY_INFO[key].title}
-                        {active && <span className="status-badge positive compact">Detected</span>}
+                        {isRecommended && (
+                          <span className="status-badge positive compact">
+                            {isSelected ? "Recommended" : "Detected"}
+                          </span>
+                        )}
                       </strong>
                       <span className="text-faint">{STRATEGY_INFO[key].description}</span>
-                      {!active && <span className="text-faint">Not detected for this repository.</span>}
-                    </div>
+                      {!isRecommended && <span className="text-faint">Not detected for this repository.</span>}
+                    </button>
                   );
                 })}
               </div>
 
-              {recommendedStrategy === "dockerfile" && (
+              {selectedStrategy === "dockerfile" && (
                 <>
                   <label>
                     <span>Dockerfile path</span>
@@ -1400,6 +1455,7 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
                       onChange={(event) => setDockerfilePath(event.target.value)}
                       placeholder="Dockerfile"
                     />
+                    <small>Relative to the subdirectory above — e.g. tools/roadmap-studio/Dockerfile with subdirectory "." means the path is exactly that.</small>
                   </label>
                   <label>
                     <span>Build context</span>
@@ -1408,26 +1464,33 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
                       onChange={(event) => setBuildContext(event.target.value)}
                       placeholder="."
                     />
+                    <small>"." means the subdirectory itself (repository root when subdirectory is ".").</small>
                   </label>
                 </>
               )}
 
-              {recommendedStrategy === "nodejs" && inspection.packageJson && (
-                <dl className="wizard-review-grid">
-                  <div>
-                    <dt>Package manager</dt>
-                    <dd>{inspection.packageJson.packageManager}</dd>
-                  </div>
-                  <div>
-                    <dt>Start script</dt>
-                    <dd>{inspection.packageJson.hasStartScript ? "Found" : "Missing"}</dd>
-                  </div>
-                  <div>
-                    <dt>Build script</dt>
-                    <dd>{inspection.packageJson.hasBuildScript ? "Found" : "None"}</dd>
-                  </div>
-                </dl>
-              )}
+              {selectedStrategy === "nodejs" &&
+                (inspection.packageJson ? (
+                  <dl className="wizard-review-grid">
+                    <div>
+                      <dt>Package manager</dt>
+                      <dd>{inspection.packageJson.packageManager}</dd>
+                    </div>
+                    <div>
+                      <dt>Start script</dt>
+                      <dd>{inspection.packageJson.hasStartScript ? "Found" : "Missing"}</dd>
+                    </div>
+                    <div>
+                      <dt>Build script</dt>
+                      <dd>{inspection.packageJson.hasBuildScript ? "Found" : "None"}</dd>
+                    </div>
+                  </dl>
+                ) : (
+                  <p className="section-description">
+                    No package.json was found during inspection — re-inspect after confirming this
+                    repository is a Node.js project.
+                  </p>
+                ))}
 
               {nodejsStartScriptMissing && (
                 <div className="warning-banner">
@@ -1436,7 +1499,7 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
                 </div>
               )}
 
-              {recommendedStrategy === "static" && (
+              {selectedStrategy === "static" && (
                 <p className="section-description">
                   Static output directory is not currently configurable — the entire contents of{" "}
                   <code>{subdirectory}</code> are served as-is by the platform-managed Nginx image.
@@ -1517,19 +1580,24 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
                       : "Not inspected"}
                   </dd>
                 </div>
-                {!isUnsupported && recommendedStrategy && (
+                {!isUnsupported && selectedStrategy && (
                   <div>
                     <dt>Build strategy</dt>
-                    <dd>{STRATEGY_INFO[recommendedStrategy as Exclude<BuildStrategy, "unsupported">]?.title ?? recommendedStrategy}</dd>
+                    <dd>
+                      {STRATEGY_INFO[selectedStrategy].title}
+                      {recommendedStrategy && recommendedStrategy !== selectedStrategy && (
+                        <span className="text-faint"> (recommended: {STRATEGY_INFO[recommendedStrategy as Exclude<BuildStrategy, "unsupported">]?.title ?? recommendedStrategy})</span>
+                      )}
+                    </dd>
                   </div>
                 )}
-                {recommendedStrategy === "nodejs" && inspection?.packageJson && (
+                {selectedStrategy === "nodejs" && inspection?.packageJson && (
                   <div>
                     <dt>Package manager</dt>
                     <dd>{inspection.packageJson.packageManager}</dd>
                   </div>
                 )}
-                {recommendedStrategy === "dockerfile" && (
+                {selectedStrategy === "dockerfile" && (
                   <>
                     <div>
                       <dt>Dockerfile path</dt>

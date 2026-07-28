@@ -224,6 +224,7 @@ export async function saveAppSource(
     deploymentMode: input.deploymentMode,
     dockerfilePath: input.dockerfilePath,
     buildContext: input.buildContext,
+    selectedStrategy: input.selectedStrategy ?? null,
     containerPort: input.containerPort ?? null,
     containerPortSource: input.containerPortSource ?? null,
     containerPortConfidence: input.containerPortConfidence ?? null,

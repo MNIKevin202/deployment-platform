@@ -53,6 +53,7 @@ export type {
   DeploymentMode,
   SourceValidationStatus,
   BuildStrategy,
+  SelectableBuildStrategy,
   UpsertAppSourceInput,
   UpdateAppSourceValidationInput,
   UpdateInspectionResultInput,

@@ -13,6 +13,7 @@ import { migration011PerformanceDiagnostics } from "./011_performance_diagnostic
 import { migration012IdempotencyKeys } from "./012_idempotency_keys.js";
 import { migration013InternalOnlyApps } from "./013_internal_only_apps.js";
 import { migration014GithubAppInstallations } from "./014_github_app_installations.js";
+import { migration015SourceSelectedStrategy } from "./015_source_selected_strategy.js";
 import type { Migration } from "./types.js";
 
 export type { Migration } from "./types.js";
@@ -31,7 +32,8 @@ const migrations: Migration[] = [
   migration011PerformanceDiagnostics,
   migration012IdempotencyKeys,
   migration013InternalOnlyApps,
-  migration014GithubAppInstallations
+  migration014GithubAppInstallations,
+  migration015SourceSelectedStrategy
 ];
 
 interface SchemaMigrationRow {

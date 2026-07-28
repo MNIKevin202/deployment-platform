@@ -266,6 +266,33 @@ describe("app sources (database layer)", () => {
     cleanup();
   });
 
+  test("selectedStrategy persists an operator's manual override and is null by default", () => {
+    const app = makeApp("app-selected-strategy-default");
+    const created = appDatabase.upsertAppSource(app.id, baseInput());
+    assert.equal(created.selectedStrategy, null);
+    cleanup();
+  });
+
+  test("selectedStrategy survives a repository-inspection rerun — inspection only ever touches buildStrategy/detectedProjectType", () => {
+    const app = makeApp("app-selected-strategy-survives-inspect");
+    appDatabase.upsertAppSource(app.id, { ...baseInput(), selectedStrategy: "dockerfile" });
+
+    // A fresh inspection detects "nodejs" (e.g. a monorepo with a root
+    // package.json) — this must NEVER silently overwrite the operator's
+    // manual "dockerfile" choice.
+    appDatabase.updateInspectionResult(app.id, {
+      buildStrategy: "nodejs",
+      detectedProjectType: "nodejs",
+      latestRemoteCommitSha: "abc1234"
+    });
+
+    const result = appDatabase.getAppSource(app.id);
+    assert.equal(result?.buildStrategy, "nodejs", "the DETECTED strategy is still recorded faithfully");
+    assert.equal(result?.selectedStrategy, "dockerfile", "the operator's manual choice must survive the inspection rerun");
+
+    cleanup();
+  });
+
   test("updateInspectionResult throws when no source is linked", () => {
     const app = makeApp("app-fifteen");
     assert.throws(() =>
@@ -292,6 +319,41 @@ describe("app sources (database layer)", () => {
     assert.equal(afterEdit.buildStrategy, null);
     assert.equal(afterEdit.detectedProjectType, null);
     assert.equal(afterEdit.latestRemoteCommitSha, null);
+
+    cleanup();
+  });
+
+  test("changing selectedStrategy itself resets validation back to unknown, but does not silently discard the new choice", () => {
+    const app = makeApp("app-change-selected-strategy");
+    appDatabase.upsertAppSource(app.id, { ...baseInput(), selectedStrategy: "nodejs" });
+    appDatabase.updateAppSourceValidation(app.id, {
+      validationStatus: "valid",
+      validationError: null,
+      lastValidatedCommitSha: "abc1234",
+      lastValidatedAt: new Date().toISOString()
+    });
+
+    const afterChange = appDatabase.upsertAppSource(app.id, { ...baseInput(), selectedStrategy: "dockerfile" });
+
+    assert.equal(afterChange.selectedStrategy, "dockerfile");
+    assert.equal(afterChange.validationStatus, "unknown");
+
+    cleanup();
+  });
+
+  test("re-saving with an unrelated field change (e.g. container port) does not disturb a manually-selected strategy", () => {
+    const app = makeApp("app-unrelated-change-preserves-strategy");
+    appDatabase.upsertAppSource(app.id, { ...baseInput(), selectedStrategy: "dockerfile" });
+
+    const afterPortChange = appDatabase.upsertAppSource(app.id, {
+      ...baseInput(),
+      selectedStrategy: "dockerfile",
+      containerPort: 4319,
+      containerPortSource: "manual"
+    });
+
+    assert.equal(afterPortChange.selectedStrategy, "dockerfile");
+    assert.equal(afterPortChange.containerPort, 4319);
 
     cleanup();
   });

@@ -246,7 +246,7 @@ describe("CreateAppWizard — repository loading, pagination, and search", () =>
     await screen.findByText("MNIKevin202/DeploymentPlatformInstaller");
 
     await user.click(screen.getByRole("button", { name: "Inspect Repository" }));
-    await screen.findByText("Build strategy");
+    await screen.findByText("Dockerfile path");
 
     // Forward to Basics, then back to Source.
     await user.click(screen.getByRole("button", { name: "Continue" }));

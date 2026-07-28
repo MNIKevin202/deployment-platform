@@ -184,7 +184,14 @@ export const appSourceConfigSchema = z
     containerPort: containerPortSchema.optional(),
     containerPortSource: containerPortSourceSchema.optional(),
     containerPortConfidence: containerPortConfidenceSchema.optional(),
-    autoDeploy: z.boolean().optional().default(false)
+    autoDeploy: z.boolean().optional().default(false),
+    // The operator's explicit strategy choice — omitted/null means
+    // "follow whatever inspection recommends" (unchanged default
+    // behavior). Inspection recommendations are advisory, not
+    // mandatory: an operator may select "dockerfile" even when
+    // inspection recommended "nodejs" (or vice versa), and this is the
+    // one field that carries that choice through to the actual deploy.
+    selectedStrategy: buildStrategySchema.nullable().optional()
   })
   .strict();
 

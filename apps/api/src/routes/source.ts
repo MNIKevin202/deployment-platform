@@ -42,6 +42,7 @@ function serializeSource(source: StoredAppSource) {
     dockerfilePath: source.dockerfilePath,
     buildContext: source.buildContext,
     buildStrategy: source.buildStrategy,
+    selectedStrategy: source.selectedStrategy,
     detectedProjectType: source.detectedProjectType,
     containerPort: source.containerPort,
     containerPortSource: source.containerPortSource,

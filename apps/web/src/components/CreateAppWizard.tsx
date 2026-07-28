@@ -4,6 +4,7 @@ import type {
   BuildBriefRequestPayload,
   BuildBriefResponse,
   BuildBriefRuntime,
+  BuildStrategy,
   CreateAppWizardPayload,
   CreateAppWizardResponse,
   CreatedAppSummary,
@@ -30,7 +31,7 @@ import {
   validateStorageMounts
 } from "../lib/wizardValidation";
 import { useGithubRepositories } from "../hooks/useGithubRepositories";
-import { PROJECT_TYPE_LABELS } from "./SourcePanel";
+import { PROJECT_TYPE_LABELS, STRATEGY_INFO } from "./SourcePanel";
 
 interface CreateAppWizardProps {
   open: boolean;
@@ -171,6 +172,24 @@ export default function CreateAppWizard({
   const [githubInspecting, setGithubInspecting] = useState(false);
   const [githubInspectError, setGithubInspectError] = useState("");
 
+  // The operator's own explicit strategy choice — inspection's
+  // recommendation is advisory only, same rule as the Edit Source flow
+  // (SourcePanel.tsx). githubStrategyManuallySet tracks whether the
+  // operator has actively chosen a strategy; once true, a later
+  // inspection rerun must never silently replace it.
+  const [githubSelectedStrategy, setGithubSelectedStrategyState] = useState<Exclude<
+    BuildStrategy,
+    "unsupported"
+  > | null>(null);
+  const [githubStrategyManuallySet, setGithubStrategyManuallySet] = useState(false);
+  const [githubDockerfilePath, setGithubDockerfilePath] = useState("Dockerfile");
+  const [githubBuildContext, setGithubBuildContext] = useState(".");
+
+  const chooseGithubStrategy = (strategy: Exclude<BuildStrategy, "unsupported">) => {
+    setGithubSelectedStrategyState(strategy);
+    setGithubStrategyManuallySet(true);
+  };
+
   const [name, setName] = useState("");
   const [image, setImage] = useState("");
 
@@ -221,6 +240,10 @@ export default function CreateAppWizard({
     setGithubInspection(null);
     setGithubInspecting(false);
     setGithubInspectError("");
+    setGithubSelectedStrategyState(null);
+    setGithubStrategyManuallySet(false);
+    setGithubDockerfilePath("Dockerfile");
+    setGithubBuildContext(".");
     setName("");
     setImage("");
     setContainerPort("3000");
@@ -367,10 +390,14 @@ export default function CreateAppWizard({
 
   // Stale-inspection handling: any change to repository, branch, or
   // subdirectory invalidates a prior inspection result — it must never be
-  // reused for a different selection.
+  // reused for a different selection. A manual strategy choice tied to
+  // that same now-stale combination resets back to "follow the
+  // recommendation" too.
   useEffect(() => {
     setGithubInspection(null);
     setGithubInspectError("");
+    setGithubSelectedStrategyState(null);
+    setGithubStrategyManuallySet(false);
   }, [githubRepo?.fullName, githubBranch, githubSubdirectory]);
 
   const runGithubInspect = async () => {
@@ -398,6 +425,16 @@ export default function CreateAppWizard({
       }
 
       setGithubInspection(result.inspection ?? null);
+
+      // Inspection recommendations are advisory: only auto-apply the
+      // recommendation while the operator hasn't made an explicit choice
+      // of their own.
+      if (!githubStrategyManuallySet) {
+        const recommended = result.inspection?.recommendedStrategy;
+        if (recommended && recommended !== "unsupported") {
+          setGithubSelectedStrategyState(recommended);
+        }
+      }
     } catch (error) {
       setGithubInspectError(error instanceof Error ? error.message : "Unable to inspect repository");
       setGithubInspection(null);
@@ -411,8 +448,7 @@ export default function CreateAppWizard({
   const parsedPort = Number(containerPort);
 
   const githubNodejsStartScriptMissing =
-    githubInspection?.recommendedStrategy === "nodejs" &&
-    githubInspection.packageJson?.hasStartScript === false;
+    githubSelectedStrategy === "nodejs" && githubInspection?.packageJson?.hasStartScript === false;
 
   const sourceValid =
     sourceType === "manual" ||
@@ -420,7 +456,10 @@ export default function CreateAppWizard({
       githubBranch.trim().length > 0 &&
       githubInspection !== null &&
       githubInspection.supported &&
-      !githubNodejsStartScriptMissing);
+      githubSelectedStrategy !== null &&
+      !githubNodejsStartScriptMissing &&
+      (githubSelectedStrategy !== "dockerfile" ||
+        (githubDockerfilePath.trim().length > 0 && githubBuildContext.trim().length > 0)));
   const basicsValid = isValidAppName(trimmedName) && isValidImage(trimmedImage);
   const runtimeValid = isValidPort(parsedPort);
 
@@ -641,13 +680,11 @@ export default function CreateAppWizard({
       return;
     }
 
-    // The backend has no field to select the Node.js/static build
-    // strategies directly (they are always auto-detected fresh at deploy
-    // time from the actual repository content) — deploymentMode only
-    // controls whether the source-save step checks for a Dockerfile, so
-    // it is "dockerfile" only when that's genuinely what was detected.
-    const deploymentMode: DeploymentMode =
-      githubInspection?.recommendedStrategy === "dockerfile" ? "dockerfile" : "prebuilt-image";
+    // deploymentMode controls whether the source-save step checks for a
+    // Dockerfile — driven by the operator's SELECTED strategy (inspection
+    // recommendations are advisory, not mandatory), not automatically by
+    // whatever inspection happened to detect.
+    const deploymentMode: DeploymentMode = githubSelectedStrategy === "dockerfile" ? "dockerfile" : "prebuilt-image";
 
     try {
       const sourceResponse = await fetch(`/api/apps/${appId}/source`, {
@@ -659,8 +696,9 @@ export default function CreateAppWizard({
           branch: githubBranch,
           subdirectory: githubSubdirectory,
           deploymentMode,
-          dockerfilePath: "Dockerfile",
-          buildContext: ".",
+          dockerfilePath: githubDockerfilePath,
+          buildContext: githubBuildContext,
+          selectedStrategy: githubSelectedStrategy,
           containerPort: parsedPort,
           autoDeploy: false
         })
@@ -986,15 +1024,73 @@ export default function CreateAppWizard({
                                     githubInspection.detectedProjectType}
                                 </dd>
                               </div>
-                              <div>
-                                <dt>Build strategy</dt>
-                                <dd>{githubInspection.recommendedStrategy}</dd>
-                              </div>
                             </dl>
                           )}
 
                           {githubInspection && !githubInspection.supported && githubInspection.unsupportedReason && (
                             <div className="warning-banner">{githubInspection.unsupportedReason}</div>
+                          )}
+
+                          {githubInspection && githubInspection.supported && (
+                            <>
+                              <p className="section-description">
+                                Inspection's recommendation is a starting point, not a requirement —
+                                choose any supported deployment strategy below.
+                              </p>
+                              <div className="wizard-row-list">
+                                {(Object.keys(STRATEGY_INFO) as Array<Exclude<BuildStrategy, "unsupported">>).map(
+                                  (key) => {
+                                    const isSelected = githubSelectedStrategy === key;
+                                    const isRecommended = githubInspection.recommendedStrategy === key;
+                                    return (
+                                      <button
+                                        key={key}
+                                        type="button"
+                                        className={`wizard-row strategy-card ${isSelected ? "selected" : ""}`}
+                                        onClick={() => chooseGithubStrategy(key)}
+                                        aria-pressed={isSelected}
+                                      >
+                                        <strong>
+                                          {STRATEGY_INFO[key].title}
+                                          {isRecommended && (
+                                            <span className="status-badge positive compact">
+                                              {isSelected ? "Recommended" : "Detected"}
+                                            </span>
+                                          )}
+                                        </strong>
+                                        <span className="text-faint">{STRATEGY_INFO[key].description}</span>
+                                        {!isRecommended && (
+                                          <span className="text-faint">Not detected for this repository.</span>
+                                        )}
+                                      </button>
+                                    );
+                                  }
+                                )}
+                              </div>
+
+                              {githubSelectedStrategy === "dockerfile" && (
+                                <>
+                                  <label>
+                                    <span>Dockerfile path</span>
+                                    <input
+                                      value={githubDockerfilePath}
+                                      onChange={(event) => setGithubDockerfilePath(event.target.value)}
+                                      placeholder="Dockerfile"
+                                    />
+                                    <small>Relative to the subdirectory above.</small>
+                                  </label>
+                                  <label>
+                                    <span>Build context</span>
+                                    <input
+                                      value={githubBuildContext}
+                                      onChange={(event) => setGithubBuildContext(event.target.value)}
+                                      placeholder="."
+                                    />
+                                    <small>"." means the subdirectory itself.</small>
+                                  </label>
+                                </>
+                              )}
+                            </>
                           )}
 
                           {githubNodejsStartScriptMissing && (

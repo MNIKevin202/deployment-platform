@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
@@ -338,5 +339,173 @@ describe("deployFromGithub — guard clauses (no clone/build reached)", () => {
     assert.ok(!source.includes("getDecryptedGithubToken"));
     assert.ok(!source.includes("getProviderCredential"));
     assert.match(source, /token:\s*credential\.token/);
+  });
+});
+
+// ============================================================
+// Manual strategy override reaches the REAL build (not the mocked-away
+// clone/build pipeline the guard-clause tests above use) — a real local
+// git repository, cloned via cloneUrlOverride (file://, no network, no
+// live GitHub repository involved), so inspectCheckoutDirectory runs
+// against real files and prepareBuildPlan resolves real paths. Stops
+// right after the real build call by making createContainer throw a
+// deliberate, expected error — proving the strategy override reached
+// dockerOps.buildImage with the correct effective path, without ever
+// touching a real container.
+// ============================================================
+
+function buildFakeBareRepoWithRootPackageJsonAndNestedDockerfile(): string {
+  const scratch = mkdtempSync(join(tmpdir(), "strategy-override-fixture-"));
+  const workRepo = join(scratch, "work");
+  mkdirSync(join(workRepo, "tools", "roadmap-studio"), { recursive: true });
+
+  // A package.json at the repository ROOT — this is what makes
+  // inspection recommend "nodejs" by default.
+  writeFileSync(
+    join(workRepo, "package.json"),
+    JSON.stringify({ name: "roadmapstudio-web", scripts: { start: "node index.js" } })
+  );
+
+  // The real, nested Dockerfile the operator wants to build with
+  // instead — exact roadmapstudio-web fixture shape: subdirectory ".",
+  // dockerfilePath "tools/roadmap-studio/Dockerfile", buildContext ".".
+  writeFileSync(join(workRepo, "tools", "roadmap-studio", "Dockerfile"), "FROM scratch\n");
+
+  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", HOME: scratch };
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: workRepo, env });
+  execFileSync("git", ["config", "user.email", "fixture@example.com"], { cwd: workRepo, env });
+  execFileSync("git", ["config", "user.name", "Fixture"], { cwd: workRepo, env });
+  execFileSync("git", ["add", "-A"], { cwd: workRepo, env });
+  execFileSync("git", ["commit", "-q", "-m", "fixture"], { cwd: workRepo, env });
+
+  const bareRepo = join(scratch, "repo.git");
+  execFileSync("git", ["clone", "-q", "--bare", workRepo, bareRepo], { env });
+
+  return bareRepo;
+}
+
+describe("deployFromGithub — manual strategy override reaches the real build (regression fixture)", () => {
+  let tempDir: string;
+  let appDatabase: AppDatabase;
+  let bareRepo: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "github-deploy-strategy-override-test-"));
+    appDatabase = createAppDatabase(join(tempDir, `${randomUUID()}.sqlite`));
+    bareRepo = buildFakeBareRepoWithRootPackageJsonAndNestedDockerfile();
+  });
+
+  afterEach(() => {
+    appDatabase.close();
+    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(join(bareRepo, ".."), { recursive: true, force: true });
+  });
+
+  function makeApp(name: string) {
+    return appDatabase.createApp({
+      name,
+      image: "nginx:alpine",
+      containerPort: 4319,
+      containerName: `app-${name}`
+    });
+  }
+
+  test("a repository with root package.json (Node.js-detected) manually selects dockerfile, and the real build uses the nested Dockerfile — not the auto-detected Node.js strategy", async () => {
+    const app = makeApp("roadmapstudio-web-override");
+    appDatabase.upsertAppSource(app.id, {
+      provider: "github",
+      repositoryOwner: "MNIKevin202",
+      repositoryName: "DeploymentPlatformInstaller",
+      repositoryFullName: "MNIKevin202/DeploymentPlatformInstaller",
+      repositoryCloneUrl: "https://github.com/MNIKevin202/DeploymentPlatformInstaller.git",
+      repositoryId: null,
+      repositoryVisibility: null,
+      branch: "main",
+      subdirectory: ".",
+      deploymentMode: "dockerfile",
+      dockerfilePath: "tools/roadmap-studio/Dockerfile",
+      buildContext: ".",
+      selectedStrategy: "dockerfile",
+      containerPort: 4319,
+      autoDeploy: false
+    });
+
+    const githubClient: SourceProviderClient = {
+      ...unusedGithubClient(),
+      resolveBranchCommit: async () => "d".repeat(40),
+      listCommits: async () => ({ items: [], hasMore: false })
+    };
+
+    const buildImageCalls: Array<{ contextPath: string; dockerfileRelativePath: string; dockerfileContent: string }> =
+      [];
+
+    const dockerOps: GithubDeployDependencies["dockerOps"] = {
+      ...unusedDockerOps(),
+      async imageExists() {
+        return false;
+      },
+      async buildImage(input) {
+        // Read the Dockerfile NOW, while the checkout still exists —
+        // deployFromGithub removes it in its own `finally` block
+        // immediately after this call returns.
+        const dockerfileContent = readFileSync(join(input.contextPath, input.dockerfileRelativePath), "utf8");
+        buildImageCalls.push({
+          contextPath: input.contextPath,
+          dockerfileRelativePath: input.dockerfileRelativePath,
+          dockerfileContent
+        });
+        return { log: "", truncated: false };
+      },
+      async createContainer() {
+        // Deliberately stop here — the whole point of this test is to
+        // observe the buildImage call, never to touch a real container.
+        throw new Error("expected-stop-after-build");
+      }
+    };
+
+    const recordedEvents: Array<{ eventType: string; message: string }> = [];
+    const recordEvent: RecordEventFn = (input) => {
+      recordedEvents.push({ eventType: input.eventType, message: input.message });
+    };
+
+    const deps: GithubDeployDependencies = {
+      appDatabase,
+      dockerOps,
+      githubClient,
+      resolveCredential: async () => ({ success: true, token: "ghs_fake-fixture-token", source: "installation" }),
+      reconcileRouting: async () => ({ lastReconcileSucceeded: true, lastError: null }),
+      recordEvent,
+      cloneUrlOverride: `file://${bareRepo}`
+    };
+
+    const result = await deployFromGithub(deps, app.id);
+
+    // Stopped exactly where expected — proves the pipeline reached the
+    // real build (not a pre-clone/pre-inspection failure) and never
+    // touched a real container beyond that.
+    assert.equal(result.success, false);
+    assert.match(result.message, /expected-stop-after-build/);
+    assert.ok(recordedEvents.some((e) => e.eventType === "github-deploy-failed"));
+
+    assert.equal(buildImageCalls.length, 1);
+    // The effective build context is the repository root (subdirectory
+    // "."), and the effective Dockerfile — join(contextPath,
+    // dockerfileRelativePath) — is the real, on-disk nested Dockerfile
+    // inside tools/roadmap-studio, proving the MANUAL "dockerfile"
+    // selection was what actually got built, not the auto-detected
+    // "nodejs" recommendation (there is no generated Node.js Dockerfile
+    // anywhere in this fixture — a nodejs build would have failed
+    // differently, with no start-script-based image at all).
+    const { dockerfileRelativePath, dockerfileContent } = buildImageCalls[0]!;
+    assert.equal(dockerfileRelativePath, join("tools", "roadmap-studio", "Dockerfile"));
+    assert.equal(dockerfileContent, "FROM scratch\n");
+
+    // The DETECTED strategy (from real inspection) is still recorded
+    // faithfully as "nodejs" — inspection never lies about what it
+    // found — while selectedStrategy (the operator's own choice) is
+    // what determined the actual build, confirmed above.
+    const source = appDatabase.getAppSource(app.id);
+    assert.equal(source?.buildStrategy, "nodejs");
+    assert.equal(source?.selectedStrategy, "dockerfile");
   });
 });

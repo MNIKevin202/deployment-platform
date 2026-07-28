@@ -597,6 +597,8 @@ export interface AppSourceInfo {
   dockerfilePath: string;
   buildContext: string;
   buildStrategy: BuildStrategy | null;
+  /** The operator's own explicit strategy choice — null means "follow the inspection recommendation automatically." Never overwritten by an inspection rerun. */
+  selectedStrategy: Exclude<BuildStrategy, "unsupported"> | null;
   detectedProjectType: DetectedProjectType | null;
   containerPort: number | null;
   containerPortSource: string | null;

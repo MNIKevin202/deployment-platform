@@ -12,6 +12,9 @@ export type SourceValidationStatus = "unknown" | "valid" | "invalid";
  */
 export type BuildStrategy = "dockerfile" | "nodejs" | "static" | "unsupported";
 
+/** The subset of BuildStrategy an operator can actually choose — "unsupported" is only ever a detection result, never a request. */
+export type SelectableBuildStrategy = Exclude<BuildStrategy, "unsupported">;
+
 export interface StoredAppSource {
   appId: number;
   provider: string;
@@ -27,6 +30,15 @@ export interface StoredAppSource {
   dockerfilePath: string;
   buildContext: string;
   buildStrategy: BuildStrategy | null;
+  /**
+   * The operator's own explicit strategy choice — null means "follow
+   * whatever inspection recommends" (the default, unchanged behavior).
+   * Deliberately a separate column from buildStrategy (which is
+   * DISPLAY-ONLY and overwritten by every inspection run): an
+   * inspection rerun must never silently clobber a manual override, and
+   * this is what makes that possible.
+   */
+  selectedStrategy: SelectableBuildStrategy | null;
   detectedProjectType: string | null;
   containerPort: number | null;
   /** "manual" when the operator typed it themselves, or the PortDetectionSource that was accepted. Null before any port has ever been confirmed. */
@@ -64,6 +76,7 @@ interface AppSourceRow {
   dockerfile_path: string;
   build_context: string;
   build_strategy: string | null;
+  selected_strategy: string | null;
   detected_project_type: string | null;
   container_port: number | null;
   container_port_source: string | null;
@@ -88,7 +101,7 @@ const APP_SOURCE_COLUMNS = `
   app_id, provider, repository_owner, repository_name, repository_full_name,
   repository_id, repository_visibility, repository_clone_url, branch,
   subdirectory, deployment_mode, dockerfile_path, build_context,
-  build_strategy, detected_project_type, container_port, container_port_source,
+  build_strategy, selected_strategy, detected_project_type, container_port, container_port_source,
   container_port_confidence, auto_deploy,
   last_validated_commit_sha, last_validated_at, validation_status,
   validation_error, latest_remote_commit_sha, latest_deployed_commit_sha,
@@ -112,6 +125,7 @@ function mapAppSource(row: AppSourceRow): StoredAppSource {
     dockerfilePath: row.dockerfile_path,
     buildContext: row.build_context,
     buildStrategy: (row.build_strategy as BuildStrategy | null) ?? null,
+    selectedStrategy: (row.selected_strategy as SelectableBuildStrategy | null) ?? null,
     detectedProjectType: row.detected_project_type,
     containerPort: row.container_port,
     containerPortSource: row.container_port_source,
@@ -146,6 +160,8 @@ export interface UpsertAppSourceInput {
   deploymentMode: DeploymentMode;
   dockerfilePath: string;
   buildContext: string;
+  /** The operator's explicit strategy choice — null/omitted to follow the inspection recommendation automatically. */
+  selectedStrategy?: SelectableBuildStrategy | null;
   containerPort: number | null;
   /** "manual" when the operator typed it, or the accepted PortDetectionSource. Null if not confirmed. */
   containerPortSource?: string | null;
@@ -201,6 +217,7 @@ export function createAppSourceRepository(db: DatabaseSync) {
    */
   function upsertAppSource(appId: number, input: UpsertAppSourceInput): StoredAppSource {
     const existing = getAppSource(appId);
+    const selectedStrategy = input.selectedStrategy ?? null;
 
     const inspectionRelevantChanged =
       !existing ||
@@ -209,7 +226,8 @@ export function createAppSourceRepository(db: DatabaseSync) {
       existing.branch !== input.branch ||
       existing.subdirectory !== input.subdirectory ||
       existing.dockerfilePath !== input.dockerfilePath ||
-      existing.buildContext !== input.buildContext;
+      existing.buildContext !== input.buildContext ||
+      existing.selectedStrategy !== selectedStrategy;
 
     const containerPortSource = input.containerPortSource ?? null;
     const containerPortConfidence = input.containerPortConfidence ?? null;
@@ -236,6 +254,7 @@ export function createAppSourceRepository(db: DatabaseSync) {
               container_port_source = ?,
               container_port_confidence = ?,
               auto_deploy = ?,
+              selected_strategy = ?,
               build_strategy = NULL,
               detected_project_type = NULL,
               latest_remote_commit_sha = NULL,
@@ -263,6 +282,7 @@ export function createAppSourceRepository(db: DatabaseSync) {
           containerPortSource,
           containerPortConfidence,
           input.autoDeploy ? 1 : 0,
+          selectedStrategy,
           appId
         );
       } else {
@@ -286,6 +306,7 @@ export function createAppSourceRepository(db: DatabaseSync) {
               container_port_source = ?,
               container_port_confidence = ?,
               auto_deploy = ?,
+              selected_strategy = ?,
               updated_at = CURRENT_TIMESTAMP
             WHERE app_id = ?
           `
@@ -306,6 +327,7 @@ export function createAppSourceRepository(db: DatabaseSync) {
           containerPortSource,
           containerPortConfidence,
           input.autoDeploy ? 1 : 0,
+          selectedStrategy,
           appId
         );
       }
@@ -317,9 +339,10 @@ export function createAppSourceRepository(db: DatabaseSync) {
             repository_full_name, repository_id, repository_visibility,
             repository_clone_url, branch, subdirectory, deployment_mode,
             dockerfile_path, build_context, container_port,
-            container_port_source, container_port_confidence, auto_deploy
+            container_port_source, container_port_confidence, auto_deploy,
+            selected_strategy
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
       ).run(
         appId,
@@ -338,7 +361,8 @@ export function createAppSourceRepository(db: DatabaseSync) {
         input.containerPort,
         containerPortSource,
         containerPortConfidence,
-        input.autoDeploy ? 1 : 0
+        input.autoDeploy ? 1 : 0,
+        selectedStrategy
       );
     }
 

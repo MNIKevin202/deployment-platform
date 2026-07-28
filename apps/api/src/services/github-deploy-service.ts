@@ -221,6 +221,8 @@ export interface GithubDeployDependencies {
   maxLogBytes?: number;
   /** Test-only override for the `git` executable — see DEFAULT_GIT_EXECUTABLE in github-clone-service.ts. Never set in production. */
   gitExecutable?: string;
+  /** Test-only override for the clone URL — see cloneUrlOverride in github-clone-service.ts. Never set in production. */
+  cloneUrlOverride?: string;
 }
 
 export function errorMessage(error: unknown): string {
@@ -401,7 +403,8 @@ export async function deployFromGithub(
       token: credential.token,
       timeoutMs: cloneTimeoutMs,
       maxOutputBytes: maxLogBytes,
-      gitExecutable: deps.gitExecutable
+      gitExecutable: deps.gitExecutable,
+      cloneUrlOverride: deps.cloneUrlOverride
     }).catch((error) => {
       if (error instanceof CloneError) {
         throw new GithubDeployError(error.message, error.stage as DeployStage, {
@@ -430,7 +433,18 @@ export async function deployFromGithub(
       latestRemoteCommitSha: commitSha
     });
 
-    if (!detection.supported) {
+    // Inspection recommendations are advisory, not mandatory: when the
+    // operator has explicitly selected a strategy (source.selectedStrategy,
+    // set via the Source tab / Create App wizard), THAT is what gets
+    // built — never silently overridden by a fresh inspection's own
+    // opinion, even if inspection recommends something else or considers
+    // the repository "unsupported" by its own auto-detection heuristics.
+    // With no explicit selection (the default, unchanged behavior),
+    // deployment continues to follow detection.recommendedStrategy
+    // exactly as before, including its "unsupported" gate.
+    const effectiveStrategy = source.selectedStrategy ?? detection.recommendedStrategy;
+
+    if (!source.selectedStrategy && !detection.supported) {
       throw new GithubDeployError(
         detection.unsupportedReason ?? "This repository's project type is not supported for deployment.",
         "inspecting-project"
@@ -446,7 +460,7 @@ export async function deployFromGithub(
     let buildPlan;
     try {
       buildPlan = prepareBuildPlan({
-        strategy: detection.recommendedStrategy,
+        strategy: effectiveStrategy,
         checkoutDir: cloneResult.checkoutDir,
         subdirectory: source.subdirectory,
         dockerfilePath: source.dockerfilePath,
