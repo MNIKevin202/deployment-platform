@@ -784,6 +784,12 @@ build_api_env_file() {
   full_capture="$(new_tmp_file)"
   capture_env_file "${container}" "${full_capture}"
 
+  # Exposed globally (not just used locally below) so
+  # resolve_optional_github_key_mount can read the OUTGOING container's
+  # own GITHUB_APP_PRIVATE_KEY_PATH afterward, to detect a stale PEM
+  # mount left over from a path that has since changed or been removed.
+  API_ENV_FULL_CAPTURE_FILE="${full_capture}"
+
   required_capture="$(new_tmp_file)"
   : > "${required_capture}"
   chmod 600 "${required_capture}"
@@ -819,13 +825,36 @@ build_api_env_file() {
 # Validated BEFORE Phase B (stopping/renaming the live container) ever
 # runs, via Phase A below — an unsafe or missing key fails the release
 # with the live containers completely untouched.
+#
+# GITHUB_APP_PRIVATE_KEY_PATH is the single source of truth for which
+# PEM (if any) belongs mounted into the replacement container. When the
+# OUTGOING container's own value differs from the current one — a
+# different path, or the variable being removed entirely — the OLD
+# target is stale: it must not survive into the replacement container
+# just because a previous release happened to mount it there. That
+# stale target (when there is one) is recorded in
+# GITHUB_KEY_STALE_TARGETS so merge_mount_args_by_target (below) drops
+# it from the captured mount set, deterministically, on every release —
+# never left mounted forever, and never silently re-added.
 GITHUB_KEY_MOUNT_ARGS=()
+GITHUB_KEY_STALE_TARGETS=()
 resolve_optional_github_key_mount() {
   local merged_env_file="$1"
+  local prior_env_file="${2:-}"
   GITHUB_KEY_MOUNT_ARGS=()
+  GITHUB_KEY_STALE_TARGETS=()
 
   local key_path
   key_path="$(grep -E '^GITHUB_APP_PRIVATE_KEY_PATH=' "${merged_env_file}" | tail -n 1 | cut -d= -f2- || true)"
+
+  local prior_key_path=""
+  if [ -n "${prior_env_file}" ] && [ -f "${prior_env_file}" ]; then
+    prior_key_path="$(grep -E '^GITHUB_APP_PRIVATE_KEY_PATH=' "${prior_env_file}" | tail -n 1 | cut -d= -f2- || true)"
+  fi
+
+  if [ -n "${prior_key_path}" ] && [ "${prior_key_path}" != "${key_path}" ]; then
+    GITHUB_KEY_STALE_TARGETS=("${prior_key_path}")
+  fi
 
   if [ -z "${key_path}" ]; then
     return 0
@@ -898,6 +927,107 @@ capture_mounts() {
     [ -n "${mount_spec}" ] || continue
     MOUNT_ARGS+=("--mount" "${mount_spec}")
   done < <(run_node_helper "${MOUNT_PARSE_SCRIPT_FILE}" "${mounts_json_file}")
+}
+
+# Extracts the "target=..." field from a single --mount spec string (e.g.
+# "type=bind,source=/foo,target=/bar,readonly"), by splitting on commas
+# and matching the exact "target=" key — never a substring match against
+# the raw spec, since a source path can legitimately contain text that
+# looks like another mount's target. Prints nothing and returns non-zero
+# if the spec has no target field (never expected in practice; treated
+# as "cannot be deduplicated" by the caller).
+mount_spec_target() {
+  local spec="$1"
+  local -a fields
+  IFS=',' read -ra fields <<< "${spec}"
+  local field
+  for field in "${fields[@]}"; do
+    case "${field}" in
+      target=*)
+        printf '%s' "${field#target=}"
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+# merge_mount_args_by_target [extra_stale_target ...]
+#
+# Merges the globally-captured MOUNT_ARGS (whatever the outgoing
+# container actually has) with GITHUB_KEY_MOUNT_ARGS (the authoritative,
+# freshly-validated desired GitHub PEM mount, zero or one entries) into
+# MERGED_MOUNT_ARGS, deduplicated by DESTINATION PATH ("target="):
+#
+#   - Any captured mount whose target matches a desired mount's target
+#     is dropped from the captured set — the desired mount wins and is
+#     appended once, authoritative over whatever was captured (covers
+#     "same target, different source/type/read-write" — requirement 2).
+#   - Any captured mount whose target matches an extra_stale_target
+#     argument (the previous release's GITHUB_APP_PRIVATE_KEY_PATH, when
+#     it has since changed or been removed — see
+#     resolve_optional_github_key_mount) is ALSO dropped, even though no
+#     new mount replaces it.
+#   - Every other captured mount (caddy-routes, the Docker socket, the
+#     /data volume, and any future unrelated mount) passes through
+#     completely untouched, in its original order.
+#
+# This is what makes mount assembly idempotent across unlimited releases
+# — including this exact function being handed its own prior output as
+# next release's "captured" input, since a mount already sitting at the
+# desired target is excluded exactly the same way a stale one is, then
+# re-added exactly once.
+MERGED_MOUNT_ARGS=()
+merge_mount_args_by_target() {
+  local -a extra_stale_targets=("$@")
+  MERGED_MOUNT_ARGS=()
+
+  local -a exclude_targets=()
+  if [ ${#extra_stale_targets[@]} -gt 0 ]; then
+    exclude_targets+=("${extra_stale_targets[@]}")
+  fi
+
+  local i target
+  i=0
+  while [ "${i}" -lt "${#GITHUB_KEY_MOUNT_ARGS[@]}" ]; do
+    if [ "${GITHUB_KEY_MOUNT_ARGS[${i}]}" = "--mount" ]; then
+      target="$(mount_spec_target "${GITHUB_KEY_MOUNT_ARGS[$((i + 1))]}")" \
+        || fail "Internal error: a desired GitHub mount spec has no target. Nothing has been changed yet."
+      exclude_targets+=("${target}")
+    fi
+    i=$((i + 1))
+  done
+
+  i=0
+  while [ "${i}" -lt "${#MOUNT_ARGS[@]}" ]; do
+    if [ "${MOUNT_ARGS[${i}]}" = "--mount" ]; then
+      local spec="${MOUNT_ARGS[$((i + 1))]}"
+      local captured_target
+      captured_target="$(mount_spec_target "${spec}")" || captured_target=""
+
+      local excluded=0
+      if [ -n "${captured_target}" ] && [ ${#exclude_targets[@]} -gt 0 ]; then
+        local ex
+        for ex in "${exclude_targets[@]}"; do
+          if [ "${captured_target}" = "${ex}" ]; then
+            excluded=1
+            break
+          fi
+        done
+      fi
+
+      if [ "${excluded}" -eq 0 ]; then
+        MERGED_MOUNT_ARGS+=("--mount" "${spec}")
+      fi
+      i=$((i + 2))
+    else
+      i=$((i + 1))
+    fi
+  done
+
+  if [ ${#GITHUB_KEY_MOUNT_ARGS[@]} -gt 0 ]; then
+    MERGED_MOUNT_ARGS+=("${GITHUB_KEY_MOUNT_ARGS[@]}")
+  fi
 }
 
 # ---------- Runtime configuration capture ----------
@@ -1313,14 +1443,24 @@ if [ "${MODE}" = "api" ] || [ "${MODE}" = "both" ]; then
 
   # Validated against the environment that will actually be used for the
   # replacement container (not a separate read of the raw files), and
-  # before Phase B ever stops/renames the live container.
-  resolve_optional_github_key_mount "${API_ENV_FILE}"
+  # before Phase B ever stops/renames the live container. Also compares
+  # against the OUTGOING container's own GITHUB_APP_PRIVATE_KEY_PATH
+  # (API_ENV_FULL_CAPTURE_FILE, set by build_api_env_file above) to
+  # detect a stale prior PEM target.
+  resolve_optional_github_key_mount "${API_ENV_FILE}" "${API_ENV_FULL_CAPTURE_FILE}"
 
+  # Merged by destination path, not appended blindly — this is what
+  # makes the PEM mount idempotent across unlimited releases instead of
+  # duplicating (Docker's "Duplicate mount point" failure) on every
+  # release after the first one that added it. See
+  # merge_mount_args_by_target for the full policy.
   capture_mounts "${API_CONTAINER}"
-  API_MOUNT_ARGS=("${MOUNT_ARGS[@]}")
-  if [ ${#GITHUB_KEY_MOUNT_ARGS[@]} -gt 0 ]; then
-    API_MOUNT_ARGS+=("${GITHUB_KEY_MOUNT_ARGS[@]}")
+  if [ ${#GITHUB_KEY_STALE_TARGETS[@]} -gt 0 ]; then
+    merge_mount_args_by_target "${GITHUB_KEY_STALE_TARGETS[@]}"
+  else
+    merge_mount_args_by_target
   fi
+  API_MOUNT_ARGS=("${MERGED_MOUNT_ARGS[@]}")
 
   capture_runtime_config "API" "${API_CONTAINER}" "${API_IMAGE_REPO}:${API_VERSION}"
   # Deliberately not using "${arr[@]:-}" here: when an array is

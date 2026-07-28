@@ -1295,11 +1295,21 @@ PEM_FIXTURES="$TMP_ROOT/pem-fixtures"
 mkdir -p "$PEM_FIXTURES"
 
 # 12. GitHub App unconfigured remains a valid release configuration.
+#
+# NOTE on { ... } vs ( ... ) throughout this section: assertions call
+# assert_eq/assert_contains, which increment the script's PASS_COUNT/
+# FAIL_COUNT globals. A ( ... ) parenthesized group runs in a subshell,
+# so those increments would be silently discarded even though the
+# [PASS]/[FAIL] line still prints — a false "0 failures" if an assertion
+# in there actually failed. { ... ; } (a brace group) runs in the
+# CURRENT shell, so counts land correctly, while still giving each test
+# its own scratch space for GITHUB_KEY_MOUNT_ARGS/GITHUB_KEY_STALE_TARGETS
+# between calls to resolve_optional_github_key_mount.
 printf 'PANEL_DOMAIN=panel.devminted.com\n' > "$PEM_FIXTURES/no-key.env"
-(
+{
   resolve_optional_github_key_mount "$PEM_FIXTURES/no-key.env"
   assert_eq "no GITHUB_APP_PRIVATE_KEY_PATH configured -> no mount args" "0" "${#GITHUB_KEY_MOUNT_ARGS[@]}"
-)
+}
 
 # 10. A configured but missing PEM fails before anything live is touched.
 printf 'GITHUB_APP_PRIVATE_KEY_PATH=%s/does-not-exist.pem\n' "$PEM_FIXTURES" > "$PEM_FIXTURES/missing-key.env"
@@ -1330,29 +1340,206 @@ SAFE_PEM="$PEM_FIXTURES/safe.pem"
 printf -- '-----BEGIN RSA PRIVATE KEY-----\nFAKE-NOT-A-REAL-KEY\n-----END RSA PRIVATE KEY-----\n' > "$SAFE_PEM"
 chmod 600 "$SAFE_PEM"
 printf 'GITHUB_APP_PRIVATE_KEY_PATH=%s\n' "$SAFE_PEM" > "$PEM_FIXTURES/safe-key.env"
-(
+{
   resolve_optional_github_key_mount "$PEM_FIXTURES/safe-key.env"
   assert_eq "a safe (600) PEM produces exactly one --mount arg pair" "2" "${#GITHUB_KEY_MOUNT_ARGS[@]}"
   assert_eq "the mount flag is --mount" "--mount" "${GITHUB_KEY_MOUNT_ARGS[0]}"
   assert_contains "the mount targets the EXACT same path as the source (no translation)" \
     "${GITHUB_KEY_MOUNT_ARGS[1]}" "source=${SAFE_PEM},target=${SAFE_PEM}"
   assert_contains "the mount is read-only" "${GITHUB_KEY_MOUNT_ARGS[1]}" "readonly"
-)
+}
 # A 400 (owner-read-only, even stricter) PEM is also accepted.
 chmod 400 "$SAFE_PEM"
-(
+{
   resolve_optional_github_key_mount "$PEM_FIXTURES/safe-key.env"
   assert_eq "a stricter 400-mode PEM is also accepted" "2" "${#GITHUB_KEY_MOUNT_ARGS[@]}"
-)
+}
 chmod 600 "$SAFE_PEM"
 
 REMOTE_TEXT_FOR_MOUNT="$(cat "$REMOTE_SH")"
 assert_contains "the key-mount check is resolved during Phase A (before Phase B stops/renames the live container)" \
-  "$REMOTE_TEXT_FOR_MOUNT" 'resolve_optional_github_key_mount "${API_ENV_FILE}"'
+  "$REMOTE_TEXT_FOR_MOUNT" 'resolve_optional_github_key_mount "${API_ENV_FILE}" "${API_ENV_FULL_CAPTURE_FILE}"'
 PHASE_A_LINE="$(grep -n 'resolve_optional_github_key_mount "\${API_ENV_FILE}"' "$REMOTE_SH" | head -1 | cut -d: -f1)"
 PHASE_B_LINE="$(grep -n 'Phase B: preserve current containers under rollback names' "$REMOTE_SH" | head -1 | cut -d: -f1)"
 assert_success "the key-mount check runs strictly before Phase B in the script's line order" \
   bash -c "[ '$PHASE_A_LINE' -lt '$PHASE_B_LINE' ]"
+MERGE_CALL_LINE="$(grep -n 'merge_mount_args_by_target' "$REMOTE_SH" | grep -v '^[0-9]*:#' | tail -1 | cut -d: -f1)"
+assert_success "the mount merge itself also runs strictly before Phase B" \
+  bash -c "[ '$MERGE_CALL_LINE' -lt '$PHASE_B_LINE' ]"
+
+echo
+echo "=== Idempotent PEM mount merge (merge_mount_args_by_target) ==="
+MERGE_FILE="$TMP_ROOT/mount-merge.sh"
+sed -n "/^mount_spec_target()/,/^}/p" "$REMOTE_SH" > "$MERGE_FILE"
+sed -n "/^MERGED_MOUNT_ARGS=()/,/^}/p" "$REMOTE_SH" >> "$MERGE_FILE"
+assert_success "the merge helper source was extracted (non-empty)" \
+  bash -c "[ -s '$MERGE_FILE' ]"
+# shellcheck source=/dev/null
+source "$MERGE_FILE"
+fail() { printf 'FAIL_CALLED: %s\n' "$1" >&2; exit 7; }
+
+CADDY_MOUNT="type=bind,source=/opt/deployment-platform/caddy/routes,target=/app/caddy-routes"
+SOCK_MOUNT="type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock"
+DATA_MOUNT="type=volume,source=deployment-platform-api-data,target=/data"
+DESIRED_PEM_MOUNT="type=bind,source=${SAFE_PEM},target=${SAFE_PEM},readonly"
+
+# 1. Existing identical PEM mount does not duplicate.
+{
+  MOUNT_ARGS=(--mount "$CADDY_MOUNT" --mount "$DESIRED_PEM_MOUNT")
+  GITHUB_KEY_MOUNT_ARGS=(--mount "$DESIRED_PEM_MOUNT")
+  merge_mount_args_by_target
+  PEM_COUNT=0
+  for ((idx = 1; idx < ${#MERGED_MOUNT_ARGS[@]}; idx += 2)); do
+    case "${MERGED_MOUNT_ARGS[$idx]}" in
+      *"target=${SAFE_PEM}"*) PEM_COUNT=$((PEM_COUNT + 1)) ;;
+    esac
+  done
+  assert_eq "an already-identical captured PEM mount is not duplicated" "1" "$PEM_COUNT"
+  assert_eq "the unrelated caddy mount survives alongside it" "4" "${#MERGED_MOUNT_ARGS[@]}"
+}
+
+# 2. Existing WRITABLE PEM mount (no ",readonly") is replaced by read-only.
+{
+  WRITABLE_PEM_MOUNT="type=bind,source=${SAFE_PEM},target=${SAFE_PEM}"
+  MOUNT_ARGS=(--mount "$WRITABLE_PEM_MOUNT")
+  GITHUB_KEY_MOUNT_ARGS=(--mount "$DESIRED_PEM_MOUNT")
+  merge_mount_args_by_target
+  assert_eq "a stale writable PEM mount is replaced, not kept alongside the new one" "2" "${#MERGED_MOUNT_ARGS[@]}"
+  assert_contains "the surviving mount is the read-only one" "${MERGED_MOUNT_ARGS[1]}" "readonly"
+}
+
+# 3. Existing PEM mount with a DIFFERENT SOURCE (same target) is replaced.
+{
+  OTHER_SOURCE_MOUNT="type=bind,source=/some/other/old-key.pem,target=${SAFE_PEM},readonly"
+  MOUNT_ARGS=(--mount "$OTHER_SOURCE_MOUNT")
+  GITHUB_KEY_MOUNT_ARGS=(--mount "$DESIRED_PEM_MOUNT")
+  merge_mount_args_by_target
+  assert_eq "a same-target-different-source captured mount is replaced" "2" "${#MERGED_MOUNT_ARGS[@]}"
+  assert_contains "the surviving mount points at the CURRENT source" "${MERGED_MOUNT_ARGS[1]}" "source=${SAFE_PEM}"
+  assert_not_contains "the stale source does not survive" "${MERGED_MOUNT_ARGS[1]}" "old-key.pem"
+}
+
+# 4. Existing PEM mount with the WRONG TYPE (e.g. volume instead of bind) is replaced.
+{
+  WRONG_TYPE_MOUNT="type=volume,source=some-volume,target=${SAFE_PEM}"
+  MOUNT_ARGS=(--mount "$WRONG_TYPE_MOUNT")
+  GITHUB_KEY_MOUNT_ARGS=(--mount "$DESIRED_PEM_MOUNT")
+  merge_mount_args_by_target
+  assert_eq "a same-target-wrong-type captured mount is replaced" "2" "${#MERGED_MOUNT_ARGS[@]}"
+  assert_contains "the surviving mount is the desired bind mount" "${MERGED_MOUNT_ARGS[1]}" "type=bind"
+}
+
+# 5. Missing prior PEM mount: exactly one is added.
+{
+  MOUNT_ARGS=(--mount "$CADDY_MOUNT" --mount "$SOCK_MOUNT" --mount "$DATA_MOUNT")
+  GITHUB_KEY_MOUNT_ARGS=(--mount "$DESIRED_PEM_MOUNT")
+  merge_mount_args_by_target
+  assert_eq "3 unrelated mounts + 1 new PEM mount = 4 mount pairs (8 array elements)" "8" "${#MERGED_MOUNT_ARGS[@]}"
+  PEM_COUNT=0
+  for ((idx = 1; idx < ${#MERGED_MOUNT_ARGS[@]}; idx += 2)); do
+    case "${MERGED_MOUNT_ARGS[$idx]}" in
+      *"target=${SAFE_PEM}"*) PEM_COUNT=$((PEM_COUNT + 1)) ;;
+    esac
+  done
+  assert_eq "exactly one PEM mount was added" "1" "$PEM_COUNT"
+}
+
+# 6. Unrelated mounts remain completely unchanged (caddy-routes, docker.sock, /data).
+{
+  MOUNT_ARGS=(--mount "$CADDY_MOUNT" --mount "$SOCK_MOUNT" --mount "$DATA_MOUNT" --mount "$DESIRED_PEM_MOUNT")
+  GITHUB_KEY_MOUNT_ARGS=(--mount "$DESIRED_PEM_MOUNT")
+  merge_mount_args_by_target
+  assert_contains "caddy-routes mount is untouched" "${MERGED_MOUNT_ARGS[*]}" "$CADDY_MOUNT"
+  assert_contains "docker.sock mount is untouched" "${MERGED_MOUNT_ARGS[*]}" "$SOCK_MOUNT"
+  assert_contains "the /data volume mount is untouched" "${MERGED_MOUNT_ARGS[*]}" "$DATA_MOUNT"
+}
+
+# 7. Repeated execution stays idempotent: feeding the merge's own prior
+#    output back in as the next "captured" set produces the same result.
+{
+  MOUNT_ARGS=(--mount "$CADDY_MOUNT" --mount "$SOCK_MOUNT" --mount "$DATA_MOUNT")
+  GITHUB_KEY_MOUNT_ARGS=(--mount "$DESIRED_PEM_MOUNT")
+  merge_mount_args_by_target
+  FIRST_RESULT=("${MERGED_MOUNT_ARGS[@]}")
+
+  MOUNT_ARGS=("${FIRST_RESULT[@]}")
+  merge_mount_args_by_target
+  SECOND_RESULT=("${MERGED_MOUNT_ARGS[@]}")
+
+  assert_eq "a second merge pass produces the same element count as the first" \
+    "${#FIRST_RESULT[@]}" "${#SECOND_RESULT[@]}"
+  assert_eq "a third merge pass is still stable" "${#FIRST_RESULT[@]}" "${#MERGED_MOUNT_ARGS[@]}"
+  PEM_COUNT=0
+  for ((idx = 1; idx < ${#SECOND_RESULT[@]}; idx += 2)); do
+    case "${SECOND_RESULT[$idx]}" in
+      *"target=${SAFE_PEM}"*) PEM_COUNT=$((PEM_COUNT + 1)) ;;
+    esac
+  done
+  assert_eq "still exactly one PEM mount after two merge passes" "1" "$PEM_COUNT"
+}
+
+# 8. GitHub configuration remains optional: no desired mount, no unrelated change.
+{
+  MOUNT_ARGS=(--mount "$CADDY_MOUNT" --mount "$SOCK_MOUNT" --mount "$DATA_MOUNT")
+  GITHUB_KEY_MOUNT_ARGS=()
+  merge_mount_args_by_target
+  assert_eq "with GitHub App unconfigured, unrelated mounts pass through 1:1" "6" "${#MERGED_MOUNT_ARGS[@]}"
+  assert_not_contains "no PEM mount is invented out of nothing" "${MERGED_MOUNT_ARGS[*]}" "$SAFE_PEM"
+}
+
+# 9. GITHUB_APP_PRIVATE_KEY_PATH removed: the stale mount is dropped
+#    deterministically via the extra_stale_target argument, even though
+#    no new mount replaces it.
+{
+  STALE_PEM_MOUNT="type=bind,source=/opt/deployment-platform/config/old-removed-key.pem,target=/opt/deployment-platform/config/old-removed-key.pem,readonly"
+  MOUNT_ARGS=(--mount "$CADDY_MOUNT" --mount "$STALE_PEM_MOUNT")
+  GITHUB_KEY_MOUNT_ARGS=()
+  merge_mount_args_by_target "/opt/deployment-platform/config/old-removed-key.pem"
+  assert_eq "only the unrelated caddy mount remains" "2" "${#MERGED_MOUNT_ARGS[@]}"
+  assert_not_contains "the stale, now-unconfigured PEM mount is dropped" "${MERGED_MOUNT_ARGS[*]}" "old-removed-key.pem"
+}
+
+echo
+echo "=== Stale PEM target detection (resolve_optional_github_key_mount, two-arg form) ==="
+KEY_MOUNT_FILE_V2="$TMP_ROOT/key-mount-v2.sh"
+sed -n "/^resolve_optional_github_key_mount()/,/^}/p" "$REMOTE_SH" > "$KEY_MOUNT_FILE_V2"
+{
+  # shellcheck source=/dev/null
+  source "$KEY_MOUNT_FILE_V2"
+  fail() { printf 'FAIL_CALLED: %s\n' "$1" >&2; exit 7; }
+
+  # Same path in both the outgoing container's env and the new merged
+  # env: no stale target — this is the common case on every release
+  # after the first, and must not falsely flag the still-current mount.
+  printf 'GITHUB_APP_PRIVATE_KEY_PATH=%s\n' "$SAFE_PEM" > "$PEM_FIXTURES/prior-same.env"
+  resolve_optional_github_key_mount "$PEM_FIXTURES/safe-key.env" "$PEM_FIXTURES/prior-same.env"
+  assert_eq "unchanged GITHUB_APP_PRIVATE_KEY_PATH -> no stale target" "0" "${#GITHUB_KEY_STALE_TARGETS[@]}"
+
+  # Prior container had a DIFFERENT path configured -> that old path is stale.
+  printf 'GITHUB_APP_PRIVATE_KEY_PATH=%s/old-different.pem\n' "$PEM_FIXTURES" > "$PEM_FIXTURES/prior-different.env"
+  resolve_optional_github_key_mount "$PEM_FIXTURES/safe-key.env" "$PEM_FIXTURES/prior-different.env"
+  assert_eq "a changed GITHUB_APP_PRIVATE_KEY_PATH -> exactly one stale target" "1" "${#GITHUB_KEY_STALE_TARGETS[@]}"
+  assert_eq "the stale target is the OLD (prior) path, not the new one" \
+    "$PEM_FIXTURES/old-different.pem" "${GITHUB_KEY_STALE_TARGETS[0]}"
+
+  # Prior container had a path configured; the new merged env has none at
+  # all (operator removed GITHUB_APP_PRIVATE_KEY_PATH) -> deterministic
+  # removal: the old path is still flagged stale even though nothing new
+  # replaces it.
+  resolve_optional_github_key_mount "$PEM_FIXTURES/no-key.env" "$PEM_FIXTURES/prior-different.env"
+  assert_eq "GITHUB_APP_PRIVATE_KEY_PATH removed entirely -> the old path is still flagged stale" \
+    "1" "${#GITHUB_KEY_STALE_TARGETS[@]}"
+  assert_eq "GITHUB_APP_PRIVATE_KEY_PATH removed entirely -> no new mount args either" \
+    "0" "${#GITHUB_KEY_MOUNT_ARGS[@]}"
+
+  # No prior env file at all (e.g. the very first release after install) ->
+  # nothing to compare against, no stale target invented.
+  resolve_optional_github_key_mount "$PEM_FIXTURES/safe-key.env" ""
+  assert_eq "no prior env file -> no stale target" "0" "${#GITHUB_KEY_STALE_TARGETS[@]}"
+}
+
+assert_not_contains "no PEM file contents ever appear in this test's own captured output" \
+  "$(cat "$MERGE_FILE" "$KEY_MOUNT_FILE_V2")" "FAKE-NOT-A-REAL-KEY"
 
 echo
 echo "=== Rollback is unaffected by the env-merge/key-mount changes ==="
@@ -1364,6 +1551,10 @@ assert_not_contains "rollback_component never references the merged API env file
   "$ROLLBACK_SECTION" "API_ENV_FILE"
 assert_not_contains "rollback_component never references the GitHub key mount args" \
   "$ROLLBACK_SECTION" "GITHUB_KEY_MOUNT_ARGS"
+assert_not_contains "rollback_component never references the mount merge machinery" \
+  "$ROLLBACK_SECTION" "merge_mount_args_by_target"
+assert_not_contains "rollback_component never references the merged mount output" \
+  "$ROLLBACK_SECTION" "MERGED_MOUNT_ARGS"
 assert_contains "rollback restores the previous container by renaming it back" \
   "$ROLLBACK_SECTION" "docker rename"
 
