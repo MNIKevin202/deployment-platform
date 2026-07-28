@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
  * unrelated operations.
  */
 export const APP_CREATION_IDEMPOTENCY_SCOPE = "app-creation";
+export const APP_DELETION_IDEMPOTENCY_SCOPE = "app-deletion";
 
 // Client-generated (crypto.randomUUID() on the browser), so this is
 // intentionally generous but still bounded and restricted to a safe
@@ -42,6 +43,15 @@ export function fingerprintCreateAppRequest(input: {
   };
 
   return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
+}
+
+/**
+ * A stable fingerprint of a delete request: the container id being deleted
+ * is the only thing that identifies "the same logical delete." Reusing a key
+ * against a DIFFERENT container id is a mismatch, never a replay.
+ */
+export function fingerprintDeleteAppRequest(containerId: string): string {
+  return createHash("sha256").update(JSON.stringify({ containerId })).digest("hex");
 }
 
 /** Reads and validates the Idempotency-Key header. Absent is fine (opt-in). */

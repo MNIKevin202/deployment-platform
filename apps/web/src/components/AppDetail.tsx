@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ApiError,
   AppDetail as AppDetailData,
@@ -56,6 +56,49 @@ async function readApiError(
   }
 }
 
+const DELETE_TIMEOUT_MS = 20_000;
+const DELETE_RETRY_DELAY_MS = 1_500;
+
+/**
+ * Deletes a container with a bounded, idempotency-key-safe timeout + retry.
+ *
+ * Two failure modes both need to be caught, not just one: a network-level
+ * fetch() rejection (a definitive "no response arrived"), AND a connection
+ * that is silently dropped without ever rejecting or resolving — which is
+ * what a Caddy container restart severing this very request's connection can
+ * look like from the browser's side. An AbortController-driven timeout turns
+ * the second case into the same, catchable shape as the first, so a hung
+ * request cannot freeze the confirmation dialog forever.
+ *
+ * On either failure, exactly one retry is sent with the SAME Idempotency-Key
+ * and the SAME target. If the original request actually reached and was
+ * processed by the server before the connection was lost, the API recognizes
+ * the repeated key and replays that result — so the retry safely resolves to
+ * success instead of re-deleting (impossible — it's already gone) or
+ * reporting a misleading error for a deletion that already succeeded.
+ */
+async function deleteAppWithRetry(
+  containerId: string,
+  idempotencyKey: string
+): Promise<Response> {
+  const attempt = () => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), DELETE_TIMEOUT_MS);
+    return fetch(`/api/apps/${containerId}`, {
+      method: "DELETE",
+      headers: { "Idempotency-Key": idempotencyKey },
+      signal: controller.signal
+    }).finally(() => window.clearTimeout(timer));
+  };
+
+  try {
+    return await attempt();
+  } catch {
+    await new Promise((resolve) => window.setTimeout(resolve, DELETE_RETRY_DELAY_MS));
+    return attempt();
+  }
+}
+
 function formatDate(value: string | null): string {
   if (!value) {
     return "Never";
@@ -87,6 +130,10 @@ export default function AppDetail({
   const [actionError, setActionError] = useState("");
   const [notice, setNotice] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  // A ref, not the `actionLoading` state, is what actually prevents a second
+  // delete request — see submitLockRef in CreateAppWizard for why a state
+  // read is racy across a fast double-confirm and a ref mutation is not.
+  const deleteLockRef = useRef(false);
   const [showRedeployConfirm, setShowRedeployConfirm] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTab>("overview");
 
@@ -273,17 +320,17 @@ export default function AppDetail({
   };
 
   const confirmDelete = async () => {
-    if (!detail?.containerId || actionLoading) {
+    if (!detail?.containerId || deleteLockRef.current) {
       return;
     }
+    deleteLockRef.current = true;
 
     try {
       setActionError("");
       setActionLoading("delete");
 
-      const response = await fetch(`/api/apps/${detail.containerId}`, {
-        method: "DELETE"
-      });
+      const idempotencyKey = crypto.randomUUID();
+      const response = await deleteAppWithRetry(detail.containerId, idempotencyKey);
 
       if (!response.ok) {
         throw new Error(await readApiError(response, "Unable to delete app"));
@@ -297,6 +344,8 @@ export default function AppDetail({
         error instanceof Error ? error.message : "Unable to delete app"
       );
       setActionLoading(null);
+    } finally {
+      deleteLockRef.current = false;
     }
   };
 
@@ -696,7 +745,13 @@ export default function AppDetail({
         </div>
       </div>
 
-      {actionError && <div className="error-banner">{actionError}</div>}
+      {/* Suppressed while the delete dialog is open: it renders actionError
+          itself now (see the ConfirmationDialog usage below) — this modal
+          covers the whole page, so showing the same error here too was
+          invisible, redundant duplication, not a second, useful location. */}
+      {actionError && !showDeleteConfirm && (
+        <div className="error-banner">{actionError}</div>
+      )}
       {notice && <div className="notice-banner">{notice}</div>}
 
       {!detail.containerExists && (
@@ -1105,8 +1160,10 @@ export default function AppDetail({
           </p>
         }
         confirmLabel="Delete app"
+        confirmingLabel="Deleting..."
         danger
         confirming={actionLoading === "delete"}
+        error={showDeleteConfirm ? actionError : ""}
         onConfirm={() => void confirmDelete()}
         onCancel={() => setShowDeleteConfirm(false)}
       />

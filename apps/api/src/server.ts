@@ -23,6 +23,10 @@ import {
   redeployApp
 } from "./services/redeploy-service.js";
 import { createAppWithConfig } from "./services/app-creation-service.js";
+import {
+  createDeletionDockerOps,
+  deleteAppWithIdempotency
+} from "./services/app-deletion-service.js";
 import { readIdempotencyKeyHeader } from "./services/idempotency.js";
 import { generateBuildBrief } from "./services/build-brief-service.js";
 import { getErrorStatusCode } from "./docker-errors.js";
@@ -541,6 +545,12 @@ const creationServiceDeps = {
   recordEvent
 };
 
+const deletionServiceDeps = {
+  appDatabase,
+  dockerOps: createDeletionDockerOps(docker),
+  reconcileRouting: (db: typeof appDatabase) => routingService.reconcile(db)
+};
+
 /**
  * The original, minimal creation endpoint. Kept for backward compatibility
  * with any existing caller of this exact contract — it delegates to the
@@ -889,62 +899,32 @@ app.get<{ Params: ContainerParams }>(
 app.delete<{ Params: ContainerParams }>(
   "/apps/:id",
   async (request, reply) => {
-    try {
-      const protection = await getContainerProtection(
-        request.params.id
-      );
+    const idempotency = readIdempotencyKeyHeader(
+      request.headers["idempotency-key"]
+    );
 
-      if (protection.isSystemContainer) {
-        return reply.code(403).send({
-          success: false,
-          message: "System containers cannot be deleted"
-        });
-      }
-
-      if (!protection.isManagedApp) {
-        return reply.code(403).send({
-          success: false,
-          message:
-            "Only apps created by Deployment Platform can be deleted here"
-        });
-      }
-
-      const appName =
-        protection.labels[
-          "com.deployment-platform.app-name"
-        ];
-
-      await protection.container.remove({
-        force: true,
-        v: true
+    if (idempotency.present && !idempotency.valid) {
+      return reply.code(400).send({
+        success: false,
+        message: "Invalid Idempotency-Key header"
       });
-
-      if (appName) {
-        const storedApp = appDatabase.getAppByName(appName);
-
-        if (storedApp) {
-          appDatabase.deleteApp(storedApp.id);
-
-          if (storedApp.domain) {
-            await routingService.reconcile(appDatabase);
-          }
-        }
-      }
-
-      return {
-        success: true,
-        action: "deleted",
-        containerId: request.params.id,
-        name: protection.name,
-        appName: appName ?? null
-      };
-    } catch (error) {
-      return sendDockerError(
-        reply,
-        error,
-        "Unable to delete app"
-      );
     }
+
+    const result = await deleteAppWithIdempotency(
+      deletionServiceDeps,
+      request.params.id,
+      idempotency.present ? idempotency.key : undefined
+    );
+
+    if (!result.success) {
+      app.log.error({ message: result.message }, "App deletion failed");
+      return reply.code(result.statusCode ?? 502).send({
+        success: false,
+        message: result.message
+      });
+    }
+
+    return result;
   }
 );
 
