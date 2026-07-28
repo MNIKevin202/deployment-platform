@@ -330,4 +330,25 @@ describe("CreateAppWizard — single-submit and idempotent create", () => {
     const button = screen.getByRole("button", { name: "Create App" });
     expect(button).not.toBeDisabled();
   });
+
+  test("clicking the backdrop does not close the wizard or discard in-progress input", async () => {
+    const user = userEvent.setup();
+    installFetchMock(() => jsonResponse(201, { success: true, message: "ok", app: createdApp() }));
+    const onClose = vi.fn();
+
+    const { container } = render(<CreateAppWizard open onClose={onClose} onCreated={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "Continue" }));
+    await user.type(
+      await screen.findByLabelText("App name", { exact: false }),
+      "in-progress-app"
+    );
+
+    const backdrop = container.querySelector(".modal-backdrop");
+    expect(backdrop).not.toBeNull();
+    await user.click(backdrop as HTMLElement);
+
+    expect(onClose).not.toHaveBeenCalled();
+    // The form state survived the click — nothing was reset or unmounted.
+    expect(screen.getByLabelText("App name", { exact: false })).toHaveValue("in-progress-app");
+  });
 });

@@ -674,7 +674,11 @@ export default function CreateAppWizard({
   const inheritedGlobals = globalVars.filter((variable) => variable.enabled);
 
   return (
-    <div className="modal-backdrop" onClick={handleClose}>
+    // No onClick here, deliberately: this wizard can hold several steps of
+    // typed-in configuration, and an accidental click on the backdrop should
+    // never silently discard it. Closing goes through the explicit Close /
+    // Cancel controls only (both call handleClose below).
+    <div className="modal-backdrop">
       <section
         className="form-modal wizard-modal"
         onClick={(event) => event.stopPropagation()}
