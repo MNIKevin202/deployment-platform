@@ -20,6 +20,7 @@ set -Eeuo pipefail
 MODE=""
 SOURCE_DIR=""
 AUTH_FILE=""
+PLATFORM_ENV_FILE=""
 CADDY_ROUTES_DIR=""
 DEPLOY_CADDY_CONFIG=0
 DEPLOY_INSTALLER=0
@@ -48,6 +49,7 @@ while [ "$#" -gt 0 ]; do
     --mode) MODE="$2"; shift 2 ;;
     --source-dir) SOURCE_DIR="$2"; shift 2 ;;
     --auth-file) AUTH_FILE="$2"; shift 2 ;;
+    --platform-env-file) PLATFORM_ENV_FILE="$2"; shift 2 ;;
     --caddy-routes-dir) CADDY_ROUTES_DIR="$2"; shift 2 ;;
     --deploy-caddy-config) DEPLOY_CADDY_CONFIG=1; shift ;;
     --deploy-installer) DEPLOY_INSTALLER=1; shift ;;
@@ -148,7 +150,7 @@ fi
 # install impossible. Empty means the check is explicitly disabled and is
 # reported as SKIPPED. URL_PANEL stays mandatory — it is the platform's
 # own dashboard and exists on every installation.
-for required in SOURCE_DIR AUTH_FILE CADDY_ROUTES_DIR API_CONTAINER WEB_CONTAINER \
+for required in SOURCE_DIR AUTH_FILE PLATFORM_ENV_FILE CADDY_ROUTES_DIR API_CONTAINER WEB_CONTAINER \
   API_IMAGE_REPO WEB_IMAGE_REPO PLATFORM_NETWORK APPS_NETWORK API_DATA_VOLUME \
   URL_PANEL; do
   if [ -z "${!required}" ]; then
@@ -634,26 +636,228 @@ capture_env_file() {
   chmod 600 "${dest}"
 }
 
-# Merges CREDENTIAL_ENCRYPTION_KEY from the external auth file into a
-# captured env file, without ever printing either file's contents and
-# without duplicating the key if it is already present.
-merge_encryption_key() {
-  local env_file="$1"
-  local key_line
-  key_line="$(grep -E '^CREDENTIAL_ENCRYPTION_KEY=' "${AUTH_FILE}" | tail -n 1 || true)"
+# ============================================================
+# API environment: auth.env / platform.env are authoritative
+# ============================================================
+#
+# Historically the replacement API container's environment was built by
+# capturing the OUTGOING container's `.Config.Env` wholesale and patching
+# in only CREDENTIAL_ENCRYPTION_KEY from auth.env. Every other addition,
+# update, or removal in the current auth.env/platform.env was silently
+# ignored on every release — the exact defect that made the GitHub App
+# integration's config invisible to the API after it was correctly added
+# to both files.
+#
+# Deterministic merge policy (lowest to highest precedence — a key
+# present in more than one layer takes the HIGHEST layer's value; a key
+# present in NO layer is simply absent from the result):
+#
+#   1. REQUIRED-KEY FALLBACK — only the documented required keys (see
+#      API_REQUIRED_ENV_KEYS below), captured from the OUTGOING
+#      container. Defense in depth ONLY: every one of these is always
+#      written into auth.env/platform.env by the installer, so layers 3
+#      and 4 below normally override this immediately. Deliberately NOT
+#      a general "carry everything from the old container forward"
+#      fallback — an operator-managed variable that has since been
+#      REMOVED from auth.env/platform.env must not silently persist
+#      forever just because some earlier container once had it. There is
+#      no reliable way to distinguish "an old operator setting that was
+#      deliberately removed" from "some other value that should persist"
+#      in a flat captured KEY=VALUE list, so this script does not try —
+#      only the specifically-required keys get a safety net; everything
+#      else must come from the current files or the new image.
+#   2. NEW IMAGE DEFAULTS — the replacement image's own `Config.Env`
+#      (PATH, NODE_VERSION, and any future image-baked default) is read
+#      fresh from the NEW image, never copied from the outgoing
+#      container, so an image-default change always takes effect on the
+#      very next release.
+#   3. platform.env — current operator configuration (PANEL_DOMAIN,
+#      APPS_DOMAIN, ROUTING_ENABLED, GITHUB_APP_ID, GITHUB_APP_SLUG,
+#      GITHUB_APP_CALLBACK_URL, and any future addition).
+#   4. auth.env — current operator secrets (ADMIN_*, SESSION_SECRET,
+#      COOKIE_SECURE, CREDENTIAL_ENCRYPTION_KEY, GITHUB_APP_PRIVATE_KEY*)
+#      — wins over platform.env on any (theoretical) key collision, as
+#      the more sensitive and more deliberately-managed of the two
+#      files.
+#
+# This is read into a fresh env file on EVERY API container replacement
+# (release, --deploy-head, resume) — there is no code path left that
+# creates the API container from a stale captured snapshot.
 
-  if [ -z "${key_line}" ]; then
-    fail "CREDENTIAL_ENCRYPTION_KEY not found in ${AUTH_FILE}"
+API_REQUIRED_ENV_KEYS=(
+  ADMIN_USERNAME
+  ADMIN_PASSWORD_HASH
+  SESSION_SECRET
+  COOKIE_SECURE
+  PANEL_DOMAIN
+  APPS_DOMAIN
+  CREDENTIAL_ENCRYPTION_KEY
+)
+
+# A plain, sandboxed KEY=VALUE merge (see run_node_helper above for why
+# this runs inside the locked-down Node helper rather than raw bash
+# string processing): each file is parsed independently — blank lines and
+# `#`-comment lines are skipped, every other line must match
+# `KEY=VALUE` with a valid shell-identifier KEY (the release refuses to
+# proceed rather than silently drop or mis-split a malformed line; values
+# are split on the FIRST `=` only, so a base64 value's own `=` padding is
+# never truncated). Within a single file, a repeated key is resolved
+# deterministically: the LAST occurrence in that file wins (matches this
+# script's pre-existing `tail -n 1` convention for
+# CREDENTIAL_ENCRYPTION_KEY). Across files, later files (later argv
+# positions) win over earlier ones for the same key. Never writes a key's
+# value anywhere but the merged output file, and never logs one.
+read -r -d '' ENV_MERGE_SCRIPT <<'NODE_EOF' || true
+const fs = require("fs");
+
+function parseEnvFile(path) {
+  const raw = fs.readFileSync(path, "utf8");
+  const lines = raw.split(/\r?\n/);
+  const result = new Map();
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim().length === 0) continue;
+    if (/^\s*#/.test(line)) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) {
+      console.error(`MALFORMED_ENV_LINE: ${path} line ${i + 1} is not KEY=VALUE`);
+      process.exit(1);
+    }
+    const key = line.slice(0, eq);
+    const value = line.slice(eq + 1);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      console.error(`MALFORMED_ENV_LINE: ${path} line ${i + 1} has an invalid variable name`);
+      process.exit(1);
+    }
+    // Last occurrence within this one file wins — deterministic, documented.
+    result.set(key, value);
+  }
+  return result;
+}
+
+const merged = new Map();
+for (const path of process.argv.slice(2)) {
+  const parsed = parseEnvFile(path);
+  for (const [key, value] of parsed) merged.set(key, value);
+}
+
+const lines = [];
+for (const [key, value] of merged) lines.push(`${key}=${value}`);
+process.stdout.write(lines.length ? lines.join("\n") + "\n" : "");
+NODE_EOF
+
+ENV_MERGE_SCRIPT_FILE="$(new_tmp_file)"
+printf '%s' "${ENV_MERGE_SCRIPT}" > "${ENV_MERGE_SCRIPT_FILE}"
+
+# parse_env_file_keys <file> — prints just the KEY names present in
+# <file>, one per line, newest-occurrence-agnostic (a name may repeat).
+# Never a value. Used only to answer "is this key configured at all?".
+parse_env_file_keys() {
+  local file="$1"
+  grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "${file}" 2>/dev/null | sed -E 's/=.*$//' | sort -u
+}
+
+# merge_env_files <dest> <file1> [file2 ...] — later files win on
+# duplicate keys (see ENV_MERGE_SCRIPT above). Writes <dest> mode 600.
+# Never prints file contents.
+merge_env_files() {
+  local dest="$1"
+  shift
+  run_node_helper "${ENV_MERGE_SCRIPT_FILE}" "$@" > "${dest}"
+  chmod 600 "${dest}"
+}
+
+# build_api_env_file <dest> <container> <new-image-ref>
+#
+# Implements the 4-layer precedence documented above. Fails (before
+# anything live is touched) if either config file is missing, or if any
+# required key is absent from the final merged result.
+build_api_env_file() {
+  local dest="$1"
+  local container="$2"
+  local new_image_ref="$3"
+
+  [ -f "${PLATFORM_ENV_FILE}" ] || fail "platform.env not found at ${PLATFORM_ENV_FILE}. Nothing has been changed yet."
+  [ -f "${AUTH_FILE}" ] || fail "auth.env not found at ${AUTH_FILE}. Nothing has been changed yet."
+
+  local full_capture required_capture new_image_env
+  full_capture="$(new_tmp_file)"
+  capture_env_file "${container}" "${full_capture}"
+
+  required_capture="$(new_tmp_file)"
+  : > "${required_capture}"
+  chmod 600 "${required_capture}"
+  local key
+  for key in "${API_REQUIRED_ENV_KEYS[@]}"; do
+    grep -E "^${key}=" "${full_capture}" | tail -n 1 >> "${required_capture}" || true
+  done
+
+  new_image_env="$(new_tmp_file)"
+  docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${new_image_ref}" > "${new_image_env}"
+  chmod 600 "${new_image_env}"
+
+  merge_env_files "${dest}" "${required_capture}" "${new_image_env}" "${PLATFORM_ENV_FILE}" "${AUTH_FILE}"
+
+  for key in "${API_REQUIRED_ENV_KEYS[@]}"; do
+    if ! grep -q -E "^${key}=" "${dest}"; then
+      fail "${key} is missing from the merged API environment after reading ${PLATFORM_ENV_FILE} and ${AUTH_FILE}. Nothing has been changed yet."
+    fi
+  done
+}
+
+# ============================================================
+# Optional GitHub App private-key mount
+# ============================================================
+#
+# GITHUB_APP_PRIVATE_KEY_PATH (when set — GitHub App integration is
+# always optional) names a host path the API container must be able to
+# read the PEM from at that EXACT path (github-app-config.ts reads it
+# directly, with no path translation). Docker never mounts a host path
+# into a container just because an env var happens to reference it, so
+# without this the API process sees a configured-but-unreadable path.
+#
+# Validated BEFORE Phase B (stopping/renaming the live container) ever
+# runs, via Phase A below — an unsafe or missing key fails the release
+# with the live containers completely untouched.
+GITHUB_KEY_MOUNT_ARGS=()
+resolve_optional_github_key_mount() {
+  local merged_env_file="$1"
+  GITHUB_KEY_MOUNT_ARGS=()
+
+  local key_path
+  key_path="$(grep -E '^GITHUB_APP_PRIVATE_KEY_PATH=' "${merged_env_file}" | tail -n 1 | cut -d= -f2- || true)"
+
+  if [ -z "${key_path}" ]; then
+    return 0
   fi
 
-  local without_key
-  without_key="$(grep -v -E '^CREDENTIAL_ENCRYPTION_KEY=' "${env_file}" || true)"
-  {
-    printf '%s\n' "${without_key}"
-    printf '%s\n' "${key_line}"
-  } > "${env_file}.merged"
-  mv "${env_file}.merged" "${env_file}"
-  chmod 600 "${env_file}"
+  if [ ! -e "${key_path}" ]; then
+    fail "GITHUB_APP_PRIVATE_KEY_PATH is configured (${key_path}) but that file does not exist. Nothing has been changed yet."
+  fi
+  if [ ! -f "${key_path}" ]; then
+    fail "GITHUB_APP_PRIVATE_KEY_PATH (${key_path}) exists but is not a regular file. Nothing has been changed yet."
+  fi
+
+  # GNU form first (this script normally runs on the Linux VPS); BSD form
+  # as a fallback so it also works when exercised directly by the local
+  # test suite on macOS. Same pattern as installer/lib/common.sh's
+  # portable_file_mode — duplicated here because this script is a
+  # standalone file copied to and run on the VPS, not sourced together
+  # with the installer.
+  local mode
+  mode="$(stat -c '%a' "${key_path}" 2>/dev/null || stat -f '%Lp' "${key_path}" 2>/dev/null || true)"
+  if [ -z "${mode}" ]; then
+    fail "Unable to read the permissions of GITHUB_APP_PRIVATE_KEY_PATH (${key_path}). Nothing has been changed yet."
+  fi
+  # The low two octal digits are the group and "other" permission bits —
+  # both must be clear (mode ...00, e.g. 600 or 400). Anything else means
+  # the key is group- or world-readable.
+  local group_and_other="${mode: -2}"
+  if [ "${group_and_other}" != "00" ]; then
+    fail "GITHUB_APP_PRIVATE_KEY_PATH (${key_path}) is group- or world-readable (mode ${mode}). Refusing to mount it until it is restricted (e.g. chmod 600 ${key_path}). Nothing has been changed yet."
+  fi
+
+  GITHUB_KEY_MOUNT_ARGS=(--mount "type=bind,source=${key_path},target=${key_path},readonly")
 }
 
 # Mounts, including tmpfs mounts, captured generically from whatever the
@@ -1105,11 +1309,18 @@ if [ "${MODE}" = "api" ] || [ "${MODE}" = "both" ]; then
   info "Capturing API container configuration (no changes made yet)..."
 
   API_ENV_FILE="$(new_tmp_file)"
-  capture_env_file "${API_CONTAINER}" "${API_ENV_FILE}"
-  merge_encryption_key "${API_ENV_FILE}"
+  build_api_env_file "${API_ENV_FILE}" "${API_CONTAINER}" "${API_IMAGE_REPO}:${API_VERSION}"
+
+  # Validated against the environment that will actually be used for the
+  # replacement container (not a separate read of the raw files), and
+  # before Phase B ever stops/renames the live container.
+  resolve_optional_github_key_mount "${API_ENV_FILE}"
 
   capture_mounts "${API_CONTAINER}"
   API_MOUNT_ARGS=("${MOUNT_ARGS[@]}")
+  if [ ${#GITHUB_KEY_MOUNT_ARGS[@]} -gt 0 ]; then
+    API_MOUNT_ARGS+=("${GITHUB_KEY_MOUNT_ARGS[@]}")
+  fi
 
   capture_runtime_config "API" "${API_CONTAINER}" "${API_IMAGE_REPO}:${API_VERSION}"
   # Deliberately not using "${arr[@]:-}" here: when an array is

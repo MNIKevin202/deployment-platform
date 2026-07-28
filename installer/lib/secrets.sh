@@ -390,6 +390,12 @@ _recreate_api_container_for_rotation() {
   local api_image="$1"
   local platform_env_file="${INSTALL_ROOT}/config/platform.env"
 
+  # Validated before the existing container is removed, same as the
+  # first-install path (platform.sh's ensure_api_container) — a bad key
+  # path aborts the rotation with the platform still up on its previous
+  # (about-to-be-replaced) container.
+  resolve_github_app_key_mount_args "$platform_env_file" "${INSTALL_ROOT}/config/auth.env"
+
   docker rm -f "$API_CONTAINER_NAME" >/dev/null 2>&1 || true
 
   docker create --name "$API_CONTAINER_NAME" \
@@ -398,6 +404,7 @@ _recreate_api_container_for_rotation() {
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "${API_DATA_VOLUME_NAME}:/data" \
     -v "${INSTALL_ROOT}/caddy/routes:/app/caddy-routes" \
+    "${GITHUB_KEY_MOUNT_ARGS[@]}" \
     --env-file "${INSTALL_ROOT}/config/auth.env" \
     --env-file "$platform_env_file" \
     "$api_image" >/dev/null || return 1

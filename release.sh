@@ -24,6 +24,13 @@ VPS_USER="kevin"
 SSH_KEY="/Users/kevinpoulos/.ssh/hetzner_deployment"
 VPS_SOURCE_DIR="/opt/deployment-platform/source"
 AUTH_FILE="/opt/deployment-platform/config/auth.env"
+# The non-secret companion to AUTH_FILE — PANEL_DOMAIN, APPS_DOMAIN,
+# ROUTING_ENABLED, and (as of the GitHub App integration) GITHUB_APP_ID/
+# GITHUB_APP_SLUG/GITHUB_APP_CALLBACK_URL. Both files are read fresh on
+# every API container replacement — see release-remote.sh's
+# build_api_env_file — so operator edits to either one take effect on the
+# next release without needing a manual container recreate.
+PLATFORM_ENV_FILE="/opt/deployment-platform/config/platform.env"
 CADDY_ROUTES_DIR="/opt/deployment-platform/caddy/routes"
 API_CONTAINER="deployment-platform-api"
 WEB_CONTAINER="deployment-platform-web"
@@ -241,6 +248,7 @@ load_config_file() {
       SSH_KEY) SSH_KEY="${value}" ;;
       VPS_SOURCE_DIR) VPS_SOURCE_DIR="${value}" ;;
       AUTH_FILE) AUTH_FILE="${value}" ;;
+      PLATFORM_ENV_FILE) PLATFORM_ENV_FILE="${value}" ;;
       CADDY_ROUTES_DIR) CADDY_ROUTES_DIR="${value}" ;;
       API_CONTAINER) API_CONTAINER="${value}" ;;
       WEB_CONTAINER) WEB_CONTAINER="${value}" ;;
@@ -635,6 +643,7 @@ run_remote_deploy_and_report() {
     --mode "${DEPLOY_MODE}"
     --source-dir "${REMOTE_RELEASE_DIR}"
     --auth-file "${AUTH_FILE}"
+    --platform-env-file "${PLATFORM_ENV_FILE}"
     --caddy-routes-dir "${CADDY_ROUTES_DIR}"
     --api-container "${API_CONTAINER}"
     --web-container "${WEB_CONTAINER}"

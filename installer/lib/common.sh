@@ -718,3 +718,81 @@ bytes_to_human() {
     printf '%s bytes' "$bytes"
   fi
 }
+
+# Portable octal file mode: GNU form first (GNU stat's -f means
+# "filesystem info" and can misleadingly succeed on some platforms), BSD
+# form as the fallback. Same pattern as secrets.sh's _password_file_mode
+# and the test suite's get_file_mode — needed because this installer's
+# own test suite runs on macOS (BSD stat) even though the installer
+# itself always targets a Linux VPS.
+portable_file_mode() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+    return
+  fi
+  stat -f '%Lp' "$1" 2>/dev/null
+}
+
+# ============================================================
+# Optional GitHub App private-key mount
+# ============================================================
+#
+# Shared by platform.sh's ensure_api_container (first install) and
+# secrets.sh's _recreate_api_container_for_rotation (password rotation) —
+# both create the API container directly, and both need the exact same
+# validation and mount as the release path (scripts/release-remote.sh's
+# resolve_optional_github_key_mount, a separate implementation only
+# because it runs on the Mac-invoked-over-SSH release script, a different
+# execution boundary from this installer). GitHub App integration is
+# always optional: no GITHUB_APP_PRIVATE_KEY_PATH configured is a silent
+# no-op.
+#
+# Sets GITHUB_KEY_MOUNT_ARGS to a `-v <path>:<path>:ro` bind mount at the
+# EXACT same path inside the container as on the host (the API reads
+# GITHUB_APP_PRIVATE_KEY_PATH directly, with no translation), after
+# validating:
+#   - the path exists and is a regular file
+#   - its mode is not group- or world-readable
+# Calls fatal() on any problem — the caller must invoke this BEFORE
+# stopping/removing any existing container, so a bad key path never
+# leaves the platform down.
+GITHUB_KEY_MOUNT_ARGS=()
+resolve_github_app_key_mount_args() {
+  local platform_env_file="$1"
+  local auth_env_file="$2"
+  GITHUB_KEY_MOUNT_ARGS=()
+
+  local key_path=""
+  local file
+  for file in "$platform_env_file" "$auth_env_file"; do
+    [ -f "$file" ] || continue
+    local line
+    line="$(grep -E '^GITHUB_APP_PRIVATE_KEY_PATH=' "$file" | tail -n 1 || true)"
+    if [ -n "$line" ]; then
+      key_path="${line#GITHUB_APP_PRIVATE_KEY_PATH=}"
+    fi
+  done
+
+  if [ -z "$key_path" ]; then
+    return 0
+  fi
+
+  if [ ! -e "$key_path" ]; then
+    fatal "GITHUB_APP_PRIVATE_KEY_PATH is configured ($key_path) but that file does not exist."
+  fi
+  if [ ! -f "$key_path" ]; then
+    fatal "GITHUB_APP_PRIVATE_KEY_PATH ($key_path) exists but is not a regular file."
+  fi
+
+  local mode
+  mode="$(portable_file_mode "$key_path" || true)"
+  if [ -z "$mode" ]; then
+    fatal "Unable to read the permissions of GITHUB_APP_PRIVATE_KEY_PATH ($key_path)."
+  fi
+  local group_and_other="${mode: -2}"
+  if [ "$group_and_other" != "00" ]; then
+    fatal "GITHUB_APP_PRIVATE_KEY_PATH ($key_path) is group- or world-readable (mode $mode). Restrict it first (e.g. chmod 600 $key_path)."
+  fi
+
+  GITHUB_KEY_MOUNT_ARGS=(-v "${key_path}:${key_path}:ro")
+}

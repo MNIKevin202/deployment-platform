@@ -559,6 +559,7 @@ REMOTE_NO_OPTIONAL_URLS="$(
     --mode api \
     --source-dir /nonexistent/release-dir \
     --auth-file /nonexistent/auth.env \
+    --platform-env-file /nonexistent/platform.env \
     --caddy-routes-dir /nonexistent/routes \
     --api-container deployment-platform-api \
     --web-container deployment-platform-web \
@@ -583,6 +584,7 @@ REMOTE_NO_PANEL="$(
     --mode api \
     --source-dir /nonexistent/release-dir \
     --auth-file /nonexistent/auth.env \
+    --platform-env-file /nonexistent/platform.env \
     --caddy-routes-dir /nonexistent/routes \
     --api-container deployment-platform-api \
     --web-container deployment-platform-web \
@@ -602,6 +604,7 @@ REMOTE_BAD_VERSION="$(
     --mode api \
     --source-dir /nonexistent/release-dir \
     --auth-file /nonexistent/auth.env \
+    --platform-env-file /nonexistent/platform.env \
     --caddy-routes-dir /nonexistent/routes \
     --api-container deployment-platform-api \
     --web-container deployment-platform-web \
@@ -624,6 +627,7 @@ REMOTE_UNCHANGED_WEB="$(
     --mode api \
     --source-dir /nonexistent/release-dir \
     --auth-file /nonexistent/auth.env \
+    --platform-env-file /nonexistent/platform.env \
     --caddy-routes-dir /nonexistent/routes \
     --api-container deployment-platform-api \
     --web-container deployment-platform-web \
@@ -892,6 +896,7 @@ REMOTE_CADDY_ARGS="$(
     --mode caddy \
     --source-dir /nonexistent/release-dir \
     --auth-file /nonexistent/auth.env \
+    --platform-env-file /nonexistent/platform.env \
     --caddy-routes-dir /nonexistent/routes \
     --api-container deployment-platform-api \
     --web-container deployment-platform-web \
@@ -916,6 +921,7 @@ REMOTE_CADDY_MISSING="$(
     --mode caddy \
     --source-dir /nonexistent/release-dir \
     --auth-file /nonexistent/auth.env \
+    --platform-env-file /nonexistent/platform.env \
     --caddy-routes-dir /nonexistent/routes \
     --api-container deployment-platform-api \
     --web-container deployment-platform-web \
@@ -988,6 +994,7 @@ REMOTE_INSTALLER_ONLY="$(
     --mode caddy \
     --source-dir /nonexistent/release-dir \
     --auth-file /nonexistent/auth.env \
+    --platform-env-file /nonexistent/platform.env \
     --caddy-routes-dir /nonexistent/routes \
     --api-container deployment-platform-api \
     --web-container deployment-platform-web \
@@ -1011,6 +1018,7 @@ REMOTE_NOTHING_TO_DO="$(
     --mode caddy \
     --source-dir /nonexistent/release-dir \
     --auth-file /nonexistent/auth.env \
+    --platform-env-file /nonexistent/platform.env \
     --caddy-routes-dir /nonexistent/routes \
     --api-container deployment-platform-api \
     --web-container deployment-platform-web \
@@ -1030,6 +1038,7 @@ REMOTE_INSTALLER_NO_ROOT="$(
     --mode caddy \
     --source-dir /nonexistent/release-dir \
     --auth-file /nonexistent/auth.env \
+    --platform-env-file /nonexistent/platform.env \
     --caddy-routes-dir /nonexistent/routes \
     --api-container deployment-platform-api \
     --web-container deployment-platform-web \
@@ -1116,6 +1125,284 @@ assert_contains "--deploy-head enforces HEAD == origin/main" \
   "$RELEASE_SH_TEXT" "does not match origin/main"
 assert_contains "--deploy-head has an explicit branch-drift override" \
   "$RELEASE_SH_TEXT" "branch-drift check overridden"
+
+echo
+echo "=== API environment merge: auth.env/platform.env are authoritative ==="
+# ENV_MERGE_SCRIPT is a plain Node script with no Docker/sandbox
+# dependency of its own (the sandboxing is run_node_helper's job, tested
+# structurally below, not here) — extracted and run directly with the
+# system `node` so this suite keeps its "no Docker" guarantee while still
+# exercising the REAL merge algorithm, not a reimplementation of it.
+REMOTE_TEXT_FOR_ENV="$(cat "$REMOTE_SH")"
+ENV_MERGE_SCRIPT_FILE="$TMP_ROOT/env-merge-script.js"
+sed -n "/read -r -d '' ENV_MERGE_SCRIPT <<'NODE_EOF'/,/^NODE_EOF\$/p" "$REMOTE_SH" | sed '1d;$d' > "$ENV_MERGE_SCRIPT_FILE"
+assert_success "the env-merge script was extracted (non-empty)" \
+  bash -c "[ -s '$ENV_MERGE_SCRIPT_FILE' ]"
+
+ENV_FIXTURES="$TMP_ROOT/env-fixtures"
+mkdir -p "$ENV_FIXTURES"
+
+# Layer order mirrors build_api_env_file's real call:
+#   required_capture < new_image_env < platform.env < auth.env
+printf 'ADMIN_USERNAME=owner\nCREDENTIAL_ENCRYPTION_KEY=OLD_STALE_KEY==\n' > "$ENV_FIXTURES/required_capture.env"
+printf 'PATH=/usr/local/sbin:/usr/local/bin\nNODE_VERSION=24.9.0\n' > "$ENV_FIXTURES/new_image_env.env"
+printf '# operator config\nPANEL_DOMAIN=panel.devminted.com\nAPPS_DOMAIN=apps.devminted.com\nGITHUB_APP_ID=123456\nGITHUB_APP_SLUG=deployment-platform\nGITHUB_APP_CALLBACK_URL=https://panel.devminted.com/api/github/callback\n' > "$ENV_FIXTURES/platform.env"
+printf 'ADMIN_USERNAME=owner\nADMIN_PASSWORD_HASH=deadbeef:cafebabe\nSESSION_SECRET=s3cr3t\nCOOKIE_SECURE=true\nCREDENTIAL_ENCRYPTION_KEY=NEW_REAL_KEY==\nGITHUB_APP_PRIVATE_KEY_PATH=/opt/deployment-platform/config/github-app.pem\n' > "$ENV_FIXTURES/auth.env"
+
+MERGED_1="$(node "$ENV_MERGE_SCRIPT_FILE" \
+  "$ENV_FIXTURES/required_capture.env" "$ENV_FIXTURES/new_image_env.env" \
+  "$ENV_FIXTURES/platform.env" "$ENV_FIXTURES/auth.env")"
+
+# 1. A variable newly added to platform.env appears in the result.
+assert_contains "GITHUB_APP_ID (new in platform.env) appears in the merged environment" \
+  "$MERGED_1" "GITHUB_APP_ID=123456"
+assert_contains "GITHUB_APP_SLUG (new in platform.env) appears in the merged environment" \
+  "$MERGED_1" "GITHUB_APP_SLUG=deployment-platform"
+assert_contains "GITHUB_APP_CALLBACK_URL (new in platform.env) appears in the merged environment" \
+  "$MERGED_1" "GITHUB_APP_CALLBACK_URL=https://panel.devminted.com/api/github/callback"
+
+# 2. A variable newly added to auth.env appears in the result.
+assert_contains "GITHUB_APP_PRIVATE_KEY_PATH (new in auth.env) appears in the merged environment" \
+  "$MERGED_1" "GITHUB_APP_PRIVATE_KEY_PATH=/opt/deployment-platform/config/github-app.pem"
+assert_contains "SESSION_SECRET (new in auth.env) appears in the merged environment" \
+  "$MERGED_1" "SESSION_SECRET=s3cr3t"
+
+# 3. An updated existing value overrides the stale captured-container copy.
+assert_contains "the CURRENT CREDENTIAL_ENCRYPTION_KEY wins over the stale captured one" \
+  "$MERGED_1" "CREDENTIAL_ENCRYPTION_KEY=NEW_REAL_KEY=="
+assert_not_contains "the stale captured CREDENTIAL_ENCRYPTION_KEY does not survive" \
+  "$MERGED_1" "OLD_STALE_KEY"
+
+# 5. Required existing values remain present.
+for req_key in ADMIN_USERNAME ADMIN_PASSWORD_HASH SESSION_SECRET COOKIE_SECURE PANEL_DOMAIN APPS_DOMAIN CREDENTIAL_ENCRYPTION_KEY; do
+  assert_contains "required key ${req_key} is present in the merged environment" "$MERGED_1" "${req_key}="
+done
+
+# 6. CREDENTIAL_ENCRYPTION_KEY is valid (present exactly once) — never
+#    duplicated, never dropped.
+CEK_COUNT="$(printf '%s\n' "$MERGED_1" | grep -c '^CREDENTIAL_ENCRYPTION_KEY=')"
+assert_eq "CREDENTIAL_ENCRYPTION_KEY appears exactly once in the merged environment" "1" "$CEK_COUNT"
+
+# 7. Image-default variables come from the NEW image, not frozen from an
+#    old container — simulated here by giving the "old container" a
+#    stale PATH and confirming the new-image layer wins.
+printf 'ADMIN_USERNAME=owner\nPATH=/stale/old/container/path\n' > "$ENV_FIXTURES/required_capture_with_path.env"
+MERGED_IMAGE_DEFAULT="$(node "$ENV_MERGE_SCRIPT_FILE" \
+  "$ENV_FIXTURES/required_capture_with_path.env" "$ENV_FIXTURES/new_image_env.env" \
+  "$ENV_FIXTURES/platform.env" "$ENV_FIXTURES/auth.env")"
+assert_contains "the NEW image's PATH wins over a stale captured-container PATH" \
+  "$MERGED_IMAGE_DEFAULT" "PATH=/usr/local/sbin:/usr/local/bin"
+assert_not_contains "a stale captured-container PATH does not survive" \
+  "$MERGED_IMAGE_DEFAULT" "/stale/old/container/path"
+# PATH is not in API_REQUIRED_ENV_KEYS, so it is NOT included in the
+# required-key fallback in real use — captured here only as a deliberate
+# adversarial fixture to prove layer precedence; build_api_env_file's own
+# source-level test below confirms the real required-key list is narrow.
+
+# 4. A variable REMOVED from platform.env/auth.env does not remain
+#    forever just because an old release's captured snapshot had it.
+#    In real use required_capture NEVER contains GITHUB_APP_ID (it is
+#    not in API_REQUIRED_ENV_KEYS — asserted at the source level below),
+#    so a key an operator removes from platform.env/auth.env simply has
+#    no layer left to come from once it's gone from both files.
+printf 'ADMIN_USERNAME=owner\n' > "$ENV_FIXTURES/required_capture_removed.env"
+printf '# GITHUB_APP_ID intentionally absent — operator removed it\nPANEL_DOMAIN=panel.devminted.com\nAPPS_DOMAIN=apps.devminted.com\n' > "$ENV_FIXTURES/platform_no_github.env"
+printf 'ADMIN_USERNAME=owner\n' > "$ENV_FIXTURES/auth_no_github.env"
+MERGED_REMOVED="$(node "$ENV_MERGE_SCRIPT_FILE" \
+  "$ENV_FIXTURES/required_capture_removed.env" "$ENV_FIXTURES/new_image_env.env" \
+  "$ENV_FIXTURES/platform_no_github.env" "$ENV_FIXTURES/auth_no_github.env")"
+assert_not_contains "a removed operator key does not appear under any value once absent from every layer" \
+  "$MERGED_REMOVED" "GITHUB_APP_ID="
+assert_contains "build_api_env_file only ever copies API_REQUIRED_ENV_KEYS forward from the old container" \
+  "$REMOTE_TEXT_FOR_ENV" 'grep -E "^${key}=" "${full_capture}" | tail -n 1 >> "${required_capture}"'
+
+# Malformed-line and duplicate-key-within-a-file policy.
+printf 'GOOD=1\nnot-a-valid-line-at-all\n' > "$ENV_FIXTURES/malformed.env"
+assert_failure "a malformed (non-KEY=VALUE) line is rejected, not silently skipped" \
+  node "$ENV_MERGE_SCRIPT_FILE" "$ENV_FIXTURES/malformed.env"
+MALFORMED_ERR="$(node "$ENV_MERGE_SCRIPT_FILE" "$ENV_FIXTURES/malformed.env" 2>&1 || true)"
+assert_contains "the malformed-line error names the file and line number" "$MALFORMED_ERR" "malformed.env line 2"
+
+printf '9BAD=1\n' > "$ENV_FIXTURES/bad-key.env"
+assert_failure "a key that is not a valid identifier is rejected" \
+  node "$ENV_MERGE_SCRIPT_FILE" "$ENV_FIXTURES/bad-key.env"
+
+printf 'KEY=first-value\nKEY=second-value\n' > "$ENV_FIXTURES/dup-within-file.env"
+DUP_RESULT="$(node "$ENV_MERGE_SCRIPT_FILE" "$ENV_FIXTURES/dup-within-file.env")"
+assert_eq "duplicate keys within a single file: last value wins (documented policy)" \
+  "KEY=second-value" "$DUP_RESULT"
+
+# Comments and blank lines are tolerated (auth.env/platform.env templates
+# both use # comments).
+printf '\n# a comment\n\nKEY=value\n' > "$ENV_FIXTURES/comments.env"
+COMMENT_RESULT="$(node "$ENV_MERGE_SCRIPT_FILE" "$ENV_FIXTURES/comments.env")"
+assert_eq "blank lines and comments are skipped, not treated as malformed" "KEY=value" "$COMMENT_RESULT"
+
+# A value containing "=" (base64 padding) is never truncated — split on
+# the FIRST "=" only.
+printf 'CREDENTIAL_ENCRYPTION_KEY=YWJjZGVmZ2hpams=\n' > "$ENV_FIXTURES/base64.env"
+BASE64_RESULT="$(node "$ENV_MERGE_SCRIPT_FILE" "$ENV_FIXTURES/base64.env")"
+assert_eq "a base64 value's own '=' padding survives intact" \
+  "CREDENTIAL_ENCRYPTION_KEY=YWJjZGVmZ2hpams=" "$BASE64_RESULT"
+
+# The merge script itself never writes a value to stderr/diagnostics —
+# only file paths and line numbers.
+assert_not_contains "the malformed-line diagnostic never echoes the line's own content" \
+  "$MALFORMED_ERR" "not-a-valid-line-at-all"
+
+echo
+echo "=== build_api_env_file: layer construction and required-key policy ==="
+assert_contains "the required-key list matches the documented set" "$REMOTE_TEXT_FOR_ENV" "ADMIN_USERNAME"
+for req_key in ADMIN_PASSWORD_HASH SESSION_SECRET COOKIE_SECURE PANEL_DOMAIN APPS_DOMAIN CREDENTIAL_ENCRYPTION_KEY; do
+  assert_contains "API_REQUIRED_ENV_KEYS documents ${req_key}" "$REMOTE_TEXT_FOR_ENV" "  ${req_key}"
+done
+assert_contains "new-image defaults are read from the NEW image, not the old container" \
+  "$REMOTE_TEXT_FOR_ENV" 'docker image inspect --format'
+assert_contains "the merge order is required-fallback, new-image, platform.env, auth.env (in that precedence)" \
+  "$REMOTE_TEXT_FOR_ENV" 'merge_env_files "${dest}" "${required_capture}" "${new_image_env}" "${PLATFORM_ENV_FILE}" "${AUTH_FILE}"'
+assert_contains "build_api_env_file fails if platform.env is missing, before touching anything live" \
+  "$REMOTE_TEXT_FOR_ENV" 'platform.env not found at'
+assert_contains "build_api_env_file fails if auth.env is missing, before touching anything live" \
+  "$REMOTE_TEXT_FOR_ENV" 'auth.env not found at'
+assert_contains "build_api_env_file re-verifies every required key survived the merge" \
+  "$REMOTE_TEXT_FOR_ENV" "is missing from the merged API environment"
+assert_not_contains "the stale merge_encryption_key single-key patch is gone" \
+  "$REMOTE_TEXT_FOR_ENV" "merge_encryption_key()"
+assert_contains "the release path calls build_api_env_file for the API container" \
+  "$REMOTE_TEXT_FOR_ENV" 'build_api_env_file "${API_ENV_FILE}" "${API_CONTAINER}" "${API_IMAGE_REPO}:${API_VERSION}"'
+
+echo
+echo "=== No secrets in release output, temp-file diagnostics, or logs (env merge) ==="
+assert_not_contains "build_api_env_file never echoes the merged environment file's contents" \
+  "$REMOTE_TEXT_FOR_ENV" "cat \"\${dest}\""
+assert_not_contains "merge_env_files never echoes its destination file" \
+  "$REMOTE_TEXT_FOR_ENV" "cat \"\${API_ENV_FILE}"
+assert_success "run_node_helper mounts data files read-only, out of argv" \
+  bash -c "grep -q ':ro' '$REMOTE_SH'"
+
+echo
+echo "=== Optional GitHub App private-key mount ==="
+KEY_MOUNT_FILE="$TMP_ROOT/key-mount.sh"
+sed -n "/^resolve_optional_github_key_mount()/,/^}/p" "$REMOTE_SH" > "$KEY_MOUNT_FILE"
+# shellcheck source=/dev/null
+source "$KEY_MOUNT_FILE"
+# The extracted function calls fail() on error — provide a minimal stand-in
+# that behaves like the real one (prints and exits) so sourcing succeeds
+# standalone.
+fail() { printf 'FAIL_CALLED: %s\n' "$1" >&2; exit 7; }
+
+PEM_FIXTURES="$TMP_ROOT/pem-fixtures"
+mkdir -p "$PEM_FIXTURES"
+
+# 12. GitHub App unconfigured remains a valid release configuration.
+printf 'PANEL_DOMAIN=panel.devminted.com\n' > "$PEM_FIXTURES/no-key.env"
+(
+  resolve_optional_github_key_mount "$PEM_FIXTURES/no-key.env"
+  assert_eq "no GITHUB_APP_PRIVATE_KEY_PATH configured -> no mount args" "0" "${#GITHUB_KEY_MOUNT_ARGS[@]}"
+)
+
+# 10. A configured but missing PEM fails before anything live is touched.
+printf 'GITHUB_APP_PRIVATE_KEY_PATH=%s/does-not-exist.pem\n' "$PEM_FIXTURES" > "$PEM_FIXTURES/missing-key.env"
+MISSING_KEY_OUT="$(bash -c "source '$KEY_MOUNT_FILE'; fail() { printf 'FAIL_CALLED: %s\n' \"\$1\"; exit 7; }; resolve_optional_github_key_mount '$PEM_FIXTURES/missing-key.env'" 2>&1 || true)"
+assert_contains "a missing configured PEM fails the release" "$MISSING_KEY_OUT" "FAIL_CALLED"
+assert_contains "the missing-PEM failure names the problem" "$MISSING_KEY_OUT" "does not exist"
+
+# 11. Unsafe (group/world-readable) PEM permissions fail before anything
+#     live is touched.
+UNSAFE_PEM="$PEM_FIXTURES/unsafe.pem"
+printf -- '-----BEGIN RSA PRIVATE KEY-----\nFAKE-NOT-A-REAL-KEY\n-----END RSA PRIVATE KEY-----\n' > "$UNSAFE_PEM"
+chmod 644 "$UNSAFE_PEM"
+printf 'GITHUB_APP_PRIVATE_KEY_PATH=%s\n' "$UNSAFE_PEM" > "$PEM_FIXTURES/unsafe-key.env"
+UNSAFE_KEY_OUT="$(bash -c "source '$KEY_MOUNT_FILE'; fail() { printf 'FAIL_CALLED: %s\n' \"\$1\"; exit 7; }; resolve_optional_github_key_mount '$PEM_FIXTURES/unsafe-key.env'" 2>&1 || true)"
+assert_contains "a group/world-readable PEM (644) fails the release" "$UNSAFE_KEY_OUT" "FAIL_CALLED"
+assert_contains "the unsafe-permissions failure names the problem" "$UNSAFE_KEY_OUT" "group- or world-readable"
+assert_not_contains "the unsafe-PEM failure never echoes the key's own content" "$UNSAFE_KEY_OUT" "FAKE-NOT-A-REAL-KEY"
+
+# A directory at the configured path is rejected (not a regular file).
+DIR_AT_KEY_PATH="$PEM_FIXTURES/a-directory.pem"
+mkdir -p "$DIR_AT_KEY_PATH"
+printf 'GITHUB_APP_PRIVATE_KEY_PATH=%s\n' "$DIR_AT_KEY_PATH" > "$PEM_FIXTURES/dir-key.env"
+DIR_KEY_OUT="$(bash -c "source '$KEY_MOUNT_FILE'; fail() { printf 'FAIL_CALLED: %s\n' \"\$1\"; exit 7; }; resolve_optional_github_key_mount '$PEM_FIXTURES/dir-key.env'" 2>&1 || true)"
+assert_contains "a directory at the configured PEM path is rejected" "$DIR_KEY_OUT" "not a regular file"
+
+# 9. A correctly-permissioned PEM is mounted read-only at the identical path.
+SAFE_PEM="$PEM_FIXTURES/safe.pem"
+printf -- '-----BEGIN RSA PRIVATE KEY-----\nFAKE-NOT-A-REAL-KEY\n-----END RSA PRIVATE KEY-----\n' > "$SAFE_PEM"
+chmod 600 "$SAFE_PEM"
+printf 'GITHUB_APP_PRIVATE_KEY_PATH=%s\n' "$SAFE_PEM" > "$PEM_FIXTURES/safe-key.env"
+(
+  resolve_optional_github_key_mount "$PEM_FIXTURES/safe-key.env"
+  assert_eq "a safe (600) PEM produces exactly one --mount arg pair" "2" "${#GITHUB_KEY_MOUNT_ARGS[@]}"
+  assert_eq "the mount flag is --mount" "--mount" "${GITHUB_KEY_MOUNT_ARGS[0]}"
+  assert_contains "the mount targets the EXACT same path as the source (no translation)" \
+    "${GITHUB_KEY_MOUNT_ARGS[1]}" "source=${SAFE_PEM},target=${SAFE_PEM}"
+  assert_contains "the mount is read-only" "${GITHUB_KEY_MOUNT_ARGS[1]}" "readonly"
+)
+# A 400 (owner-read-only, even stricter) PEM is also accepted.
+chmod 400 "$SAFE_PEM"
+(
+  resolve_optional_github_key_mount "$PEM_FIXTURES/safe-key.env"
+  assert_eq "a stricter 400-mode PEM is also accepted" "2" "${#GITHUB_KEY_MOUNT_ARGS[@]}"
+)
+chmod 600 "$SAFE_PEM"
+
+REMOTE_TEXT_FOR_MOUNT="$(cat "$REMOTE_SH")"
+assert_contains "the key-mount check is resolved during Phase A (before Phase B stops/renames the live container)" \
+  "$REMOTE_TEXT_FOR_MOUNT" 'resolve_optional_github_key_mount "${API_ENV_FILE}"'
+PHASE_A_LINE="$(grep -n 'resolve_optional_github_key_mount "\${API_ENV_FILE}"' "$REMOTE_SH" | head -1 | cut -d: -f1)"
+PHASE_B_LINE="$(grep -n 'Phase B: preserve current containers under rollback names' "$REMOTE_SH" | head -1 | cut -d: -f1)"
+assert_success "the key-mount check runs strictly before Phase B in the script's line order" \
+  bash -c "[ '$PHASE_A_LINE' -lt '$PHASE_B_LINE' ]"
+
+echo
+echo "=== Rollback is unaffected by the env-merge/key-mount changes ==="
+# Rollback only ever renames the PRESERVED (old) container back — it must
+# never reference the new merged env file or the new key-mount args,
+# which belong only to the REPLACEMENT container's creation.
+ROLLBACK_SECTION="$(sed -n '/^rollback_component()/,/^trigger_rollback()/p' "$REMOTE_SH")"
+assert_not_contains "rollback_component never references the merged API env file" \
+  "$ROLLBACK_SECTION" "API_ENV_FILE"
+assert_not_contains "rollback_component never references the GitHub key mount args" \
+  "$ROLLBACK_SECTION" "GITHUB_KEY_MOUNT_ARGS"
+assert_contains "rollback restores the previous container by renaming it back" \
+  "$ROLLBACK_SECTION" "docker rename"
+
+echo
+echo "=== Installer consistency: the shared PEM-mount helper ==="
+COMMON_SH="$PROJECT_DIR/installer/lib/common.sh"
+PLATFORM_SH="$PROJECT_DIR/installer/lib/platform.sh"
+SECRETS_SH="$PROJECT_DIR/installer/lib/secrets.sh"
+assert_success "installer/lib/common.sh defines the shared helper" \
+  bash -c "grep -q '^resolve_github_app_key_mount_args()' '$COMMON_SH'"
+assert_success "platform.sh's ensure_api_container calls the shared helper" \
+  bash -c "grep -q 'resolve_github_app_key_mount_args' '$PLATFORM_SH'"
+assert_success "secrets.sh's rotation recreate calls the shared helper" \
+  bash -c "grep -q 'resolve_github_app_key_mount_args' '$SECRETS_SH'"
+assert_success "platform.sh does not duplicate the validation logic itself" \
+  bash -c "! grep -q 'group- or world-readable' '$PLATFORM_SH'"
+assert_success "secrets.sh does not duplicate the validation logic itself" \
+  bash -c "! grep -q 'group- or world-readable' '$SECRETS_SH'"
+
+# The shared helper's own behavior, exercised directly (pure bash, no Docker).
+COMMON_HELPER_FILE="$TMP_ROOT/common-helper.sh"
+sed -n "/^portable_file_mode()/,/^}/p" "$COMMON_SH" > "$COMMON_HELPER_FILE"
+sed -n "/^resolve_github_app_key_mount_args()/,/^}/p" "$COMMON_SH" >> "$COMMON_HELPER_FILE"
+(
+  # shellcheck source=/dev/null
+  source "$COMMON_HELPER_FILE"
+  fatal() { printf 'FATAL_CALLED: %s\n' "$1" >&2; exit 7; }
+
+  printf 'PANEL_DOMAIN=x\n' > "$PEM_FIXTURES/installer-platform-no-key.env"
+  printf 'ADMIN_USERNAME=owner\n' > "$PEM_FIXTURES/installer-auth-no-key.env"
+  resolve_github_app_key_mount_args "$PEM_FIXTURES/installer-platform-no-key.env" "$PEM_FIXTURES/installer-auth-no-key.env"
+  assert_eq "installer helper: unconfigured -> no mount args" "0" "${#GITHUB_KEY_MOUNT_ARGS[@]}"
+
+  printf 'ADMIN_USERNAME=owner\nGITHUB_APP_PRIVATE_KEY_PATH=%s\n' "$SAFE_PEM" > "$PEM_FIXTURES/installer-auth-with-key.env"
+  resolve_github_app_key_mount_args "$PEM_FIXTURES/installer-platform-no-key.env" "$PEM_FIXTURES/installer-auth-with-key.env"
+  assert_eq "installer helper: configured in auth.env -> one -v mount arg pair" "2" "${#GITHUB_KEY_MOUNT_ARGS[@]}"
+  assert_eq "installer helper: mount flag is -v" "-v" "${GITHUB_KEY_MOUNT_ARGS[0]}"
+  assert_eq "installer helper: mounts the identical path read-only" "${SAFE_PEM}:${SAFE_PEM}:ro" "${GITHUB_KEY_MOUNT_ARGS[1]}"
+)
 
 echo
 echo "=== Syntax validation ==="

@@ -87,6 +87,11 @@ ensure_api_container() {
     "${DEPLOYMENT_PLATFORM_INSTALLER_ROOT}/templates/platform.env.template" > "$platform_env_file"
   chmod 644 "$platform_env_file"
 
+  # Optional — a no-op when GITHUB_APP_PRIVATE_KEY_PATH is not
+  # configured. Resolved (and fails loudly on a bad path) before the
+  # container is created.
+  resolve_github_app_key_mount_args "$platform_env_file" "${INSTALL_ROOT}/config/auth.env"
+
   # DOCKER SOCKET SECURITY NOTE (section 15/27): the API container is
   # granted /var/run/docker.sock because the platform's own core
   # feature is managing OTHER Docker containers on this host (creating,
@@ -104,6 +109,7 @@ ensure_api_container() {
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "${API_DATA_VOLUME_NAME}:/data" \
     -v "${INSTALL_ROOT}/caddy/routes:/app/caddy-routes" \
+    "${GITHUB_KEY_MOUNT_ARGS[@]}" \
     --env-file "${INSTALL_ROOT}/config/auth.env" \
     --env-file "$platform_env_file" \
     "$api_image" >/dev/null

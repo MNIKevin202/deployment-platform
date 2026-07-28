@@ -21,6 +21,9 @@ VPS_USER=kevin
 SSH_KEY=/Users/kevinpoulos/.ssh/hetzner_deployment
 VPS_SOURCE_DIR=/opt/deployment-platform/source
 AUTH_FILE=/opt/deployment-platform/config/auth.env
+# The non-secret companion to AUTH_FILE — read fresh on every API
+# container replacement, same as AUTH_FILE.
+PLATFORM_ENV_FILE=/opt/deployment-platform/config/platform.env
 CADDY_ROUTES_DIR=/opt/deployment-platform/caddy/routes
 API_CONTAINER=deployment-platform-api
 WEB_CONTAINER=deployment-platform-web
