@@ -705,4 +705,190 @@ describe("createAppWithConfig", () => {
     assert.ok(!result.message.includes(secretValue));
     assert.ok(!JSON.stringify(result.cleanup ?? {}).includes(secretValue));
   });
+
+  describe("idempotency key handling", () => {
+    test("a repeated request with the same key returns the original success result, without creating twice", async () => {
+      const { ops, calls } = createFakeOps();
+      const input = {
+        name: "idem-app",
+        image: "nginx:alpine",
+        containerPort: 80,
+        idempotencyKey: "browser-generated-key-1"
+      };
+
+      const first = await createAppWithConfig(deps({ dockerOps: ops }), input);
+      assert.equal(first.success, true);
+      assert.equal(calls.createContainerOptions.length, 1);
+
+      // Simulates the connection dropping after the server committed the
+      // create but before the response reached the browser (the Caddy
+      // restart during routing reconciliation is exactly this shape), and
+      // the same logical request being delivered again with the same key.
+      const second = await createAppWithConfig(deps({ dockerOps: ops }), input);
+
+      assert.equal(second.success, true);
+      assert.deepEqual(second, first);
+      // The operation actually ran only once — no second container.
+      assert.equal(calls.createContainerOptions.length, 1);
+      assert.equal(appDatabase.listApps().filter((a) => a.name === "idem-app").length, 1);
+    });
+
+    test("a different idempotency key for the same name is a genuine duplicate-name conflict, not a replay", async () => {
+      const { ops } = createFakeOps();
+
+      const first = await createAppWithConfig(deps({ dockerOps: ops }), {
+        name: "idem-conflict-app",
+        image: "nginx:alpine",
+        containerPort: 80,
+        idempotencyKey: "key-a"
+      });
+      assert.equal(first.success, true);
+
+      const second = await createAppWithConfig(deps({ dockerOps: ops }), {
+        name: "idem-conflict-app",
+        image: "nginx:alpine",
+        containerPort: 80,
+        idempotencyKey: "key-b"
+      });
+
+      assert.equal(second.success, false);
+      assert.equal(second.statusCode, 409);
+      assert.match(second.message, /already exists/);
+    });
+
+    test("reusing a key with a different request body is rejected as a mismatch, never replayed", async () => {
+      const { ops } = createFakeOps();
+      const key = "reused-key";
+
+      const first = await createAppWithConfig(deps({ dockerOps: ops }), {
+        name: "idem-mismatch-app",
+        image: "nginx:alpine",
+        containerPort: 80,
+        idempotencyKey: key
+      });
+      assert.equal(first.success, true);
+
+      const second = await createAppWithConfig(deps({ dockerOps: ops }), {
+        name: "a-totally-different-app-name",
+        image: "nginx:alpine",
+        containerPort: 80,
+        idempotencyKey: key
+      });
+
+      assert.equal(second.success, false);
+      assert.equal(second.statusCode, 409);
+      assert.match(second.message, /different request/);
+      assert.equal(appDatabase.getAppByName("a-totally-different-app-name"), null);
+    });
+
+    test("a failed attempt releases the key so a genuine retry can succeed", async () => {
+      const failingOps = createFakeOps({ startFails: true }).ops;
+      const key = "retry-after-failure-key";
+
+      const first = await createAppWithConfig(deps({ dockerOps: failingOps }), {
+        name: "idem-retry-app",
+        image: "nginx:alpine",
+        containerPort: 80,
+        idempotencyKey: key
+      });
+      assert.equal(first.success, false);
+      assert.equal(appDatabase.getAppByName("idem-retry-app"), null);
+
+      const workingOps = createFakeOps().ops;
+      const second = await createAppWithConfig(deps({ dockerOps: workingOps }), {
+        name: "idem-retry-app",
+        image: "nginx:alpine",
+        containerPort: 80,
+        idempotencyKey: key
+      });
+
+      assert.equal(second.success, true);
+      assert.ok(appDatabase.getAppByName("idem-retry-app"));
+    });
+
+    test("deleting an app and recreating it with a NEW idempotency key works normally", async () => {
+      const { ops } = createFakeOps();
+
+      const created = await createAppWithConfig(deps({ dockerOps: ops }), {
+        name: "idem-recreate-app",
+        image: "nginx:alpine",
+        containerPort: 80,
+        idempotencyKey: "first-attempt-key"
+      });
+      assert.equal(created.success, true);
+
+      appDatabase.deleteApp(created.app!.id);
+      assert.equal(appDatabase.getAppByName("idem-recreate-app"), null);
+
+      const recreated = await createAppWithConfig(deps({ dockerOps: ops }), {
+        name: "idem-recreate-app",
+        image: "nginx:alpine",
+        containerPort: 80,
+        idempotencyKey: "second-attempt-key"
+      });
+
+      assert.equal(recreated.success, true);
+      assert.ok(appDatabase.getAppByName("idem-recreate-app"));
+    });
+
+    test("without an idempotency key, behavior is unchanged: two identical requests are two real attempts", async () => {
+      const { ops } = createFakeOps();
+      const input = {
+        name: "no-key-app",
+        image: "nginx:alpine",
+        containerPort: 80
+      };
+
+      const first = await createAppWithConfig(deps({ dockerOps: ops }), input);
+      assert.equal(first.success, true);
+
+      const second = await createAppWithConfig(deps({ dockerOps: ops }), input);
+      assert.equal(second.success, false);
+      assert.equal(second.statusCode, 409);
+      assert.match(second.message, /already exists/);
+    });
+
+    test("a request with the same key concurrently in progress is rejected as busy, not silently duplicated", async () => {
+      let resolveCreateContainer!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        resolveCreateContainer = resolve;
+      });
+
+      const { ops: baseOps } = createFakeOps();
+      let createContainerCalls = 0;
+      const slowOps: RedeployDockerOps = {
+        ...baseOps,
+        async createContainer(options) {
+          createContainerCalls += 1;
+          await gate;
+          return baseOps.createContainer(options);
+        }
+      };
+
+      const key = "in-flight-key";
+      const input = {
+        name: "idem-in-flight-app",
+        image: "nginx:alpine",
+        containerPort: 80,
+        idempotencyKey: key
+      };
+
+      const firstPromise = createAppWithConfig(deps({ dockerOps: slowOps }), input);
+
+      // Give the first call a turn to reserve the key and reach the (still
+      // blocked) container creation call before the second one starts.
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const second = await createAppWithConfig(deps({ dockerOps: slowOps }), input);
+      assert.equal(second.success, false);
+      assert.equal(second.statusCode, 409);
+      assert.match(second.message, /already being processed/);
+
+      resolveCreateContainer();
+      const first = await firstPromise;
+
+      assert.equal(first.success, true);
+      assert.equal(createContainerCalls, 1);
+    });
+  });
 });

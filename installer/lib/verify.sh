@@ -259,7 +259,7 @@ verify_local_platform() {
       docker exec "$API_CONTAINER_NAME" node -e \
       'const {DatabaseSync}=require("node:sqlite"); const db=new DatabaseSync("/data/deployment-platform.sqlite",{readOnly:true}); db.prepare("SELECT 1").get(); db.close();'
 
-    local expected_migrations=11
+    local expected_migrations=12
     local applied_migrations
     applied_migrations="$(docker exec "$API_CONTAINER_NAME" node -e \
       'const {DatabaseSync}=require("node:sqlite"); const db=new DatabaseSync("/data/deployment-platform.sqlite",{readOnly:true}); const row=db.prepare("SELECT COUNT(*) AS c FROM schema_migrations").get(); console.log(row.c); db.close();' 2>/dev/null || echo 0)"

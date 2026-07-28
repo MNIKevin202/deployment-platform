@@ -11,6 +11,10 @@ import {
   isReservedVolumeName
 } from "./storage-service.js";
 import type { RecordEventFn } from "./deployment-event-service.js";
+import {
+  APP_CREATION_IDEMPOTENCY_SCOPE,
+  fingerprintCreateAppRequest
+} from "./idempotency.js";
 
 export interface AppCreationEnvVarInput {
   key: string;
@@ -32,6 +36,15 @@ export interface CreateAppWithConfigInput {
   restartPolicy?: string;
   environmentVariables?: AppCreationEnvVarInput[];
   storageMounts?: AppCreationVolumeInput[];
+  /**
+   * A browser-generated key identifying this create ATTEMPT (one user
+   * action, including any transport-level retry of that same underlying
+   * request). Optional for backward compatibility with callers that don't
+   * send one; when present, a repeated request with the same key returns
+   * the original result instead of re-running the creation or returning a
+   * misleading "already exists" error. See services/idempotency.ts.
+   */
+  idempotencyKey?: string;
 }
 
 export interface CreateAppServiceDependencies {
@@ -192,8 +205,14 @@ async function failDockerCreation(
  * same shape of input (the minimal endpoint just passes empty
  * environmentVariables/storageMounts arrays) so there is exactly one code
  * path that can create an app, rather than two that could drift apart.
+ *
+ * This is the actual creation logic; `createAppWithConfig` below wraps it
+ * with idempotency-key handling so a repeated request (a real double
+ * submit, or a transport-level retry after the connection was interrupted
+ * mid-request — see routing-service.ts's Caddy-restart apply path) is
+ * answered with the original result instead of running this twice.
  */
-export async function createAppWithConfig(
+async function performCreateAppWithConfig(
   deps: CreateAppServiceDependencies,
   input: CreateAppWithConfigInput
 ): Promise<CreateAppServiceResult> {
@@ -492,4 +511,86 @@ export async function createAppWithConfig(
       storageMountCount: resolvedVolumes.length
     }
   };
+}
+
+/**
+ * Public entry point. Wraps `performCreateAppWithConfig` with idempotency-key
+ * handling when `input.idempotencyKey` is present; behaves exactly as before
+ * when it is absent, so existing callers are unaffected.
+ *
+ * Design (see services/idempotency.ts and idempotency-database.ts for the
+ * storage/retention details):
+ *   - A key never seen before reserves it, runs creation, and on SUCCESS
+ *     caches the full result for replay. A failure releases the key so a
+ *     genuine retry can run creation again from scratch — failures are
+ *     never cached or replayed, only successes.
+ *   - The SAME key with the SAME request body, once completed, replays the
+ *     original success result verbatim rather than re-creating or hitting
+ *     the "already exists" check — this is what makes a request that is
+ *     delivered twice (double click, or a connection dropped and silently
+ *     retried mid-request) safe.
+ *   - The SAME key with a DIFFERENT request body is a key-reuse conflict,
+ *     not a retry, and is rejected outright — it is never treated as
+ *     idempotent with the original request.
+ *   - The unique app-name constraint is unchanged: a genuinely different
+ *     attempt (a different key) for a name that is already taken is a real
+ *     409 "already exists", not something idempotency ever bypasses.
+ */
+export async function createAppWithConfig(
+  deps: CreateAppServiceDependencies,
+  input: CreateAppWithConfigInput
+): Promise<CreateAppServiceResult> {
+  const { idempotencyKey, ...createInput } = input;
+
+  if (!idempotencyKey) {
+    return performCreateAppWithConfig(deps, createInput);
+  }
+
+  const { appDatabase } = deps;
+  const fingerprint = fingerprintCreateAppRequest(createInput);
+  const outcome = appDatabase.beginAttempt(
+    idempotencyKey,
+    APP_CREATION_IDEMPOTENCY_SCOPE,
+    fingerprint
+  );
+
+  if (outcome.kind === "mismatch") {
+    return {
+      success: false,
+      statusCode: 409,
+      message:
+        "This idempotency key was already used for a different request."
+    };
+  }
+
+  if (outcome.kind === "in_progress") {
+    return {
+      success: false,
+      statusCode: 409,
+      message:
+        "A request with this idempotency key is already being processed."
+    };
+  }
+
+  if (outcome.kind === "replay") {
+    return outcome.body as CreateAppServiceResult;
+  }
+
+  const result = await performCreateAppWithConfig(deps, createInput);
+
+  if (result.success) {
+    appDatabase.complete(
+      idempotencyKey,
+      APP_CREATION_IDEMPOTENCY_SCOPE,
+      201,
+      result
+    );
+  } else {
+    appDatabase.releaseFailedAttempt(
+      idempotencyKey,
+      APP_CREATION_IDEMPOTENCY_SCOPE
+    );
+  }
+
+  return result;
 }

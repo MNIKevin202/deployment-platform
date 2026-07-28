@@ -10,6 +10,7 @@ import { migration008AppSources } from "./008_app_sources.js";
 import { migration009AppSourceDeploymentMetadata } from "./009_app_source_deployment_metadata.js";
 import { migration010SourcePortMetadata } from "./010_source_port_metadata.js";
 import { migration011PerformanceDiagnostics } from "./011_performance_diagnostics.js";
+import { migration012IdempotencyKeys } from "./012_idempotency_keys.js";
 import type { Migration } from "./types.js";
 
 export type { Migration } from "./types.js";
@@ -25,7 +26,8 @@ const migrations: Migration[] = [
   migration008AppSources,
   migration009AppSourceDeploymentMetadata,
   migration010SourcePortMetadata,
-  migration011PerformanceDiagnostics
+  migration011PerformanceDiagnostics,
+  migration012IdempotencyKeys
 ];
 
 interface SchemaMigrationRow {

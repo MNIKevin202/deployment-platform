@@ -1452,7 +1452,7 @@ docker() {
       esac
       # CREDENTIAL_ENCRYPTION_KEY / db read / migration count probes
       case "$*" in
-        *schema_migrations*) printf '11\n'; return 0 ;;
+        *schema_migrations*) printf '12\n'; return 0 ;;
       esac
       return 0
       ;;

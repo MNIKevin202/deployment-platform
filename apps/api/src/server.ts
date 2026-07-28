@@ -23,6 +23,7 @@ import {
   redeployApp
 } from "./services/redeploy-service.js";
 import { createAppWithConfig } from "./services/app-creation-service.js";
+import { readIdempotencyKeyHeader } from "./services/idempotency.js";
 import { generateBuildBrief } from "./services/build-brief-service.js";
 import { getErrorStatusCode } from "./docker-errors.js";
 import { createEventRecorder } from "./services/deployment-event-service.js";
@@ -570,10 +571,22 @@ app.post(
       });
     }
 
+    const idempotency = readIdempotencyKeyHeader(
+      request.headers["idempotency-key"]
+    );
+
+    if (idempotency.present && !idempotency.valid) {
+      return reply.code(400).send({
+        success: false,
+        message: "Invalid Idempotency-Key header"
+      });
+    }
+
     const result = await createAppWithConfig(creationServiceDeps, {
       name: parsedBody.data.name,
       image: parsedBody.data.image,
-      containerPort: parsedBody.data.containerPort
+      containerPort: parsedBody.data.containerPort,
+      ...(idempotency.present ? { idempotencyKey: idempotency.key } : {})
     });
 
     if (!result.success || !result.app) {
@@ -630,13 +643,25 @@ app.post(
       });
     }
 
+    const idempotency = readIdempotencyKeyHeader(
+      request.headers["idempotency-key"]
+    );
+
+    if (idempotency.present && !idempotency.valid) {
+      return reply.code(400).send({
+        success: false,
+        message: "Invalid Idempotency-Key header"
+      });
+    }
+
     const result = await createAppWithConfig(creationServiceDeps, {
       name: parsedBody.data.name,
       image: parsedBody.data.image,
       containerPort: parsedBody.data.containerPort,
       restartPolicy: parsedBody.data.restartPolicy,
       environmentVariables: parsedBody.data.environmentVariables,
-      storageMounts: parsedBody.data.storageMounts
+      storageMounts: parsedBody.data.storageMounts,
+      ...(idempotency.present ? { idempotencyKey: idempotency.key } : {})
     });
 
     if (!result.success || !result.app) {

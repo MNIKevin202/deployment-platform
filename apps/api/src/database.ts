@@ -9,6 +9,7 @@ import { createEventRepository } from "./event-database.js";
 import { createCredentialRepository } from "./credential-database.js";
 import { createAppSourceRepository } from "./app-source-database.js";
 import { createPerformanceDiagnosticsRepository } from "./performance-diagnostics-database.js";
+import { createIdempotencyRepository } from "./idempotency-database.js";
 
 export type {
   StoredGlobalEnvVar,
@@ -54,6 +55,8 @@ export type {
   UpdateInspectionResultInput,
   UpdateDeployedCommitInput
 } from "./app-source-database.js";
+
+export type { IdempotencyOutcome } from "./idempotency-database.js";
 
 export interface StoredApp {
   id: number;
@@ -344,6 +347,7 @@ export function createAppDatabase(databasePath: string) {
   const credentialRepository = createCredentialRepository(db);
   const appSourceRepository = createAppSourceRepository(db);
   const performanceDiagnosticsRepository = createPerformanceDiagnosticsRepository(db);
+  const idempotencyRepository = createIdempotencyRepository(db);
 
   return {
     db,
@@ -369,7 +373,8 @@ export function createAppDatabase(databasePath: string) {
     ...eventRepository,
     ...credentialRepository,
     ...appSourceRepository,
-    ...performanceDiagnosticsRepository
+    ...performanceDiagnosticsRepository,
+    ...idempotencyRepository
   };
 }
 

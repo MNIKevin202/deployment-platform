@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ApiError,
   BuildBriefRequestPayload,
@@ -104,6 +104,48 @@ async function readApiError(
   }
 }
 
+const NETWORK_RETRY_DELAY_MS = 1500;
+
+/**
+ * Posts the wizard create payload with a bounded, idempotency-key-safe
+ * retry.
+ *
+ * A network-level failure (fetch() itself rejecting — no HTTP response was
+ * ever received) is retried exactly once, resending the SAME body under the
+ * SAME Idempotency-Key. That is what makes the retry safe rather than a
+ * second create: if the original request actually reached and was processed
+ * by the server before the connection dropped, the API recognizes the
+ * repeated key and replays that result instead of creating a second app or
+ * reporting a misleading "already exists" error. This directly covers app
+ * creation's own route-reconciliation step restarting the Caddy container
+ * that is, at that moment, still proxying this very request.
+ *
+ * An HTTP response — even an error one — is authoritative and is never
+ * retried: the server has definitively answered, so retrying could only
+ * duplicate a real duplicate-name rejection or a validation failure.
+ */
+async function postAppCreateWithRetry(
+  payload: CreateAppWizardPayload,
+  idempotencyKey: string
+): Promise<Response> {
+  const attempt = () =>
+    fetch("/api/apps/wizard", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey
+      },
+      body: JSON.stringify(payload)
+    });
+
+  try {
+    return await attempt();
+  } catch {
+    await new Promise((resolve) => window.setTimeout(resolve, NETWORK_RETRY_DELAY_MS));
+    return attempt();
+  }
+}
+
 type SourceType = "manual" | "github";
 
 export default function CreateAppWizard({
@@ -156,6 +198,16 @@ export default function CreateAppWizard({
   const [createdApp, setCreatedApp] = useState<CreatedAppSummary | null>(null);
   const [postCreateNotice, setPostCreateNotice] = useState("");
 
+  // A ref, not the `creating` state, is what actually prevents a second
+  // request. State updates are asynchronous and batched — two submit
+  // triggers that both read `creating` before either re-render sees it flip
+  // (a fast double click, or Enter-while-focused firing right after a mouse
+  // click) can both pass a state-only guard. A ref mutation is synchronous
+  // and visible to the very next line of JS, so it closes that race
+  // regardless of how the second trigger arrives (click, keyboard Enter on
+  // the focused button, or a duplicate handler).
+  const submitLockRef = useRef(false);
+
   const resetWizard = useCallback(() => {
     setStep(0);
     setSourceType("manual");
@@ -183,6 +235,7 @@ export default function CreateAppWizard({
     setCreateError("");
     setCreatedApp(null);
     setPostCreateNotice("");
+    submitLockRef.current = false;
   }, []);
 
   useEffect(() => {
@@ -486,9 +539,13 @@ export default function CreateAppWizard({
   };
 
   const submitCreate = async () => {
-    if (creating) {
+    // The ref check-and-set below is the actual guard against a second
+    // request — see submitLockRef's declaration for why it has to be a ref
+    // and not the `creating` state.
+    if (submitLockRef.current) {
       return;
     }
+    submitLockRef.current = true;
 
     try {
       setCreating(true);
@@ -513,11 +570,14 @@ export default function CreateAppWizard({
         }))
       };
 
-      const response = await fetch("/api/apps/wizard", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
+      // One key for this whole attempt, including the automatic
+      // network-error retry inside postAppCreateWithRetry — never
+      // regenerated for a retry of the SAME attempt, always fresh for a NEW
+      // one (the next time this function runs, e.g. a later click after a
+      // real failure).
+      const idempotencyKey = crypto.randomUUID();
+
+      const response = await postAppCreateWithRetry(payload, idempotencyKey);
 
       const result = (await response
         .json()
@@ -536,6 +596,7 @@ export default function CreateAppWizard({
       setCreateError(error instanceof Error ? error.message : "Unable to create app");
     } finally {
       setCreating(false);
+      submitLockRef.current = false;
     }
   };
 
@@ -1384,7 +1445,11 @@ export default function CreateAppWizard({
                     </div>
                   </div>
 
-                  {createError && <div className="error-banner">{createError}</div>}
+                  {createError && (
+                    <div className="error-banner" role="alert">
+                      {createError}
+                    </div>
+                  )}
                 </>
               )}
             </div>
