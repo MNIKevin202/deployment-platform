@@ -145,7 +145,7 @@ export default function AuthGate({ children }: AuthGateProps) {
       <main className="auth-page">
         <section className="auth-card">
           <div className="auth-brand">
-            <div className="auth-mark">DP</div>
+            <img src="/icon-192.png" alt="" className="auth-mark" />
 
             <div>
               <p className="eyebrow">Deployment Platform</p>

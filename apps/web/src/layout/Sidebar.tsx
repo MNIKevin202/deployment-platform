@@ -22,7 +22,7 @@ export default function Sidebar({ active, onSelect }: SidebarProps) {
   return (
     <div className="sidebar-inner">
       <div className="sidebar-brand">
-        <span className="sidebar-mark">DP</span>
+        <img src="/icon-192.png" alt="" className="sidebar-mark" />
         <div>
           <p className="sidebar-brand-name">Deployment</p>
           <p className="sidebar-brand-sub">Platform</p>

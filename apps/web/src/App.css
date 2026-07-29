@@ -257,18 +257,11 @@ code {
 }
 
 .sidebar-mark {
-  display: grid;
-  place-items: center;
   width: 38px;
   height: 38px;
   flex: 0 0 auto;
-  border-radius: 11px;
-  background: linear-gradient(145deg, #7c7ff5, var(--color-accent));
-  color: #fff;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-  font-size: 0.85rem;
-  box-shadow: 0 10px 24px rgba(99, 102, 241, 0.35);
+  object-fit: contain;
+  display: block;
 }
 
 .sidebar-brand-name,
@@ -1173,16 +1166,10 @@ code {
 
 .auth-mark {
   flex: 0 0 auto;
-  display: grid;
-  place-items: center;
   width: 46px;
   height: 46px;
-  border-radius: var(--radius-sm);
-  color: #fff;
-  background: linear-gradient(145deg, #7c7ff5, var(--color-accent));
-  font-weight: 900;
-  letter-spacing: -0.04em;
-  box-shadow: 0 14px 32px rgba(99, 102, 241, 0.32);
+  object-fit: contain;
+  display: block;
 }
 
 .auth-form {
