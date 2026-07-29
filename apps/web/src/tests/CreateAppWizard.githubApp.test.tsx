@@ -125,7 +125,14 @@ function installConnectedRepoFetchMock(pages: RepoFixture[][]) {
           detectedProjectType: "docker",
           recommendedStrategy: "dockerfile",
           supported: true,
-          warnings: []
+          warnings: [],
+          portDetection: {
+            detectedPort: null,
+            source: "none",
+            confidence: "none",
+            evidence: [],
+            warnings: []
+          }
         }
       });
     }

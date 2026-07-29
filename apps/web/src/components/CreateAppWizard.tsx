@@ -31,7 +31,7 @@ import {
   validateStorageMounts
 } from "../lib/wizardValidation";
 import { useGithubRepositories } from "../hooks/useGithubRepositories";
-import { PROJECT_TYPE_LABELS, STRATEGY_INFO } from "./SourcePanel";
+import { PORT_SOURCE_LABELS, PROJECT_TYPE_LABELS, STRATEGY_INFO } from "./SourcePanel";
 
 interface CreateAppWizardProps {
   open: boolean;
@@ -194,6 +194,18 @@ export default function CreateAppWizard({
   const [image, setImage] = useState("");
 
   const [containerPort, setContainerPort] = useState("3000");
+  // Mirrors SourcePanel.tsx's containerPort tracking: null/"manual" both
+  // mean "not a detection result" — a fresh detection sets these together
+  // with containerPort, and any manual edit immediately marks it "manual"
+  // so a later inspection rerun knows not to silently overwrite it.
+  const [containerPortSource, setContainerPortSource] = useState<string | null>(null);
+  const [containerPortConfidence, setContainerPortConfidence] = useState<string | null>(null);
+  // Unlike SourcePanel (whose port field starts empty), this wizard's port
+  // field keeps a "3000" default for the manual/prebuilt-image flow, which
+  // has no detection to prefer — so an emptiness check can't tell "still at
+  // the default" apart from "operator typed 3000 on purpose". Track it
+  // explicitly instead, same pattern as githubStrategyManuallySet.
+  const [containerPortManuallySet, setContainerPortManuallySet] = useState(false);
   const [restartPolicy, setRestartPolicy] = useState<RestartPolicy>("unless-stopped");
   const [runtime, setRuntime] = useState<BuildBriefRuntime>("docker");
   const [description, setDescription] = useState("");
@@ -247,6 +259,9 @@ export default function CreateAppWizard({
     setName("");
     setImage("");
     setContainerPort("3000");
+    setContainerPortSource(null);
+    setContainerPortConfidence(null);
+    setContainerPortManuallySet(false);
     setRestartPolicy("unless-stopped");
     setRuntime("docker");
     setDescription("");
@@ -398,6 +413,12 @@ export default function CreateAppWizard({
     setGithubInspectError("");
     setGithubSelectedStrategyState(null);
     setGithubStrategyManuallySet(false);
+    // A stale detection's source/confidence must never be shown against a
+    // different repository/branch/subdirectory — the port value itself is
+    // left alone (same as the strategy fields), matching SourcePanel.
+    setContainerPortSource(null);
+    setContainerPortConfidence(null);
+    setContainerPortManuallySet(false);
   }, [githubRepo?.fullName, githubBranch, githubSubdirectory]);
 
   const runGithubInspect = async () => {
@@ -434,6 +455,26 @@ export default function CreateAppWizard({
         if (recommended && recommended !== "unsupported") {
           setGithubSelectedStrategyState(recommended);
         }
+      }
+
+      // Prefill the container port only from a high-confidence, single,
+      // unambiguous detection, and only if the operator hasn't already
+      // typed a value — same rule as SourcePanel.tsx's Edit Source flow.
+      // This is the fix for repositories whose real listening port (e.g.
+      // a Dockerfile's EXPOSE) doesn't match the platform's placeholder
+      // default: without this, nothing here ever read portDetection, so
+      // the port field just sat at a generic default until the operator
+      // happened to notice and correct it themselves.
+      const portDetection = result.inspection?.portDetection;
+      if (
+        portDetection &&
+        portDetection.detectedPort !== null &&
+        portDetection.confidence === "high" &&
+        !containerPortManuallySet
+      ) {
+        setContainerPort(String(portDetection.detectedPort));
+        setContainerPortSource(portDetection.source);
+        setContainerPortConfidence(portDetection.confidence);
       }
     } catch (error) {
       setGithubInspectError(error instanceof Error ? error.message : "Unable to inspect repository");
@@ -700,6 +741,8 @@ export default function CreateAppWizard({
           buildContext: githubBuildContext,
           selectedStrategy: githubSelectedStrategy,
           containerPort: parsedPort,
+          containerPortSource: containerPortSource ?? "manual",
+          containerPortConfidence: containerPortConfidence ?? undefined,
           autoDeploy: false
         })
       });
@@ -1016,15 +1059,52 @@ export default function CreateAppWizard({
                           {githubInspectError && <div className="error-banner">{githubInspectError}</div>}
 
                           {githubInspection && (
-                            <dl className="wizard-review-grid">
-                              <div>
-                                <dt>Detected type</dt>
-                                <dd>
-                                  {PROJECT_TYPE_LABELS[githubInspection.detectedProjectType] ??
-                                    githubInspection.detectedProjectType}
-                                </dd>
+                            <>
+                              <dl className="wizard-review-grid">
+                                <div>
+                                  <dt>Detected type</dt>
+                                  <dd>
+                                    {PROJECT_TYPE_LABELS[githubInspection.detectedProjectType] ??
+                                      githubInspection.detectedProjectType}
+                                  </dd>
+                                </div>
+                              </dl>
+                              <div className="wizard-row inspection-card">
+                                <dl className="wizard-review-grid">
+                                  <div>
+                                    <dt>Suggested container port</dt>
+                                    <dd>{githubInspection.portDetection.detectedPort ?? "None detected"}</dd>
+                                  </div>
+                                  <div>
+                                    <dt>Detected from</dt>
+                                    <dd>
+                                      {PORT_SOURCE_LABELS[githubInspection.portDetection.source] ??
+                                        githubInspection.portDetection.source}
+                                    </dd>
+                                  </div>
+                                  <div>
+                                    <dt>Confidence</dt>
+                                    <dd style={{ textTransform: "capitalize" }}>
+                                      {githubInspection.portDetection.confidence}
+                                    </dd>
+                                  </div>
+                                </dl>
+                                {githubInspection.portDetection.evidence.length > 0 && (
+                                  <ul className="wizard-file-list">
+                                    {githubInspection.portDetection.evidence.map((item) => (
+                                      <li key={item}>{item}</li>
+                                    ))}
+                                  </ul>
+                                )}
+                                {githubInspection.portDetection.warnings.length > 0 && (
+                                  <ul className="wizard-warning-list">
+                                    {githubInspection.portDetection.warnings.map((warning) => (
+                                      <li key={warning}>{warning}</li>
+                                    ))}
+                                  </ul>
+                                )}
                               </div>
-                            </dl>
+                            </>
                           )}
 
                           {githubInspection && !githubInspection.supported && githubInspection.unsupportedReason && (
@@ -1197,14 +1277,38 @@ export default function CreateAppWizard({
                     <input
                       type="number"
                       value={containerPort}
-                      onChange={(event) => setContainerPort(event.target.value)}
+                      onChange={(event) => {
+                        setContainerPort(event.target.value);
+                        setContainerPortSource("manual");
+                        setContainerPortConfidence(null);
+                        setContainerPortManuallySet(true);
+                      }}
                       min="1"
                       max="65535"
+                      placeholder="3000"
                     />
                     <small>
                       The port the application listens on inside its container.
                     </small>
                   </label>
+
+                  {sourceType === "github" && containerPort.trim() && (
+                    <p className="section-description">
+                      {containerPortSource === "manual" || !containerPortSource
+                        ? "Manually entered."
+                        : `Detected from ${PORT_SOURCE_LABELS[containerPortSource] ?? containerPortSource}${
+                            containerPortConfidence ? ` (${containerPortConfidence} confidence)` : ""
+                          }.`}
+                      {containerPortConfidence === "low" && " Suggested port, not confirmed — verify before deploying."}
+                    </p>
+                  )}
+
+                  {sourceType === "github" &&
+                    githubInspection &&
+                    githubInspection.portDetection.detectedPort === null &&
+                    githubInspection.portDetection.warnings.length > 0 && (
+                      <div className="warning-banner">{githubInspection.portDetection.warnings.join(" ")}</div>
+                    )}
 
                   <label>
                     <span>Restart policy</span>
