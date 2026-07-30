@@ -1,5 +1,7 @@
 import AppCard from "../components/AppCard";
 import MissingAppCard from "../components/MissingAppCard";
+import AppTable from "../components/AppTable";
+import { useAppsView } from "../hooks/useAppsView";
 import type {
   ContainerAction,
   ContainerSummary,
@@ -41,6 +43,7 @@ export default function AppsPage({
   emptyBody = "Deploy your first application from a Docker image."
 }: AppsPageProps) {
   const hasAnyApp = managedApps.length > 0 || missingApps.length > 0;
+  const [view, setView] = useAppsView();
 
   return (
     <div className="page">
@@ -51,9 +54,32 @@ export default function AppsPage({
             <h2>{title}</h2>
           </div>
 
-          <button className="primary-button compact" type="button" onClick={onCreateApp}>
-            Create App
-          </button>
+          <div className="section-heading-actions">
+            {hasAnyApp && (
+              <div className="view-toggle" role="group" aria-label="Layout">
+                <button
+                  type="button"
+                  className={view === "grid" ? "active" : ""}
+                  aria-pressed={view === "grid"}
+                  onClick={() => setView("grid")}
+                >
+                  ▦ Grid
+                </button>
+                <button
+                  type="button"
+                  className={view === "table" ? "active" : ""}
+                  aria-pressed={view === "table"}
+                  onClick={() => setView("table")}
+                >
+                  ▤ Table
+                </button>
+              </div>
+            )}
+
+            <button className="primary-button compact" type="button" onClick={onCreateApp}>
+              Create App
+            </button>
+          </div>
         </div>
 
         {!hasAnyApp ? (
@@ -64,6 +90,18 @@ export default function AppsPage({
               Deploy First App
             </button>
           </div>
+        ) : view === "table" ? (
+          <AppTable
+            managedApps={managedApps}
+            storedAppsByName={storedAppsByName}
+            missingApps={missingApps}
+            actionLoading={actionLoading}
+            onAction={onAction}
+            onOpenLogs={onOpenLogs}
+            onDeleteApp={onDeleteApp}
+            onDeleteMissingApp={onDeleteMissingApp}
+            onViewApp={onViewApp}
+          />
         ) : (
           <div className="container-grid">
             {managedApps.map((container) => {
