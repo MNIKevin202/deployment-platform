@@ -2,12 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 
 interface BulkEnvVarDialogProps {
   open: boolean;
-  existingKeys: ReadonlySet<string>;
+  existingSecrets: ReadonlyMap<string, boolean>;
   submitting: boolean;
   error: string;
   onSubmit: (
-    variables: { key: string; value: string }[],
-    markSecret: boolean
+    variables: { key: string; value: string; isSecret: boolean }[]
   ) => void;
   onCancel: () => void;
 }
@@ -82,19 +81,21 @@ function parseText(text: string): ParsedLine[] {
 
 export default function BulkEnvVarDialog({
   open,
-  existingKeys,
+  existingSecrets,
   submitting,
   error,
   onSubmit,
   onCancel
 }: BulkEnvVarDialogProps) {
   const [text, setText] = useState("");
-  const [markSecret, setMarkSecret] = useState(false);
+  const [secretOverrides, setSecretOverrides] = useState<
+    Record<string, boolean>
+  >({});
 
   useEffect(() => {
     if (open) {
       setText("");
-      setMarkSecret(false);
+      setSecretOverrides({});
     }
   }, [open]);
 
@@ -125,9 +126,12 @@ export default function BulkEnvVarDialog({
   const hasBlockingErrors =
     parsed.some((item) => item.error !== null) || duplicateKeys.size > 0;
   const createCount = validEntries.filter(
-    (item) => !existingKeys.has(item.key as string)
+    (item) => !existingSecrets.has(item.key as string)
   ).length;
   const updateCount = validEntries.length - createCount;
+
+  const isSecretFor = (key: string): boolean =>
+    secretOverrides[key] ?? existingSecrets.get(key) ?? false;
 
   if (!open) {
     return null;
@@ -171,18 +175,22 @@ export default function BulkEnvVarDialog({
             }
 
             onSubmit(
-              validEntries.map((item) => ({
-                key: item.key as string,
-                value: item.value
-              })),
-              markSecret
+              validEntries.map((item) => {
+                const key = item.key as string;
+                return {
+                  key,
+                  value: item.value,
+                  isSecret: isSecretFor(key)
+                };
+              })
             );
           }}
         >
           <p className="dialog-description">
             Paste one <code>KEY=value</code> pair per line. Existing keys are
             updated in place; new keys are added. Blank lines and lines
-            starting with <code>#</code> are ignored.
+            starting with <code>#</code> are ignored. Use the checkbox on each
+            row to mark that variable as secret.
           </p>
 
           {error && <div className="error-banner">{error}</div>}
@@ -201,19 +209,6 @@ export default function BulkEnvVarDialog({
             />
           </label>
 
-          <label className="checkbox-field">
-            <input
-              type="checkbox"
-              checked={markSecret}
-              onChange={(event) => setMarkSecret(event.target.checked)}
-              disabled={submitting}
-            />
-            <span>
-              Mark newly added variables as secret — has no effect on
-              existing variables
-            </span>
-          </label>
-
           {parsed.length > 0 && (
             <div className="bulk-env-preview">
               <div className="table-wrap">
@@ -223,6 +218,7 @@ export default function BulkEnvVarDialog({
                       <th>Line</th>
                       <th>Key</th>
                       <th>Value</th>
+                      <th>Secret</th>
                       <th>Result</th>
                     </tr>
                   </thead>
@@ -254,6 +250,25 @@ export default function BulkEnvVarDialog({
                             )}
                           </td>
                           <td>
+                            {rowError || !item.key ? (
+                              <span className="text-faint">—</span>
+                            ) : (
+                              <input
+                                type="checkbox"
+                                aria-label={`Mark ${item.key} as secret`}
+                                checked={isSecretFor(item.key)}
+                                disabled={submitting}
+                                onChange={(event) => {
+                                  const key = item.key as string;
+                                  setSecretOverrides((current) => ({
+                                    ...current,
+                                    [key]: event.target.checked
+                                  }));
+                                }}
+                              />
+                            )}
+                          </td>
+                          <td>
                             {rowError ? (
                               <span className="status-badge warning compact">
                                 {rowError}
@@ -261,12 +276,12 @@ export default function BulkEnvVarDialog({
                             ) : (
                               <span
                                 className={`status-badge compact ${
-                                  item.key && existingKeys.has(item.key)
+                                  item.key && existingSecrets.has(item.key)
                                     ? "neutral"
                                     : "positive"
                                 }`}
                               >
-                                {item.key && existingKeys.has(item.key)
+                                {item.key && existingSecrets.has(item.key)
                                   ? "Update"
                                   : "New"}
                               </span>

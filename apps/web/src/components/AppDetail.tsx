@@ -479,8 +479,7 @@ export default function AppDetail({
   };
 
   const submitBulkEnvDialog = async (
-    variables: { key: string; value: string }[],
-    markSecret: boolean
+    variables: { key: string; value: string; isSecret: boolean }[]
   ) => {
     try {
       setBulkEnvSubmitting(true);
@@ -489,7 +488,7 @@ export default function AppDetail({
       const response = await fetch(`/api/apps/${appId}/environment/bulk`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ variables, markSecret })
+        body: JSON.stringify({ variables })
       });
 
       if (!response.ok) {
@@ -1156,12 +1155,12 @@ export default function AppDetail({
 
       <BulkEnvVarDialog
         open={showBulkEnvDialog}
-        existingKeys={new Set(appVars.map((variable) => variable.key))}
+        existingSecrets={
+          new Map(appVars.map((variable) => [variable.key, variable.isSecret]))
+        }
         submitting={bulkEnvSubmitting}
         error={bulkEnvError}
-        onSubmit={(variables, markSecret) =>
-          void submitBulkEnvDialog(variables, markSecret)
-        }
+        onSubmit={(variables) => void submitBulkEnvDialog(variables)}
         onCancel={() => setShowBulkEnvDialog(false)}
       />
 

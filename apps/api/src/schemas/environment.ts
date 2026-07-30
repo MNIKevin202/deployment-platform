@@ -43,10 +43,12 @@ export const bulkEnvVarsSchema = z.object({
     .array(
       z.object({
         key: envKeySchema,
-        value: envValueSchema
+        value: envValueSchema,
+        // Omitted means "leave as-is" on an update, or "not secret" on create —
+        // see the route handler for exactly how each case is resolved.
+        isSecret: z.boolean().optional()
       })
     )
     .min(1, "At least one variable is required")
-    .max(MAX_BULK_VARS, `A single bulk update is limited to ${MAX_BULK_VARS} variables`),
-  markSecret: z.boolean().optional().default(false)
+    .max(MAX_BULK_VARS, `A single bulk update is limited to ${MAX_BULK_VARS} variables`)
 });

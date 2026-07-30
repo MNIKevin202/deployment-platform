@@ -95,7 +95,7 @@ describe("POST /apps/:id/environment/bulk", () => {
     assert.equal(stored.find((v) => v.key === "mongo")?.value, "new-value");
   });
 
-  test("preserves an existing variable's secret flag on bulk update", async () => {
+  test("leaves an existing variable's secret flag alone when isSecret is omitted", async () => {
     appDatabase.createAppEnvVar({
       appId,
       key: "API_KEY",
@@ -108,8 +108,7 @@ describe("POST /apps/:id/environment/bulk", () => {
       method: "POST",
       url: `/apps/${appId}/environment/bulk`,
       payload: {
-        variables: [{ key: "API_KEY", value: "new-secret" }],
-        markSecret: false
+        variables: [{ key: "API_KEY", value: "new-secret" }]
       }
     });
 
@@ -118,7 +117,27 @@ describe("POST /apps/:id/environment/bulk", () => {
     assert.equal(stored?.value, "new-secret");
   });
 
-  test("marks newly created variables as secret when requested, without affecting existing ones", async () => {
+  test("flips an existing variable's secret flag when isSecret is explicitly set", async () => {
+    appDatabase.createAppEnvVar({
+      appId,
+      key: "API_KEY",
+      value: "old-secret",
+      isSecret: true,
+      enabled: true
+    });
+
+    await app.inject({
+      method: "POST",
+      url: `/apps/${appId}/environment/bulk`,
+      payload: {
+        variables: [{ key: "API_KEY", value: "new-value", isSecret: false }]
+      }
+    });
+
+    assert.equal(appDatabase.getAppEnvVarByKey(appId, "API_KEY")?.isSecret, false);
+  });
+
+  test("marks individual new variables as secret per-line, without affecting others", async () => {
     appDatabase.createAppEnvVar({
       appId,
       key: "PLAIN",
@@ -133,14 +152,15 @@ describe("POST /apps/:id/environment/bulk", () => {
       payload: {
         variables: [
           { key: "PLAIN", value: "still-visible" },
-          { key: "NEW_SECRET", value: "hidden" }
-        ],
-        markSecret: true
+          { key: "NEW_SECRET", value: "hidden", isSecret: true },
+          { key: "NEW_PLAIN", value: "also-visible" }
+        ]
       }
     });
 
     assert.equal(appDatabase.getAppEnvVarByKey(appId, "PLAIN")?.isSecret, false);
     assert.equal(appDatabase.getAppEnvVarByKey(appId, "NEW_SECRET")?.isSecret, true);
+    assert.equal(appDatabase.getAppEnvVarByKey(appId, "NEW_PLAIN")?.isSecret, false);
   });
 
   test("marks the app's environment as pending exactly once", async () => {

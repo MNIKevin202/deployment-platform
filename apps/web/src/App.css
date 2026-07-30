@@ -656,6 +656,8 @@ code {
 .logs-modal,
 .form-modal,
 .confirm-modal {
+  display: flex;
+  flex-direction: column;
   width: min(1000px, 100%);
   max-height: 82vh;
   overflow: hidden;
@@ -695,6 +697,18 @@ code {
 .bulk-env-preview {
   display: grid;
   gap: 10px;
+}
+
+.bulk-env-preview .table-wrap {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.bulk-env-preview thead th {
+  position: sticky;
+  top: 0;
+  background: var(--color-surface);
+  z-index: 1;
 }
 
 .bulk-env-row-error {
@@ -765,6 +779,7 @@ code {
   gap: 18px;
   padding: 22px;
   overflow-y: auto;
+  min-height: 0;
 }
 
 .form-modal label {

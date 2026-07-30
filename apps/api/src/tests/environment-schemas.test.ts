@@ -73,11 +73,18 @@ describe("updateEnvVarSchema", () => {
 });
 
 describe("bulkEnvVarsSchema", () => {
-  test("defaults markSecret to false", () => {
+  test("leaves isSecret undefined when omitted", () => {
     const result = bulkEnvVarsSchema.parse({
       variables: [{ key: "mongo", value: "http://123456" }]
     });
-    assert.equal(result.markSecret, false);
+    assert.equal(result.variables[0].isSecret, undefined);
+  });
+
+  test("accepts an explicit isSecret per variable", () => {
+    const result = bulkEnvVarsSchema.parse({
+      variables: [{ key: "mongo", value: "http://123456", isSecret: true }]
+    });
+    assert.equal(result.variables[0].isSecret, true);
   });
 
   test("rejects an empty variables array", () => {

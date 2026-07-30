@@ -300,7 +300,7 @@ export async function registerEnvironmentRoutes(
         });
       }
 
-      const { variables, markSecret } = parsedBody.data;
+      const { variables } = parsedBody.data;
 
       const seenKeys = new Set<string>();
 
@@ -319,18 +319,20 @@ export async function registerEnvironmentRoutes(
       let updated = 0;
 
       appDatabase.withTransaction(() => {
-        for (const { key, value } of variables) {
+        for (const { key, value, isSecret } of variables) {
           const existing = appDatabase.getAppEnvVarByKey(app.id, key);
 
           if (existing) {
-            appDatabase.updateAppEnvVar(existing.id, { value });
+            // isSecret omitted means "leave the existing flag alone" —
+            // updateAppEnvVar already treats an undefined isSecret that way.
+            appDatabase.updateAppEnvVar(existing.id, { value, isSecret });
             updated += 1;
           } else {
             appDatabase.createAppEnvVar({
               appId: app.id,
               key,
               value,
-              isSecret: markSecret,
+              isSecret: isSecret ?? false,
               enabled: true
             });
             created += 1;
