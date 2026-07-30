@@ -27,6 +27,19 @@ function validConfig(overrides: Record<string, unknown> = {}) {
   };
 }
 
+describe("appSourceConfigSchema — autoDeploy default", () => {
+  test("defaults autoDeploy to true when omitted (new sources deploy on push)", () => {
+    const { autoDeploy: _omitted, ...withoutAutoDeploy } = validConfig();
+    const parsed = appSourceConfigSchema.parse(withoutAutoDeploy);
+    assert.equal(parsed.autoDeploy, true);
+  });
+
+  test("respects an explicit autoDeploy: false", () => {
+    const parsed = appSourceConfigSchema.parse(validConfig({ autoDeploy: false }));
+    assert.equal(parsed.autoDeploy, false);
+  });
+});
+
 describe("repositoryOwnerSchema / repositoryNameSchema", () => {
   test("accepts a valid owner and repo name", () => {
     assert.equal(repositoryOwnerSchema.safeParse("octocat").success, true);
@@ -195,7 +208,7 @@ describe("appSourceConfigSchema", () => {
     if (result.success) {
       assert.equal(result.data.dockerfilePath, "Dockerfile");
       assert.equal(result.data.buildContext, ".");
-      assert.equal(result.data.autoDeploy, false);
+      assert.equal(result.data.autoDeploy, true);
     }
   });
 
