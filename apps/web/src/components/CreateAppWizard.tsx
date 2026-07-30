@@ -33,6 +33,7 @@ import {
   validateStorageMounts
 } from "../lib/wizardValidation";
 import BulkEnvVarDialog from "./BulkEnvVarDialog";
+import { generateSecret, type AppTemplate } from "../lib/appTemplates";
 import { useGithubRepositories } from "../hooks/useGithubRepositories";
 import { PORT_SOURCE_LABELS, PROJECT_TYPE_LABELS, STRATEGY_INFO } from "./SourcePanel";
 
@@ -40,6 +41,8 @@ interface CreateAppWizardProps {
   open: boolean;
   onClose: () => void;
   onCreated: (app: CreatedAppSummary) => void;
+  /** When set, pre-fills the manual-image flow from a catalog template. */
+  initialTemplate?: AppTemplate | null;
 }
 
 const STEP_LABELS = [
@@ -156,7 +159,8 @@ type SourceType = "manual" | "github";
 export default function CreateAppWizard({
   open,
   onClose,
-  onCreated
+  onCreated,
+  initialTemplate
 }: CreateAppWizardProps) {
   const [step, setStep] = useState(0);
 
@@ -294,6 +298,38 @@ export default function CreateAppWizard({
       resetWizard();
     }
   }, [open, resetWizard]);
+
+  // Seed the manual-image flow from a catalog template. Runs after the reset
+  // effect above (declared later), so it overrides the cleared defaults.
+  useEffect(() => {
+    if (!open || !initialTemplate) {
+      return;
+    }
+    setSourceType("manual");
+    setName(sanitizeAppName(initialTemplate.suggestedName));
+    setImage(initialTemplate.image);
+    setContainerPort(String(initialTemplate.containerPort));
+    setContainerPortManuallySet(true);
+    setEnvRows(
+      initialTemplate.env.map((envVar) => ({
+        rowId: nextRowId++,
+        key: envVar.key,
+        value: envVar.generate === "password" ? generateSecret() : envVar.value ?? "",
+        isSecret: Boolean(envVar.secret),
+        enabled: true
+      }))
+    );
+    setVolumeRows(
+      (initialTemplate.volumes ?? []).map((containerPath) => ({
+        rowId: nextRowId++,
+        containerPath,
+        volumeName: "",
+        readOnly: false
+      }))
+    );
+    setStep(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialTemplate]);
 
   useEffect(() => {
     if (!open || globalVarsLoaded) {

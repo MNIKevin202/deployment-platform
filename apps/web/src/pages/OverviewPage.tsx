@@ -23,6 +23,7 @@ interface OverviewPageProps {
   onDeleteApp: (container: ContainerSummary) => void;
   onViewApp: (storedApp: StoredApp) => void;
   onCreateApp: () => void;
+  onBrowseTemplates?: () => void;
 }
 
 function formatMemory(bytes: number): string {
@@ -63,7 +64,8 @@ export default function OverviewPage({
   onOpenLogs,
   onDeleteApp,
   onViewApp,
-  onCreateApp
+  onCreateApp,
+  onBrowseTemplates
 }: OverviewPageProps) {
   const serviceApps = managedApps.filter((c) => !isDatabaseImage(c.image));
   const databaseApps = managedApps.filter((c) => isDatabaseImage(c.image));
@@ -147,6 +149,12 @@ export default function OverviewPage({
                   ▤ Table
                 </button>
               </div>
+            )}
+
+            {onBrowseTemplates && (
+              <button className="secondary-button compact" type="button" onClick={onBrowseTemplates}>
+                Templates
+              </button>
             )}
 
             <button className="primary-button compact" type="button" onClick={onCreateApp}>
