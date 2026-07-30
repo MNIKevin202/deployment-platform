@@ -27,6 +27,7 @@ import MetricsPanel from "./MetricsPanel";
 import PerformanceDiagnosticsPanel from "./PerformanceDiagnosticsPanel";
 import LogsPanel from "./LogsPanel";
 import ActivityPanel from "./ActivityPanel";
+import HistoryPanel from "./HistoryPanel";
 import SourcePanel from "./SourcePanel";
 
 interface AppDetailProps {
@@ -46,6 +47,7 @@ type DetailTab =
   | "metrics"
   | "performance"
   | "logs"
+  | "history"
   | "activity";
 
 async function readApiError(
@@ -879,6 +881,7 @@ export default function AppDetail({
           { key: "metrics", label: "Metrics" },
           { key: "performance", label: "Performance" },
           { key: "logs", label: "Logs" },
+          { key: "history", label: "History" },
           { key: "activity", label: "Activity" }
         ]}
         active={activeTab}
@@ -1165,6 +1168,10 @@ export default function AppDetail({
 
       {activeTab === "logs" && (
         <LogsPanel appId={appId} appName={detail.name} containerRunning={isRunning} />
+      )}
+
+      {activeTab === "history" && (
+        <HistoryPanel appId={appId} onReverted={() => void loadDetail()} />
       )}
 
       {activeTab === "activity" && <ActivityPanel appId={appId} />}

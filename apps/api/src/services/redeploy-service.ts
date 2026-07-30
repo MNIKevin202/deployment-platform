@@ -195,9 +195,25 @@ export function errorMessage(error: unknown): string {
  * one into its place, since Docker requires the name to be free before the
  * rename can succeed.
  */
+export interface RedeployOptions {
+  /**
+   * Run this image instead of the app's stored image. Used by revert, where
+   * the target is a retained per-version build (`deployment-app-<id>:<sha>`)
+   * rather than whatever the app currently points at.
+   */
+  imageOverride?: string;
+  /**
+   * Skip the registry pull. Revert targets are locally-built images that
+   * exist on the host but were never pushed to a registry, so pulling them
+   * would fail — the caller confirms the image is present first.
+   */
+  skipPull?: boolean;
+}
+
 export async function redeployApp(
   deps: RedeployDependencies,
-  appId: number
+  appId: number,
+  options: RedeployOptions = {}
 ): Promise<RedeployResult> {
   const { appDatabase, dockerOps, reconcileRouting, recordEvent } = deps;
 
@@ -214,6 +230,7 @@ export async function redeployApp(
     };
   }
 
+  const image = options.imageOverride ?? app.image;
   const containerName = app.containerName;
   const exposedPort = `${app.containerPort}/tcp`;
   const tempContainerName = `${containerName}-redeploy-${randomBytes(4).toString("hex")}`;
@@ -223,22 +240,24 @@ export async function redeployApp(
     eventType: "redeploy-started",
     severity: "info",
     message: `Redeploy started for "${app.name}"`,
-    metadata: { image: app.image }
+    metadata: { image }
   });
 
-  try {
-    await dockerOps.pullImage(app.image);
-  } catch (error) {
-    const message = `Unable to pull image "${app.image}": ${errorMessage(error)}`;
+  if (!options.skipPull) {
+    try {
+      await dockerOps.pullImage(image);
+    } catch (error) {
+      const message = `Unable to pull image "${image}": ${errorMessage(error)}`;
 
-    recordEvent({
-      appId: app.id,
-      eventType: "redeploy-failed",
-      severity: "error",
-      message
-    });
+      recordEvent({
+        appId: app.id,
+        eventType: "redeploy-failed",
+        severity: "error",
+        message
+      });
 
-    return { success: false, message };
+      return { success: false, message };
+    }
   }
 
   const volumes = appDatabase.listAppVolumes(app.id);
@@ -271,7 +290,7 @@ export async function redeployApp(
   try {
     const created = await dockerOps.createContainer({
       name: tempContainerName,
-      Image: app.image,
+      Image: image,
       Env: envArray,
       Labels: {
         "com.deployment-platform.managed": "true",
@@ -460,7 +479,7 @@ export async function redeployApp(
     eventType: "redeploy-succeeded",
     severity: "info",
     message: `Redeploy succeeded for "${app.name}"`,
-    metadata: { newContainerId: finalContainerId, image: app.image }
+    metadata: { newContainerId: finalContainerId, image }
   });
 
   if (routingWarning) {

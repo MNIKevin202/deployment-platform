@@ -6,6 +6,7 @@ import { createEnvironmentRepository } from "./environment-database.js";
 import { createVolumeRepository } from "./volume-database.js";
 import { createHealthRepository } from "./health-database.js";
 import { createEventRepository } from "./event-database.js";
+import { createDeploymentRepository } from "./deployment-database.js";
 import { createCredentialRepository } from "./credential-database.js";
 import { createAppSourceRepository } from "./app-source-database.js";
 import { createPerformanceDiagnosticsRepository } from "./performance-diagnostics-database.js";
@@ -42,6 +43,12 @@ export type {
   CreateDeploymentEventInput,
   ListDeploymentEventsOptions
 } from "./event-database.js";
+
+export type {
+  StoredDeployment,
+  DeploymentSourceKind,
+  RecordDeploymentInput
+} from "./deployment-database.js";
 
 export type {
   StoredProviderCredential,
@@ -383,6 +390,7 @@ export function createAppDatabase(databasePath: string) {
   const volumeRepository = createVolumeRepository(db);
   const healthRepository = createHealthRepository(db);
   const eventRepository = createEventRepository(db);
+  const deploymentRepository = createDeploymentRepository(db);
   const credentialRepository = createCredentialRepository(db);
   const appSourceRepository = createAppSourceRepository(db);
   const performanceDiagnosticsRepository = createPerformanceDiagnosticsRepository(db);
@@ -412,6 +420,7 @@ export function createAppDatabase(databasePath: string) {
     ...volumeRepository,
     ...healthRepository,
     ...eventRepository,
+    ...deploymentRepository,
     ...credentialRepository,
     ...appSourceRepository,
     ...performanceDiagnosticsRepository,
