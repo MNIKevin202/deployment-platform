@@ -4,7 +4,8 @@ export type Section =
   | "databases"
   | "repositories"
   | "environment"
-  | "system";
+  | "system"
+  | "settings";
 
 interface SidebarProps {
   active: Section | null;
@@ -17,7 +18,8 @@ const NAV_ITEMS: { key: Section; label: string; glyph: string }[] = [
   { key: "databases", label: "Databases", glyph: "▤" },
   { key: "repositories", label: "Repositories", glyph: "⌥" },
   { key: "environment", label: "Environment", glyph: "⚙" },
-  { key: "system", label: "System", glyph: "◫" }
+  { key: "system", label: "System", glyph: "◫" },
+  { key: "settings", label: "Settings", glyph: "⛭" }
 ];
 
 export default function Sidebar({ active, onSelect }: SidebarProps) {

@@ -59,6 +59,7 @@ import { deployFromGithub, type GithubDeployDependencies } from "./services/gith
 import { registerGithubDeployRoutes } from "./routes/github-deploy.js";
 import { registerDeploymentRoutes } from "./routes/deployments.js";
 import { registerDeploymentSettingsRoutes } from "./routes/deployment-settings.js";
+import { registerSettingsRoutes } from "./routes/settings.js";
 import { createAutoDeployScheduler } from "./services/auto-deploy-service.js";
 import type { RevertDependencies } from "./services/revert-service.js";
 import { verifyGitAvailable } from "./services/github-clone-service.js";
@@ -74,9 +75,10 @@ const AUTO_DEPLOY_POLL_INTERVAL_MS = Math.max(
   Number(process.env.AUTO_DEPLOY_POLL_INTERVAL_MS) || 60_000
 );
 
-const appDatabase = createAppDatabase(
-  process.env.DATABASE_PATH ?? "/data/deployment-platform.sqlite"
-);
+const DATABASE_PATH = process.env.DATABASE_PATH ?? "/data/deployment-platform.sqlite";
+const BACKUPS_DIR = process.env.BACKUPS_DIR ?? "/data/backups";
+
+const appDatabase = createAppDatabase(DATABASE_PATH);
 
 const routingService = createRoutingService({
   // Default ON: the platform's core value is routing managed apps. It can be
@@ -99,6 +101,14 @@ const routingService = createRoutingService({
 const app = Fastify({
   logger: true
 });
+
+// Raw binary parser for backup uploads (POST /settings/restore). The route
+// sets its own generous bodyLimit; no other route consumes octet-stream.
+app.addContentTypeParser(
+  "application/octet-stream",
+  { parseAs: "buffer" },
+  (_request, body, done) => done(null, body)
+);
 
 /**
  * Apps created before automatic domains existed (Phase 2) have a NULL
@@ -259,6 +269,8 @@ const revertDeps: RevertDependencies = {
 await registerDeploymentRoutes(app, { appDatabase, revertDeps });
 
 await registerDeploymentSettingsRoutes(app, { appDatabase });
+
+await registerSettingsRoutes(app, { appDatabase, dbPath: DATABASE_PATH, backupsDir: BACKUPS_DIR });
 
 // Auto-deploy: poll each auto-deploy-enabled GitHub app's branch and deploy
 // when its HEAD commit changes. Reuses the same deploy pipeline and GitHub
