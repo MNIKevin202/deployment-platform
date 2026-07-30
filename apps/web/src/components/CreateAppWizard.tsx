@@ -391,7 +391,9 @@ export default function CreateAppWizard({
   const selectGithubRepo = async (repo: SourceRepository) => {
     setGithubRepo(repo);
     setGithubBranch(repo.defaultBranch);
-    setName((current) => current || repo.name);
+    // Slugify the repo-derived name too — a repo like "ClovaChatWebsite"
+    // must become a valid lowercase app name, matching what typing produces.
+    setName((current) => current || sanitizeAppName(repo.name));
     setImage((current) => current || GITHUB_PLACEHOLDER_IMAGE);
 
     try {

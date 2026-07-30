@@ -264,6 +264,23 @@ describe("CreateAppWizard — repository loading, pagination, and search", () =>
     await screen.findByText("MNIKevin202/DeploymentPlatformInstaller");
   });
 
+  test("prefills the app name from the repo, lowercased and slugified", async () => {
+    const user = userEvent.setup();
+    installConnectedRepoFetchMock([[{ id: "1", owner: "MNIKevin202", name: "DeploymentPlatformInstaller" }]]);
+
+    render(<CreateAppWizard open onClose={vi.fn()} onCreated={vi.fn()} />);
+    await goToSourceStepAndSelectGithub(user);
+
+    await screen.findByText("MNIKevin202/DeploymentPlatformInstaller");
+    await user.click(screen.getByText("MNIKevin202/DeploymentPlatformInstaller"));
+    await screen.findByRole("button", { name: "Re-inspect Repository" });
+
+    // On Basics, the name is derived from the repo but valid (no capitals).
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    const nameInput = (await screen.findByPlaceholderText("hello-nginx")) as HTMLInputElement;
+    expect(nameInput.value).toBe("deploymentplatforminstaller");
+  });
+
   test("loading state is shown while the first page is in flight", async () => {
     const user = userEvent.setup();
     let resolveRepos: ((value: Response) => void) | null = null;
