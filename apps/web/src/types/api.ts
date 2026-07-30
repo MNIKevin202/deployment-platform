@@ -456,6 +456,20 @@ export interface SuggestPortResponse {
   port: number;
 }
 
+export interface ImagePruneInfo {
+  success: boolean;
+  keepPerApp: number;
+  candidates: number;
+  reclaimableBytes: number;
+}
+
+export interface ImagePruneResult {
+  success: boolean;
+  removed: number;
+  reclaimedBytes: number;
+  failed: number;
+}
+
 // ---------- GitHub integration (Phase 10) ----------
 
 export type SourceProviderName = "github";

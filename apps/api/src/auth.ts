@@ -1,6 +1,7 @@
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import {
+  randomBytes,
   scryptSync,
   timingSafeEqual
 } from "node:crypto";
@@ -18,6 +19,21 @@ const loginSchema = z.object({
   username: z.string().min(1).max(100),
   password: z.string().min(1).max(500)
 });
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(500),
+  newPassword: z.string().min(8).max(500)
+});
+
+/**
+ * Lets the owner change their password in-app: the new hash is stored via
+ * `setStoredPasswordHash` and thereafter takes precedence over the env
+ * `ADMIN_PASSWORD_HASH` (which remains the initial/fallback credential).
+ */
+export interface AuthenticationOptions {
+  getStoredPasswordHash?: () => string | null;
+  setStoredPasswordHash?: (hash: string) => void;
+}
 
 interface SessionData {
   username: string;
@@ -171,6 +187,18 @@ export function verifyPassword(
   return timingSafeEqual(suppliedHash, expectedHash);
 }
 
+/**
+ * Produces a canonical `<salt-hex>:<key-hex>` password hash in the exact
+ * format verifyPassword expects — a fresh 32-byte random salt and a 64-byte
+ * scrypt key using Node's default scrypt parameters (the same call
+ * verifyPassword makes). Used by the in-app change-password flow.
+ */
+export function hashPassword(password: string): string {
+  const salt = randomBytes(PASSWORD_HASH_SALT_BYTES);
+  const key = scryptSync(password, salt, PASSWORD_HASH_KEY_BYTES);
+  return `${salt.toString("hex")}:${key.toString("hex")}`;
+}
+
 function encodeSession(session: SessionData): string {
   return Buffer.from(
     JSON.stringify(session),
@@ -257,13 +285,28 @@ export function readAuthenticatedUsername(request: FastifyRequest): string | nul
 }
 
 export async function registerAuthentication(
-  app: FastifyInstance
+  app: FastifyInstance,
+  options: AuthenticationOptions = {}
 ): Promise<void> {
   const adminUsername =
     getRequiredEnvironmentVariable("ADMIN_USERNAME");
 
   const adminPasswordHash =
     getRequiredEnvironmentVariable("ADMIN_PASSWORD_HASH");
+
+  const getStoredPasswordHash = options.getStoredPasswordHash ?? (() => null);
+  const setStoredPasswordHash = options.setStoredPasswordHash ?? (() => {});
+
+  // The current credential is the in-app override when one has been set and
+  // is well-formed, otherwise the environment hash. A malformed override is
+  // ignored rather than locking the operator out.
+  function effectivePasswordHash(): string {
+    const stored = getStoredPasswordHash();
+    if (stored && tryParsePasswordHash(stored)) {
+      return stored;
+    }
+    return adminPasswordHash;
+  }
 
   const sessionSecret =
     getRequiredEnvironmentVariable("SESSION_SECRET");
@@ -339,7 +382,7 @@ export async function registerAuthentication(
 
       const passwordMatches = verifyPassword(
         parsedBody.data.password,
-        adminPasswordHash
+        effectivePasswordHash()
       );
 
       if (!usernameMatches || !passwordMatches) {
@@ -434,4 +477,36 @@ export async function registerAuthentication(
       message: "Logged out"
     };
   });
+
+  // Authenticated (the onRequest hook above already requires a valid session
+  // for this path): change the owner's password by storing a new hash that
+  // overrides the environment credential.
+  app.post(
+    "/account/password",
+    { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const parsed = changePasswordSchema.safeParse(request.body);
+
+      if (!parsed.success) {
+        return reply.code(400).send({
+          success: false,
+          message: "A current password and a new password of at least 8 characters are required."
+        });
+      }
+
+      if (!verifyPassword(parsed.data.currentPassword, effectivePasswordHash())) {
+        return reply.code(403).send({
+          success: false,
+          message: "Your current password is incorrect."
+        });
+      }
+
+      setStoredPasswordHash(hashPassword(parsed.data.newPassword));
+
+      return {
+        success: true,
+        message: "Password updated. Use your new password the next time you sign in."
+      };
+    }
+  );
 }

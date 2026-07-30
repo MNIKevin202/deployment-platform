@@ -61,6 +61,8 @@ import { registerDeploymentRoutes } from "./routes/deployments.js";
 import { registerDeploymentSettingsRoutes } from "./routes/deployment-settings.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerPortsRoutes } from "./routes/ports.js";
+import { registerImageRoutes } from "./routes/images.js";
+import { createImagePruneDockerOps } from "./services/image-prune-service.js";
 import { createAutoDeployScheduler } from "./services/auto-deploy-service.js";
 import type { RevertDependencies } from "./services/revert-service.js";
 import { verifyGitAvailable } from "./services/github-clone-service.js";
@@ -149,7 +151,11 @@ await app.register(cors, {
   origin: true
 });
 
-await registerAuthentication(app);
+const ADMIN_PASSWORD_HASH_SETTING = "admin_password_hash_override";
+await registerAuthentication(app, {
+  getStoredPasswordHash: () => appDatabase.getSetting(ADMIN_PASSWORD_HASH_SETTING),
+  setStoredPasswordHash: (hash) => appDatabase.setSetting(ADMIN_PASSWORD_HASH_SETTING, hash)
+});
 await registerEnvironmentRoutes(app, { appDatabase });
 await registerStorageRoutes(app, { appDatabase });
 
@@ -274,6 +280,8 @@ await registerDeploymentSettingsRoutes(app, { appDatabase });
 await registerSettingsRoutes(app, { appDatabase, dbPath: DATABASE_PATH, backupsDir: BACKUPS_DIR });
 
 await registerPortsRoutes(app, { appDatabase });
+
+await registerImageRoutes(app, { appDatabase, imageOps: createImagePruneDockerOps(docker) });
 
 // Auto-deploy: poll each auto-deploy-enabled GitHub app's branch and deploy
 // when its HEAD commit changes. Reuses the same deploy pipeline and GitHub
