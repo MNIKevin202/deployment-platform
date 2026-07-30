@@ -1,6 +1,7 @@
 export type Section =
   | "overview"
   | "apps"
+  | "databases"
   | "repositories"
   | "environment"
   | "system";
@@ -13,6 +14,7 @@ interface SidebarProps {
 const NAV_ITEMS: { key: Section; label: string; glyph: string }[] = [
   { key: "overview", label: "Overview", glyph: "◈" },
   { key: "apps", label: "Apps", glyph: "▣" },
+  { key: "databases", label: "Databases", glyph: "▤" },
   { key: "repositories", label: "Repositories", glyph: "⌥" },
   { key: "environment", label: "Environment", glyph: "⚙" },
   { key: "system", label: "System", glyph: "◫" }

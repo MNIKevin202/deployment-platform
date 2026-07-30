@@ -1,5 +1,6 @@
 import StatCard from "../components/StatCard";
 import AppCard from "../components/AppCard";
+import { isDatabaseImage } from "../lib/appKind";
 import type {
   ContainerAction,
   ContainerSummary,
@@ -61,6 +62,8 @@ export default function OverviewPage({
   onViewApp,
   onCreateApp
 }: OverviewPageProps) {
+  const serviceApps = managedApps.filter((c) => !isDatabaseImage(c.image));
+  const databaseApps = managedApps.filter((c) => isDatabaseImage(c.image));
   const runningCount = managedApps.filter((c) => c.state === "running").length;
   const stoppedCount = managedApps.length - runningCount;
   const routingHealth = routingHealthLabel(routingStatus);
@@ -68,7 +71,8 @@ export default function OverviewPage({
   return (
     <div className="page">
       <section className="stats-grid">
-        <StatCard label="Managed Apps" value={String(managedApps.length)} />
+        <StatCard label="Apps" value={String(serviceApps.length)} />
+        <StatCard label="Databases" value={String(databaseApps.length)} />
         <StatCard label="Running" value={String(runningCount)} tone="positive" />
         <StatCard label="Stopped" value={String(stoppedCount)} tone={stoppedCount > 0 ? "warning" : "neutral"} />
         <StatCard
@@ -98,7 +102,7 @@ export default function OverviewPage({
         <div className="section-heading">
           <div>
             <p className="eyebrow">Applications</p>
-            <h2>Managed Apps</h2>
+            <h2>Apps</h2>
           </div>
 
           <button className="primary-button compact" type="button" onClick={onCreateApp}>
@@ -106,9 +110,9 @@ export default function OverviewPage({
           </button>
         </div>
 
-        {managedApps.length === 0 ? (
+        {serviceApps.length === 0 ? (
           <div className="empty-state app-empty-state">
-            <h3>No managed apps yet</h3>
+            <h3>No apps yet</h3>
             <p>Deploy your first application from a Docker image.</p>
             <button className="primary-button" type="button" onClick={onCreateApp}>
               Deploy First App
@@ -116,7 +120,7 @@ export default function OverviewPage({
           </div>
         ) : (
           <div className="container-grid">
-            {managedApps.map((container) => {
+            {serviceApps.map((container) => {
               const appName = container.labels["com.deployment-platform.app-name"];
               const storedApp = appName ? storedAppsByName.get(appName) : undefined;
 
