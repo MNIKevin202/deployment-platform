@@ -35,3 +35,18 @@ export const updateEnvVarSchema = z
     (data) => data.value !== undefined || data.isSecret !== undefined || data.enabled !== undefined,
     "At least one field must be provided"
   );
+
+const MAX_BULK_VARS = 200;
+
+export const bulkEnvVarsSchema = z.object({
+  variables: z
+    .array(
+      z.object({
+        key: envKeySchema,
+        value: envValueSchema
+      })
+    )
+    .min(1, "At least one variable is required")
+    .max(MAX_BULK_VARS, `A single bulk update is limited to ${MAX_BULK_VARS} variables`),
+  markSecret: z.boolean().optional().default(false)
+});

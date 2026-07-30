@@ -6,6 +6,7 @@ import type {
   StoredGlobalEnvVar
 } from "../database.js";
 import {
+  bulkEnvVarsSchema,
   createEnvVarSchema,
   updateEnvVarSchema
 } from "../schemas/environment.js";
@@ -264,6 +265,86 @@ export async function registerEnvironmentRoutes(
       return reply.code(201).send({
         success: true,
         variable: maskAppVar(created)
+      });
+    }
+  );
+
+  fastify.post<{ Params: AppIdParams }>(
+    "/apps/:id/environment/bulk",
+    async (request, reply) => {
+      const parsedParams = idParamSchema.safeParse(request.params);
+
+      if (!parsedParams.success) {
+        return reply.code(400).send({
+          success: false,
+          message: "Invalid app id"
+        });
+      }
+
+      const app = appDatabase.getAppById(parsedParams.data.id);
+
+      if (!app) {
+        return reply.code(404).send({
+          success: false,
+          message: "App not found"
+        });
+      }
+
+      const parsedBody = bulkEnvVarsSchema.safeParse(request.body);
+
+      if (!parsedBody.success) {
+        return reply.code(400).send({
+          success: false,
+          message: "Invalid environment variables",
+          errors: parsedBody.error.flatten()
+        });
+      }
+
+      const { variables, markSecret } = parsedBody.data;
+
+      const seenKeys = new Set<string>();
+
+      for (const variable of variables) {
+        if (seenKeys.has(variable.key)) {
+          return reply.code(400).send({
+            success: false,
+            message: `Duplicate key "${variable.key}" in submitted variables`
+          });
+        }
+
+        seenKeys.add(variable.key);
+      }
+
+      let created = 0;
+      let updated = 0;
+
+      appDatabase.withTransaction(() => {
+        for (const { key, value } of variables) {
+          const existing = appDatabase.getAppEnvVarByKey(app.id, key);
+
+          if (existing) {
+            appDatabase.updateAppEnvVar(existing.id, { value });
+            updated += 1;
+          } else {
+            appDatabase.createAppEnvVar({
+              appId: app.id,
+              key,
+              value,
+              isSecret: markSecret,
+              enabled: true
+            });
+            created += 1;
+          }
+        }
+      });
+
+      appDatabase.touchAppEnvironment(app.id);
+
+      return reply.code(200).send({
+        success: true,
+        created,
+        updated,
+        variables: appDatabase.listAppEnvVars(app.id).map(maskAppVar)
       });
     }
   );

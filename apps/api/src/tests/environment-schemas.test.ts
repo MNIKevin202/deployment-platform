@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+  bulkEnvVarsSchema,
   createEnvVarSchema,
   envKeySchema,
   updateEnvVarSchema
@@ -68,5 +69,36 @@ describe("updateEnvVarSchema", () => {
 
   test("accepts a partial update", () => {
     assert.equal(updateEnvVarSchema.safeParse({ enabled: false }).success, true);
+  });
+});
+
+describe("bulkEnvVarsSchema", () => {
+  test("defaults markSecret to false", () => {
+    const result = bulkEnvVarsSchema.parse({
+      variables: [{ key: "mongo", value: "http://123456" }]
+    });
+    assert.equal(result.markSecret, false);
+  });
+
+  test("rejects an empty variables array", () => {
+    assert.equal(bulkEnvVarsSchema.safeParse({ variables: [] }).success, false);
+  });
+
+  test("rejects more than 200 variables", () => {
+    const variables = Array.from({ length: 201 }, (_, i) => ({
+      key: `KEY_${i}`,
+      value: "x"
+    }));
+    assert.equal(bulkEnvVarsSchema.safeParse({ variables }).success, false);
+  });
+
+  test("rejects an invalid key within the batch", () => {
+    const result = bulkEnvVarsSchema.safeParse({
+      variables: [
+        { key: "OK", value: "1" },
+        { key: "1BAD", value: "2" }
+      ]
+    });
+    assert.equal(result.success, false);
   });
 });

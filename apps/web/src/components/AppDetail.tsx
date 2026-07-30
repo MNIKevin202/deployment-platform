@@ -16,6 +16,7 @@ import ConfirmationDialog from "./ConfirmationDialog";
 import Tabs from "./Tabs";
 import EnvVarTable from "./EnvVarTable";
 import EnvVarDialog from "./EnvVarDialog";
+import BulkEnvVarDialog from "./BulkEnvVarDialog";
 import StorageTable from "./StorageTable";
 import StorageDialog from "./StorageDialog";
 import HealthPanel from "./HealthPanel";
@@ -153,6 +154,10 @@ export default function AppDetail({
     null
   );
   const [envDeleting, setEnvDeleting] = useState(false);
+
+  const [showBulkEnvDialog, setShowBulkEnvDialog] = useState(false);
+  const [bulkEnvSubmitting, setBulkEnvSubmitting] = useState(false);
+  const [bulkEnvError, setBulkEnvError] = useState("");
 
   const [storageVolumes, setStorageVolumes] = useState<StoredAppVolume[]>([]);
   const [storageLoaded, setStorageLoaded] = useState(false);
@@ -470,6 +475,53 @@ export default function AppDetail({
       );
     } finally {
       setEnvSubmitting(false);
+    }
+  };
+
+  const submitBulkEnvDialog = async (
+    variables: { key: string; value: string }[],
+    markSecret: boolean
+  ) => {
+    try {
+      setBulkEnvSubmitting(true);
+      setBulkEnvError("");
+
+      const response = await fetch(`/api/apps/${appId}/environment/bulk`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ variables, markSecret })
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          await readApiError(response, "Unable to apply variables")
+        );
+      }
+
+      const result = (await response.json()) as {
+        created: number;
+        updated: number;
+      };
+
+      const parts: string[] = [];
+      if (result.created > 0) parts.push(`${result.created} added`);
+      if (result.updated > 0) parts.push(`${result.updated} updated`);
+      setNotice(
+        parts.length > 0
+          ? `Applied variables — ${parts.join(", ")}.`
+          : "No changes were applied."
+      );
+
+      setShowBulkEnvDialog(false);
+      await loadEnvironment();
+      await loadDetail();
+      onAppChanged();
+    } catch (error) {
+      setBulkEnvError(
+        error instanceof Error ? error.message : "Unable to apply variables"
+      );
+    } finally {
+      setBulkEnvSubmitting(false);
     }
   };
 
@@ -961,13 +1013,25 @@ export default function AppDetail({
               <div className="env-scope-block">
                 <div className="env-scope-heading">
                   <h3>App-Specific Variables</h3>
-                  <button
-                    className="primary-button compact"
-                    type="button"
-                    onClick={openCreateEnvDialog}
-                  >
-                    Add Variable
-                  </button>
+                  <div className="env-scope-heading-actions">
+                    <button
+                      className="secondary-button compact"
+                      type="button"
+                      onClick={() => {
+                        setBulkEnvError("");
+                        setShowBulkEnvDialog(true);
+                      }}
+                    >
+                      Paste Variables
+                    </button>
+                    <button
+                      className="primary-button compact"
+                      type="button"
+                      onClick={openCreateEnvDialog}
+                    >
+                      Add Variable
+                    </button>
+                  </div>
                 </div>
 
                 <EnvVarTable
@@ -1088,6 +1152,17 @@ export default function AppDetail({
         error={envDialogError}
         onSubmit={(values) => void submitEnvDialog(values)}
         onCancel={() => setShowEnvDialog(false)}
+      />
+
+      <BulkEnvVarDialog
+        open={showBulkEnvDialog}
+        existingKeys={new Set(appVars.map((variable) => variable.key))}
+        submitting={bulkEnvSubmitting}
+        error={bulkEnvError}
+        onSubmit={(variables, markSecret) =>
+          void submitBulkEnvDialog(variables, markSecret)
+        }
+        onCancel={() => setShowBulkEnvDialog(false)}
       />
 
       <ConfirmationDialog
