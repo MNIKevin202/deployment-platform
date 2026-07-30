@@ -15,3 +15,8 @@ generate-auth.sh
 # describes one specific server and must not be committed. Copy
 # release.config.example instead.
 release.config
+
+# Local dev-tool config (preview server launch configs) and dropped-in
+# source art for branding work — not part of the deployed app.
+.claude/
+assets/
