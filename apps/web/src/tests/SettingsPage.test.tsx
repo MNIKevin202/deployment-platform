@@ -12,9 +12,17 @@ describe("SettingsPage — backup & restore", () => {
     vi.unstubAllGlobals();
   });
 
-  test("renders backup and restore sections", () => {
+  test("shows backup and restore sections on the Backups tab", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ success: true, config: { enabled: false, intervalHours: 24, retention: 7 }, backups: [], lastRunAt: null })
+      }) as Response)
+    );
     render(<SettingsPage />);
-    expect(screen.getByRole("button", { name: "Download backup" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Backups" }));
+    expect(await screen.findByRole("button", { name: "Download backup" })).toBeInTheDocument();
     expect(screen.getByText("Restore from a backup")).toBeInTheDocument();
   });
 
@@ -39,6 +47,7 @@ describe("SettingsPage — backup & restore", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<SettingsPage />);
+    await userEvent.click(screen.getByRole("tab", { name: "Backups" }));
 
     const file = new File([new Uint8Array([1, 2, 3])], "backup.tar.gz", { type: "application/gzip" });
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -87,6 +96,7 @@ describe("SettingsPage — backup & restore", () => {
     );
 
     render(<SettingsPage />);
+    await userEvent.click(screen.getByRole("tab", { name: "Backups" }));
 
     const file = new File([new Uint8Array([9])], "bad.tar.gz", { type: "application/gzip" });
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);

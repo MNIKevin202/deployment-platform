@@ -44,7 +44,7 @@ const SECTION_SUBTITLES: Record<Section, string> = {
   repositories: "Connect GitHub and browse repositories available for source-linked apps.",
   environment: "Variables inherited by every managed app, unless overridden.",
   system: "Protected platform services and host information.",
-  settings: "Back up and restore your platform configuration."
+  settings: "Account, notifications, backups, and disk maintenance."
 };
 
 function App() {
