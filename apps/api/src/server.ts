@@ -60,6 +60,7 @@ import { registerGithubDeployRoutes } from "./routes/github-deploy.js";
 import { registerDeploymentRoutes } from "./routes/deployments.js";
 import { registerDeploymentSettingsRoutes } from "./routes/deployment-settings.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
+import { registerPortsRoutes } from "./routes/ports.js";
 import { createAutoDeployScheduler } from "./services/auto-deploy-service.js";
 import type { RevertDependencies } from "./services/revert-service.js";
 import { verifyGitAvailable } from "./services/github-clone-service.js";
@@ -271,6 +272,8 @@ await registerDeploymentRoutes(app, { appDatabase, revertDeps });
 await registerDeploymentSettingsRoutes(app, { appDatabase });
 
 await registerSettingsRoutes(app, { appDatabase, dbPath: DATABASE_PATH, backupsDir: BACKUPS_DIR });
+
+await registerPortsRoutes(app, { appDatabase });
 
 // Auto-deploy: poll each auto-deploy-enabled GitHub app's branch and deploy
 // when its HEAD commit changes. Reuses the same deploy pipeline and GitHub

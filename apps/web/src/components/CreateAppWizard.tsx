@@ -17,6 +17,7 @@ import type {
   RestartPolicy,
   SourceBranch,
   SourceRepository,
+  SuggestPortResponse,
   WizardEnvVarInput,
   WizardVolumeInput
 } from "../types/api";
@@ -208,6 +209,7 @@ export default function CreateAppWizard({
   // the default" apart from "operator typed 3000 on purpose". Track it
   // explicitly instead, same pattern as githubStrategyManuallySet.
   const [containerPortManuallySet, setContainerPortManuallySet] = useState(false);
+  const [generatingPort, setGeneratingPort] = useState(false);
   const [restartPolicy, setRestartPolicy] = useState<RestartPolicy>("unless-stopped");
   const [runtime, setRuntime] = useState<BuildBriefRuntime>("docker");
   const [description, setDescription] = useState("");
@@ -686,6 +688,28 @@ export default function CreateAppWizard({
     );
   const removeVolumeRow = (rowId: number) =>
     setVolumeRows((rows) => rows.filter((row) => row.rowId !== rowId));
+
+  // Ask the server for a container port not already assigned to another app.
+  const generatePort = async () => {
+    try {
+      setGeneratingPort(true);
+      const response = await fetch("/api/ports/suggest");
+      if (!response.ok) {
+        return;
+      }
+      const result = (await response.json()) as SuggestPortResponse;
+      if (result?.port) {
+        setContainerPort(String(result.port));
+        setContainerPortSource("manual");
+        setContainerPortConfidence(null);
+        setContainerPortManuallySet(true);
+      }
+    } catch {
+      // Non-critical: leave the current port untouched on any failure.
+    } finally {
+      setGeneratingPort(false);
+    }
+  };
 
   const goNext = () => setStep((current) => Math.min(current + 1, LAST_STEP));
   const goBack = () => setStep((current) => Math.max(current - 1, 0));
@@ -1341,6 +1365,17 @@ export default function CreateAppWizard({
                       The port the application listens on inside its container.
                     </small>
                   </label>
+
+                  <div className="form-actions form-actions-start">
+                    <button
+                      className="secondary-button compact"
+                      type="button"
+                      onClick={() => void generatePort()}
+                      disabled={generatingPort}
+                    >
+                      {generatingPort ? "Finding a port…" : "Generate available port"}
+                    </button>
+                  </div>
 
                   {sourceType === "github" && containerPort.trim() && (
                     <p className="section-description">
