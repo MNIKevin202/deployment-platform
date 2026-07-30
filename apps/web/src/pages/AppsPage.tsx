@@ -17,6 +17,11 @@ interface AppsPageProps {
   onDeleteMissingApp: (storedApp: StoredApp) => void;
   onViewApp: (storedApp: StoredApp) => void;
   onCreateApp: () => void;
+  /** Heading + empty-state copy, so the same list serves both Apps and Databases. */
+  eyebrow?: string;
+  title?: string;
+  emptyTitle?: string;
+  emptyBody?: string;
 }
 
 export default function AppsPage({
@@ -29,7 +34,11 @@ export default function AppsPage({
   onDeleteApp,
   onDeleteMissingApp,
   onViewApp,
-  onCreateApp
+  onCreateApp,
+  eyebrow = "Applications",
+  title = "All Managed Apps",
+  emptyTitle = "No managed apps yet",
+  emptyBody = "Deploy your first application from a Docker image."
 }: AppsPageProps) {
   const hasAnyApp = managedApps.length > 0 || missingApps.length > 0;
 
@@ -38,8 +47,8 @@ export default function AppsPage({
       <section className="page-section">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Applications</p>
-            <h2>All Managed Apps</h2>
+            <p className="eyebrow">{eyebrow}</p>
+            <h2>{title}</h2>
           </div>
 
           <button className="primary-button compact" type="button" onClick={onCreateApp}>
@@ -49,8 +58,8 @@ export default function AppsPage({
 
         {!hasAnyApp ? (
           <div className="empty-state app-empty-state">
-            <h3>No managed apps yet</h3>
-            <p>Deploy your first application from a Docker image.</p>
+            <h3>{emptyTitle}</h3>
+            <p>{emptyBody}</p>
             <button className="primary-button" type="button" onClick={onCreateApp}>
               Deploy First App
             </button>

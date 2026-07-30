@@ -14,6 +14,7 @@ import RepositoriesPage from "./pages/RepositoriesPage";
 import RepositoryDetail from "./components/RepositoryDetail";
 import EnvironmentPage from "./pages/EnvironmentPage";
 import SystemPage from "./pages/SystemPage";
+import { isDatabaseImage } from "./lib/appKind";
 import type {
   ApiError,
   ContainerAction,
@@ -28,6 +29,7 @@ import type {
 const SECTION_TITLES: Record<Section, string> = {
   overview: "Overview",
   apps: "Apps",
+  databases: "Databases",
   repositories: "Repositories",
   environment: "Environment",
   system: "System"
@@ -35,7 +37,8 @@ const SECTION_TITLES: Record<Section, string> = {
 
 const SECTION_SUBTITLES: Record<Section, string> = {
   overview: "A snapshot of your platform and its managed applications.",
-  apps: "Deploy and manage applications running on your server.",
+  apps: "Deploy and manage the websites, bots, and services running on your server.",
+  databases: "Managed data stores — Postgres, MySQL, Redis, and the like.",
   repositories: "Connect GitHub and browse repositories available for source-linked apps.",
   environment: "Variables inherited by every managed app, unless overridden.",
   system: "Protected platform services and host information."
@@ -53,6 +56,7 @@ function App() {
   const [section, setSection] = useState<Section>(() => {
     const requested = new URLSearchParams(window.location.search).get("section");
     return requested === "apps" ||
+      requested === "databases" ||
       requested === "repositories" ||
       requested === "environment" ||
       requested === "system"
@@ -114,6 +118,25 @@ function App() {
   const missingApps = useMemo(
     () => storedApps.filter((storedApp) => storedApp.runtime?.present === false),
     [storedApps]
+  );
+
+  // Split managed apps and missing-container apps into services (websites, bots,
+  // workers) and databases, by image, so each lands in its own nav section.
+  const serviceApps = useMemo(
+    () => managedApps.filter((container) => !isDatabaseImage(container.image)),
+    [managedApps]
+  );
+  const databaseApps = useMemo(
+    () => managedApps.filter((container) => isDatabaseImage(container.image)),
+    [managedApps]
+  );
+  const serviceMissingApps = useMemo(
+    () => missingApps.filter((storedApp) => !isDatabaseImage(storedApp.image)),
+    [missingApps]
+  );
+  const databaseMissingApps = useMemo(
+    () => missingApps.filter((storedApp) => isDatabaseImage(storedApp.image)),
+    [missingApps]
   );
 
   const loadDashboard = useCallback(async () => {
@@ -440,9 +463,9 @@ function App() {
         />
       ) : section === "apps" ? (
         <AppsPage
-          managedApps={managedApps}
+          managedApps={serviceApps}
           storedAppsByName={storedAppsByName}
-          missingApps={missingApps}
+          missingApps={serviceMissingApps}
           actionLoading={actionLoading}
           onAction={(container, action) => void runAction(container, action)}
           onOpenLogs={(container) => setSelectedContainer(container)}
@@ -450,6 +473,23 @@ function App() {
           onDeleteMissingApp={(storedApp) => void deleteMissingApp(storedApp)}
           onViewApp={viewApp}
           onCreateApp={openCreateApp}
+        />
+      ) : section === "databases" ? (
+        <AppsPage
+          managedApps={databaseApps}
+          storedAppsByName={storedAppsByName}
+          missingApps={databaseMissingApps}
+          actionLoading={actionLoading}
+          onAction={(container, action) => void runAction(container, action)}
+          onOpenLogs={(container) => setSelectedContainer(container)}
+          onDeleteApp={(container) => void deleteApp(container)}
+          onDeleteMissingApp={(storedApp) => void deleteMissingApp(storedApp)}
+          onViewApp={viewApp}
+          onCreateApp={openCreateApp}
+          eyebrow="Data stores"
+          title="Managed Databases"
+          emptyTitle="No databases yet"
+          emptyBody="Deploy a database (Postgres, MySQL, Redis, …) from a Docker image."
         />
       ) : (
         <SystemPage
