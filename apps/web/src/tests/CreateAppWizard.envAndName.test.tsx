@@ -30,6 +30,9 @@ function installFetchMock() {
       if (url === "/api/apps/wizard/brief") {
         return jsonResponse(200, { domain: "x.apps.devminted.com", brief: "brief" });
       }
+      if (url === "/api/ports/suggest") {
+        return jsonResponse(200, { success: true, port: 4321 });
+      }
       throw new Error(`Unhandled fetch in test: ${url}`);
     })
   );
@@ -79,5 +82,24 @@ describe("CreateAppWizard — name slug + bulk env", () => {
     });
     // The dialog closed after applying.
     expect(screen.queryByText("Paste Variables")).not.toBeInTheDocument();
+  });
+
+  test("Generate available port fills the port field with the server's suggestion", async () => {
+    installFetchMock();
+    const user = userEvent.setup();
+    render(<CreateAppWizard open onClose={() => {}} onCreated={() => {}} />);
+
+    // Source -> Basics -> Runtime.
+    await user.click(await screen.findByRole("button", { name: "Continue" }));
+    await user.type(await screen.findByLabelText("App name", { exact: false }), "port-test");
+    await user.type(screen.getByLabelText("Docker image", { exact: false }), "nginx:alpine");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    const portInput = (await screen.findByLabelText("Container port", { exact: false })) as HTMLInputElement;
+    expect(portInput.value).toBe("3000");
+
+    await user.click(screen.getByRole("button", { name: "Generate available port" }));
+
+    await waitFor(() => expect(portInput.value).toBe("4321"));
   });
 });

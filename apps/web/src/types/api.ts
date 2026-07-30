@@ -451,6 +451,11 @@ export interface AutoDeployResponse {
   autoDeploy: boolean;
 }
 
+export interface SuggestPortResponse {
+  success: boolean;
+  port: number;
+}
+
 // ---------- GitHub integration (Phase 10) ----------
 
 export type SourceProviderName = "github";
