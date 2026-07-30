@@ -60,6 +60,8 @@ export interface StoredApp {
   status: string;
   desiredStatus: string;
   restartPolicy: string;
+  memoryLimitMb: number | null;
+  cpuLimit: number | null;
   createdAt: string;
   updatedAt: string;
   lastDeployedAt: string | null;
