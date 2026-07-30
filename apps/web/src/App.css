@@ -2014,3 +2014,71 @@ code {
   flex: 1;
   min-width: 0;
 }
+
+.update-status {
+  font-weight: 600;
+  margin: 0;
+}
+
+.update-status-available {
+  color: var(--color-accent);
+}
+
+.update-status-current {
+  color: var(--color-success);
+}
+
+/* ---------- Global "update available" banner ---------- */
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+}
+
+.update-banner-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  flex-shrink: 0;
+}
+
+.update-banner-text {
+  font-weight: 600;
+}
+
+.update-banner-reload {
+  margin-left: auto;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  color: #fff;
+  background: var(--color-accent);
+  font-weight: 600;
+  font-size: 0.86rem;
+  transition: background 0.12s ease;
+}
+
+.update-banner-reload:hover {
+  background: var(--color-accent-hover);
+}
+
+.update-banner-dismiss {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 4px;
+}
+
+.update-banner-dismiss:hover {
+  color: var(--color-text);
+}
