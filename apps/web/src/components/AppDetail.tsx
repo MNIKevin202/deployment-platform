@@ -9,7 +9,9 @@ import type {
   MaskedGlobalEnvVar,
   RedeployResponse,
   StorageFormValues,
-  StoredAppVolume
+  StoredAppVolume,
+  UpdateAppRoutingPayload,
+  UpdateAppRoutingResponse
 } from "../types/api";
 import StatusBadge from "./StatusBadge";
 import ConfirmationDialog from "./ConfirmationDialog";
@@ -17,6 +19,7 @@ import Tabs from "./Tabs";
 import EnvVarTable from "./EnvVarTable";
 import EnvVarDialog from "./EnvVarDialog";
 import BulkEnvVarDialog from "./BulkEnvVarDialog";
+import DomainDialog from "./DomainDialog";
 import StorageTable from "./StorageTable";
 import StorageDialog from "./StorageDialog";
 import HealthPanel from "./HealthPanel";
@@ -158,6 +161,10 @@ export default function AppDetail({
   const [showBulkEnvDialog, setShowBulkEnvDialog] = useState(false);
   const [bulkEnvSubmitting, setBulkEnvSubmitting] = useState(false);
   const [bulkEnvError, setBulkEnvError] = useState("");
+
+  const [showDomainDialog, setShowDomainDialog] = useState(false);
+  const [domainSubmitting, setDomainSubmitting] = useState(false);
+  const [domainError, setDomainError] = useState("");
 
   const [storageVolumes, setStorageVolumes] = useState<StoredAppVolume[]>([]);
   const [storageLoaded, setStorageLoaded] = useState(false);
@@ -524,6 +531,43 @@ export default function AppDetail({
     }
   };
 
+  const submitDomainDialog = async (payload: UpdateAppRoutingPayload) => {
+    try {
+      setDomainSubmitting(true);
+      setDomainError("");
+
+      const response = await fetch(`/api/apps/${appId}/routing`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          await readApiError(response, "Unable to update routing")
+        );
+      }
+
+      const result = (await response.json()) as UpdateAppRoutingResponse;
+
+      setNotice(
+        result.internalOnly
+          ? "This app is now internal-only — its public domain was removed."
+          : `Domain updated — now reachable at ${result.domain ?? "the assigned domain"}.`
+      );
+
+      setShowDomainDialog(false);
+      await loadDetail();
+      onAppChanged();
+    } catch (error) {
+      setDomainError(
+        error instanceof Error ? error.message : "Unable to update routing"
+      );
+    } finally {
+      setDomainSubmitting(false);
+    }
+  };
+
   const confirmEnvDelete = async () => {
     if (!envDeleteTarget) {
       return;
@@ -846,7 +890,7 @@ export default function AppDetail({
           <dl className="app-detail-grid">
             <div>
               <dt>Public domain</dt>
-              <dd>
+              <dd className="domain-cell">
                 {detail.internalOnly ? (
                   <span className="routing-badge internal-only">Internal only</span>
                 ) : detail.domain ? (
@@ -856,6 +900,16 @@ export default function AppDetail({
                 ) : (
                   "Not assigned"
                 )}
+                <button
+                  className="secondary-button compact"
+                  type="button"
+                  onClick={() => {
+                    setDomainError("");
+                    setShowDomainDialog(true);
+                  }}
+                >
+                  Edit
+                </button>
               </dd>
             </div>
 
@@ -1162,6 +1216,16 @@ export default function AppDetail({
         error={bulkEnvError}
         onSubmit={(variables) => void submitBulkEnvDialog(variables)}
         onCancel={() => setShowBulkEnvDialog(false)}
+      />
+
+      <DomainDialog
+        open={showDomainDialog}
+        currentDomain={detail.domain}
+        currentInternalOnly={detail.internalOnly}
+        submitting={domainSubmitting}
+        error={domainError}
+        onSubmit={(payload) => void submitDomainDialog(payload)}
+        onCancel={() => setShowDomainDialog(false)}
       />
 
       <ConfirmationDialog

@@ -1049,6 +1049,13 @@ code {
   font-size: 0.88rem;
 }
 
+.domain-cell {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .public-domain-link {
   color: var(--color-text);
   text-decoration: none;
