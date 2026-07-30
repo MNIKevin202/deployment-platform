@@ -2,6 +2,7 @@ import StatCard from "../components/StatCard";
 import AppCard from "../components/AppCard";
 import AppTable from "../components/AppTable";
 import { useAppsView } from "../hooks/useAppsView";
+import { computeHostPressure, formatMib } from "../lib/hostPressure";
 import { isDatabaseImage } from "../lib/appKind";
 import type {
   ContainerAction,
@@ -71,8 +72,26 @@ export default function OverviewPage({
   const stoppedCount = managedApps.length - runningCount;
   const routingHealth = routingHealthLabel(routingStatus);
 
+  const pressure = computeHostPressure(
+    Array.from(storedAppsByName.values()),
+    dockerInfo?.memoryTotalBytes ?? null
+  );
+
   return (
     <div className="page">
+      {pressure.level !== "ok" && pressure.hostTotalMb !== null && (
+        <div className={`host-pressure-banner ${pressure.level === "over" ? "over" : ""}`} role="status">
+          <span className="host-pressure-dot" aria-hidden="true" />
+          <span>
+            Memory {pressure.level === "over" ? "over-committed" : "nearly committed"}:{" "}
+            <strong>{formatMib(pressure.committedMb)}</strong> of limits set across {pressure.cappedCount}{" "}
+            app{pressure.cappedCount === 1 ? "" : "s"}, out of{" "}
+            <strong>{formatMib(pressure.hostTotalMb)}</strong> on this host ({Math.round(pressure.ratio * 100)}%).
+            {pressure.level === "over" ? " Reduce some limits or add memory to avoid out-of-memory kills." : ""}
+          </span>
+        </div>
+      )}
+
       <section className="stats-grid">
         <StatCard label="Apps" value={String(serviceApps.length)} />
         <StatCard label="Databases" value={String(databaseApps.length)} />
