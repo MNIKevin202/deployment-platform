@@ -3,6 +3,7 @@ import type {
   ApiError,
   AppSourceInfo,
   AppSourceResponse,
+  AutoDeployResponse,
   BuildStrategy,
   DeploymentMode,
   GithubBranchesResponse,
@@ -132,6 +133,7 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
   const [showDeployConfirm, setShowDeployConfirm] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [deployError, setDeployError] = useState("");
+  const [savingAutoDeploy, setSavingAutoDeploy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -294,6 +296,42 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
     }
   };
 
+  const toggleAutoDeploy = async (enabled: boolean) => {
+    if (!source) {
+      return;
+    }
+
+    try {
+      setSavingAutoDeploy(true);
+      setActionError("");
+
+      const response = await fetch(`/api/apps/${appId}/source/auto-deploy`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled })
+      });
+
+      const result = (await response.json().catch(() => null)) as
+        | (AutoDeployResponse & { message?: string })
+        | null;
+
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.message || "Unable to update auto-deploy");
+      }
+
+      setSource((current) => (current ? { ...current, autoDeploy: enabled } : current));
+      setNotice(
+        enabled
+          ? "Auto-deploy enabled — new commits on this branch will deploy automatically."
+          : "Auto-deploy disabled."
+      );
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to update auto-deploy");
+    } finally {
+      setSavingAutoDeploy(false);
+    }
+  };
+
   if (loading && !source) {
     return <div className="empty-state">Loading source configuration...</div>;
   }
@@ -434,7 +472,24 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
               </div>
               <div>
                 <dt>Auto deploy</dt>
-                <dd>{source.autoDeploy ? "Enabled" : "Disabled"} (coming in a later phase)</dd>
+                <dd>
+                  <label className="checkbox-field">
+                    <input
+                      type="checkbox"
+                      checked={source.autoDeploy}
+                      disabled={savingAutoDeploy || !githubUsable}
+                      onChange={(event) => void toggleAutoDeploy(event.target.checked)}
+                    />
+                    <span>
+                      {source.autoDeploy ? "Enabled" : "Disabled"}
+                      {savingAutoDeploy ? " (saving…)" : ""}
+                    </span>
+                  </label>
+                  <p className="text-faint">
+                    When enabled, new commits on <code>{source.branch}</code> deploy automatically
+                    (checked about once a minute).
+                  </p>
+                </dd>
               </div>
               <div>
                 <dt>Current validated commit</dt>

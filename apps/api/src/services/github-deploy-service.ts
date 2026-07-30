@@ -499,17 +499,41 @@ export async function deployFromGithub(
 
     if (alreadyBuilt) {
       progress("building-image", `reusing existing image for commit ${shortSha} (already built)`);
+      // No rebuild ran, so there's no fresh build output — record a short
+      // note rather than leaving a stale prior log to look "current".
+      appDatabase.updateBuildLog(appId, {
+        log: `Reused the existing image for commit ${shortSha} — no rebuild was necessary.`,
+        truncated: false,
+        status: "reused",
+        at: now().toISOString()
+      });
     } else {
       try {
-        await dockerOps.buildImage({
+        const buildResult = await dockerOps.buildImage({
           contextPath: buildPlan.buildContextPath,
           dockerfileRelativePath: relative(buildPlan.buildContextPath, buildPlan.dockerfilePath),
           tag: imageTag,
           timeoutMs: buildTimeoutMs,
           maxLogBytes
         });
+
+        // Persist the build output so the Logs tab can show it. Stored before
+        // the container swap, so even a later rollback keeps the build record.
+        appDatabase.updateBuildLog(appId, {
+          log: buildResult.log,
+          truncated: buildResult.truncated,
+          status: "success",
+          at: now().toISOString()
+        });
       } catch (error) {
         if (error instanceof BuildImageError) {
+          // A failed build's output is exactly what an operator needs to see.
+          appDatabase.updateBuildLog(appId, {
+            log: error.log,
+            truncated: false,
+            status: "failed",
+            at: now().toISOString()
+          });
           throw new GithubDeployError(
             `Build failed: ${sanitizeProcessOutput(error.message)}`,
             "building-image"

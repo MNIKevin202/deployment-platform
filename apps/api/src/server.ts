@@ -55,15 +55,24 @@ import { createGithubAppStateStore } from "./services/github-app-state-service.j
 import { resolveGithubToken } from "./services/github-token-service.js";
 import { registerSourceRoutes } from "./routes/source.js";
 import { createGithubBuildDockerOps } from "./services/github-deploy-docker-ops.js";
-import type { GithubDeployDependencies } from "./services/github-deploy-service.js";
+import { deployFromGithub, type GithubDeployDependencies } from "./services/github-deploy-service.js";
 import { registerGithubDeployRoutes } from "./routes/github-deploy.js";
 import { registerDeploymentRoutes } from "./routes/deployments.js";
+import { registerDeploymentSettingsRoutes } from "./routes/deployment-settings.js";
+import { createAutoDeployScheduler } from "./services/auto-deploy-service.js";
 import type { RevertDependencies } from "./services/revert-service.js";
 import { verifyGitAvailable } from "./services/github-clone-service.js";
 import { createRealHttpProbeClient } from "./services/performance-diagnostics-service.js";
 import { registerPerformanceDiagnosticsRoutes } from "./routes/performance-diagnostics.js";
 
 const dockerOps = createDockerOps(docker);
+
+// How often the auto-deploy poller checks each enabled app's branch for a new
+// commit. Floored at 15s so a misconfigured value can't hammer GitHub.
+const AUTO_DEPLOY_POLL_INTERVAL_MS = Math.max(
+  15_000,
+  Number(process.env.AUTO_DEPLOY_POLL_INTERVAL_MS) || 60_000
+);
 
 const appDatabase = createAppDatabase(
   process.env.DATABASE_PATH ?? "/data/deployment-platform.sqlite"
@@ -248,6 +257,38 @@ const revertDeps: RevertDependencies = {
 };
 
 await registerDeploymentRoutes(app, { appDatabase, revertDeps });
+
+await registerDeploymentSettingsRoutes(app, { appDatabase });
+
+// Auto-deploy: poll each auto-deploy-enabled GitHub app's branch and deploy
+// when its HEAD commit changes. Reuses the same deploy pipeline and GitHub
+// client as a manual deploy; the durable deployment lock prevents overlap
+// with a manual deploy or a still-running previous tick.
+const autoDeployScheduler = createAutoDeployScheduler({
+  appDatabase,
+  intervalMs: AUTO_DEPLOY_POLL_INTERVAL_MS,
+  resolveBranchHead: async (candidate) => {
+    if (!candidate.repositoryOwner || !candidate.repositoryName) {
+      return null;
+    }
+
+    const credential = await resolveGithubCredential();
+    if (!credential.success) {
+      return null;
+    }
+
+    return githubClient.resolveBranchCommit(
+      credential.token,
+      candidate.repositoryOwner,
+      candidate.repositoryName,
+      candidate.branch
+    );
+  },
+  triggerDeploy: async (appId) => {
+    await deployFromGithub(deployDeps, appId, {});
+  },
+  logger: app.log
+});
 
 await registerPerformanceDiagnosticsRoutes(app, {
   appDatabase,
@@ -1161,6 +1202,7 @@ const start = async (): Promise<void> => {
   }
 
   healthCheckScheduler.start();
+  autoDeployScheduler.start();
 };
 
 let shuttingDown = false;
@@ -1177,6 +1219,7 @@ async function shutdown(signal: string): Promise<void> {
   // on its own, but stopping it explicitly here still gives an orderly
   // shutdown rather than leaving an in-flight check racing the exit.
   healthCheckScheduler.stop();
+  autoDeployScheduler.stop();
 
   try {
     await app.close();

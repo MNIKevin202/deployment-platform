@@ -64,7 +64,10 @@ export type {
   UpsertAppSourceInput,
   UpdateAppSourceValidationInput,
   UpdateInspectionResultInput,
-  UpdateDeployedCommitInput
+  UpdateDeployedCommitInput,
+  UpdateBuildLogInput,
+  StoredBuildLog,
+  AutoDeployCandidate
 } from "./app-source-database.js";
 
 export type { IdempotencyOutcome } from "./idempotency-database.js";

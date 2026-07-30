@@ -25,7 +25,7 @@ import StorageDialog from "./StorageDialog";
 import HealthPanel from "./HealthPanel";
 import MetricsPanel from "./MetricsPanel";
 import PerformanceDiagnosticsPanel from "./PerformanceDiagnosticsPanel";
-import LogsPanel from "./LogsPanel";
+import BuildLogPanel from "./BuildLogPanel";
 import ActivityPanel from "./ActivityPanel";
 import ConsolePanel from "./ConsolePanel";
 import HistoryPanel from "./HistoryPanel";
@@ -876,6 +876,7 @@ export default function AppDetail({
       <Tabs
         items={[
           { key: "overview", label: "Overview" },
+          { key: "console", label: "Console" },
           { key: "source", label: "Source" },
           { key: "environment", label: "Environment" },
           { key: "storage", label: "Storage" },
@@ -883,7 +884,6 @@ export default function AppDetail({
           { key: "metrics", label: "Metrics" },
           { key: "performance", label: "Performance" },
           { key: "logs", label: "Logs" },
-          { key: "console", label: "Console" },
           { key: "history", label: "History" },
           { key: "activity", label: "Activity" }
         ]}
@@ -1170,7 +1170,7 @@ export default function AppDetail({
       )}
 
       {activeTab === "logs" && (
-        <LogsPanel appId={appId} appName={detail.name} containerRunning={isRunning} />
+        <BuildLogPanel appId={appId} appName={detail.name} />
       )}
 
       {activeTab === "console" && <ConsolePanel appId={appId} />}
