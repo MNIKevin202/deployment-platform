@@ -2082,3 +2082,70 @@ code {
 .update-banner-dismiss:hover {
   color: var(--color-text);
 }
+
+/* ---------- Apps: grid/table view toggle ---------- */
+
+.section-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.view-toggle button {
+  border: none;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  padding: 7px 12px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.view-toggle button + button {
+  border-left: 1px solid var(--color-border);
+}
+
+.view-toggle button:hover:not(.active) {
+  color: var(--color-text);
+}
+
+.view-toggle button.active {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.apps-table td {
+  vertical-align: middle;
+}
+
+.apps-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.table-name-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--color-accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.table-name-button:hover {
+  text-decoration: underline;
+}
+
+.table-link {
+  color: var(--color-accent);
+}
