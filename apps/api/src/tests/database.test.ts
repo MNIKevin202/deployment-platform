@@ -31,7 +31,7 @@ describe("appDatabase", () => {
       .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
       .all() as { version: number; name: string }[];
 
-    assert.equal(rows.length, 16);
+    assert.equal(rows.length, 17);
     assert.equal(rows[0].version, 1);
     assert.equal(rows[0].name, "initial_schema");
     assert.equal(rows[1].version, 2);
@@ -64,6 +64,8 @@ describe("appDatabase", () => {
     assert.equal(rows[14].name, "source_selected_strategy");
     assert.equal(rows[15].version, 16);
     assert.equal(rows[15].name, "app_deployments");
+    assert.equal(rows[16].version, 17);
+    assert.equal(rows[16].name, "build_logs");
 
     cleanup();
   });
@@ -77,9 +79,9 @@ describe("appDatabase", () => {
       .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
       .all() as { version: number; name: string }[];
 
-    assert.equal(rows.length, 16);
-    assert.equal(rows[rows.length - 1].version, 16);
-    assert.equal(rows[rows.length - 1].name, "app_deployments");
+    assert.equal(rows.length, 17);
+    assert.equal(rows[rows.length - 1].version, 17);
+    assert.equal(rows[rows.length - 1].name, "build_logs");
 
     reopened.close();
     rmSync(tempDir, { recursive: true, force: true });

@@ -483,6 +483,84 @@ export function createAppSourceRepository(db: DatabaseSync) {
     ).run(input.lastInternalHealthResult, input.lastPublicHealthResult, input.lastDeploymentStatus, appId);
   }
 
+  /** Stores the output of the most recent image build for this app's source. */
+  function updateBuildLog(appId: number, input: UpdateBuildLogInput): void {
+    db.prepare(
+      `
+        UPDATE app_sources
+        SET
+          last_build_log = ?,
+          last_build_log_truncated = ?,
+          last_build_status = ?,
+          last_build_at = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE app_id = ?
+      `
+    ).run(input.log, input.truncated ? 1 : 0, input.status, input.at, appId);
+  }
+
+  /** The most recent build log for this app, or null if it has no linked source. */
+  function getBuildLog(appId: number): StoredBuildLog | null {
+    const row = db
+      .prepare(
+        `SELECT last_build_log, last_build_log_truncated, last_build_status, last_build_at
+         FROM app_sources WHERE app_id = ?`
+      )
+      .get(appId) as unknown as
+      | {
+          last_build_log: string | null;
+          last_build_log_truncated: number;
+          last_build_status: string | null;
+          last_build_at: string | null;
+        }
+      | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      log: row.last_build_log,
+      truncated: row.last_build_log_truncated === 1,
+      status: row.last_build_status,
+      at: row.last_build_at
+    };
+  }
+
+  /** Toggles the auto-deploy preference. Returns false if the app has no source. */
+  function setAutoDeploy(appId: number, enabled: boolean): boolean {
+    const info = db
+      .prepare(`UPDATE app_sources SET auto_deploy = ?, updated_at = CURRENT_TIMESTAMP WHERE app_id = ?`)
+      .run(enabled ? 1 : 0, appId);
+    return Number(info.changes) > 0;
+  }
+
+  /** Every source with auto-deploy enabled — the polling scheduler's candidate set. */
+  function listAutoDeploySources(): AutoDeployCandidate[] {
+    const rows = db
+      .prepare(
+        `SELECT app_id, repository_owner, repository_name, branch, latest_deployed_commit_sha, deployment_mode
+         FROM app_sources WHERE auto_deploy = 1`
+      )
+      .all() as unknown as Array<{
+      app_id: number;
+      repository_owner: string | null;
+      repository_name: string | null;
+      branch: string;
+      latest_deployed_commit_sha: string | null;
+      deployment_mode: string;
+    }>;
+
+    return rows.map((row) => ({
+      appId: row.app_id,
+      repositoryOwner: row.repository_owner,
+      repositoryName: row.repository_name,
+      branch: row.branch,
+      latestDeployedCommitSha: row.latest_deployed_commit_sha,
+      deploymentMode: row.deployment_mode as DeploymentMode
+    }));
+  }
+
   function deleteAppSource(appId: number): void {
     db.prepare(`DELETE FROM app_sources WHERE app_id = ?`).run(appId);
   }
@@ -521,11 +599,39 @@ export function createAppSourceRepository(db: DatabaseSync) {
     updateInspectionResult,
     updateDeployedCommit,
     updateDeploymentHealthResult,
+    updateBuildLog,
+    getBuildLog,
+    setAutoDeploy,
+    listAutoDeploySources,
     deleteAppSource,
     acquireDeploymentLock,
     releaseDeploymentLock,
     isDeploymentLocked
   };
+}
+
+export interface UpdateBuildLogInput {
+  log: string;
+  truncated: boolean;
+  /** "success" | "failed" | "reused" */
+  status: string;
+  at: string;
+}
+
+export interface StoredBuildLog {
+  log: string | null;
+  truncated: boolean;
+  status: string | null;
+  at: string | null;
+}
+
+export interface AutoDeployCandidate {
+  appId: number;
+  repositoryOwner: string | null;
+  repositoryName: string | null;
+  branch: string;
+  latestDeployedCommitSha: string | null;
+  deploymentMode: DeploymentMode;
 }
 
 export type AppSourceRepository = ReturnType<typeof createAppSourceRepository>;

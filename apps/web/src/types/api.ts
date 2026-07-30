@@ -429,6 +429,28 @@ export interface RevertResponse {
   newVersion?: number;
 }
 
+// ---------- Build logs / auto-deploy ----------
+
+export type BuildStatus = "success" | "failed" | "reused";
+
+export interface BuildLog {
+  log: string | null;
+  truncated: boolean;
+  status: BuildStatus | string | null;
+  at: string | null;
+}
+
+export interface BuildLogResponse {
+  success: boolean;
+  /** null when the app has no linked source (e.g. a plain image app). */
+  buildLog: BuildLog | null;
+}
+
+export interface AutoDeployResponse {
+  success: boolean;
+  autoDeploy: boolean;
+}
+
 // ---------- GitHub integration (Phase 10) ----------
 
 export type SourceProviderName = "github";
