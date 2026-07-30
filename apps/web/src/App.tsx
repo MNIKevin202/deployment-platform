@@ -14,6 +14,7 @@ import RepositoriesPage from "./pages/RepositoriesPage";
 import RepositoryDetail from "./components/RepositoryDetail";
 import EnvironmentPage from "./pages/EnvironmentPage";
 import SystemPage from "./pages/SystemPage";
+import SettingsPage from "./pages/SettingsPage";
 import { isDatabaseImage } from "./lib/appKind";
 import type {
   ApiError,
@@ -32,7 +33,8 @@ const SECTION_TITLES: Record<Section, string> = {
   databases: "Databases",
   repositories: "Repositories",
   environment: "Environment",
-  system: "System"
+  system: "System",
+  settings: "Settings"
 };
 
 const SECTION_SUBTITLES: Record<Section, string> = {
@@ -41,7 +43,8 @@ const SECTION_SUBTITLES: Record<Section, string> = {
   databases: "Managed data stores — Postgres, MySQL, Redis, and the like.",
   repositories: "Connect GitHub and browse repositories available for source-linked apps.",
   environment: "Variables inherited by every managed app, unless overridden.",
-  system: "Protected platform services and host information."
+  system: "Protected platform services and host information.",
+  settings: "Back up and restore your platform configuration."
 };
 
 function App() {
@@ -59,7 +62,8 @@ function App() {
       requested === "databases" ||
       requested === "repositories" ||
       requested === "environment" ||
-      requested === "system"
+      requested === "system" ||
+      requested === "settings"
       ? requested
       : "overview";
   });
@@ -491,6 +495,8 @@ function App() {
           emptyTitle="No databases yet"
           emptyBody="Deploy a database (Postgres, MySQL, Redis, …) from a Docker image."
         />
+      ) : section === "settings" ? (
+        <SettingsPage />
       ) : (
         <SystemPage
           systemContainers={systemContainers}
