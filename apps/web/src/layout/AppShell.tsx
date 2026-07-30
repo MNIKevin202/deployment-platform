@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import UpdateBanner from "../components/UpdateBanner";
 
 interface AppShellProps {
   sidebar: ReactNode;
@@ -11,7 +12,10 @@ export default function AppShell({ sidebar, header, children }: AppShellProps) {
     <div className="app-shell">
       <aside className="app-sidebar">{sidebar}</aside>
       <div className="app-topbar">{header}</div>
-      <main className="app-main">{children}</main>
+      <main className="app-main">
+        <UpdateBanner />
+        {children}
+      </main>
     </div>
   );
 }

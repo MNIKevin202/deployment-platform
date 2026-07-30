@@ -5,6 +5,7 @@ import AccountSettings from "../components/AccountSettings";
 import DiskSettings from "../components/DiskSettings";
 import NotificationSettings from "../components/NotificationSettings";
 import BackupScheduleSettings from "../components/BackupScheduleSettings";
+import UpdatesSettings from "../components/UpdatesSettings";
 import type { ApiError } from "../types/api";
 
 interface RestoreResponse {
@@ -12,13 +13,14 @@ interface RestoreResponse {
   message: string;
 }
 
-type SettingsTab = "account" | "notifications" | "backups" | "maintenance";
+type SettingsTab = "account" | "notifications" | "backups" | "maintenance" | "updates";
 
 const SETTINGS_TABS = [
   { key: "account", label: "Account" },
   { key: "notifications", label: "Notifications" },
   { key: "backups", label: "Backups" },
-  { key: "maintenance", label: "Maintenance" }
+  { key: "maintenance", label: "Maintenance" },
+  { key: "updates", label: "Updates" }
 ];
 
 export default function SettingsPage() {
@@ -82,6 +84,8 @@ export default function SettingsPage() {
       {tab === "notifications" && <NotificationSettings />}
 
       {tab === "maintenance" && <DiskSettings />}
+
+      {tab === "updates" && <UpdatesSettings />}
 
       {tab === "backups" && (
         <>
