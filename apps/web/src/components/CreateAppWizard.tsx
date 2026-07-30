@@ -743,7 +743,9 @@ export default function CreateAppWizard({
           containerPort: parsedPort,
           containerPortSource: containerPortSource ?? "manual",
           containerPortConfidence: containerPortConfidence ?? undefined,
-          autoDeploy: false
+          // New apps default to auto-deploy on; it can be toggled off later
+          // from the Source tab.
+          autoDeploy: true
         })
       });
 

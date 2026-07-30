@@ -879,11 +879,10 @@ function LinkRepositoryDialog({ appId, existing, onClose, onSaved }: LinkReposit
   const [containerPortConfidence, setContainerPortConfidence] = useState<string | null>(
     existing?.containerPortConfidence ?? null
   );
-  // autoDeploy has no UI control (it is currently inert on the backend —
-  // no scheduler or webhook ever reads it) but the existing stored value
-  // is preserved across a save for backward compatibility rather than
-  // being silently reset to false.
-  const existingAutoDeploy = existing?.autoDeploy ?? false;
+  // A re-link/re-validate preserves the operator's existing auto-deploy
+  // choice; a brand-new link (no existing source) defaults to ON, matching
+  // the server-side default and the create-app wizard.
+  const existingAutoDeploy = existing?.autoDeploy ?? true;
 
   const [saving, setSaving] = useState(false);
   const [pendingAction, setPendingAction] = useState<"save" | "deploy" | null>(null);

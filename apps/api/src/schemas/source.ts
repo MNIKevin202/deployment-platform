@@ -184,7 +184,9 @@ export const appSourceConfigSchema = z
     containerPort: containerPortSchema.optional(),
     containerPortSource: containerPortSourceSchema.optional(),
     containerPortConfidence: containerPortConfidenceSchema.optional(),
-    autoDeploy: z.boolean().optional().default(false),
+    // New GitHub sources default to auto-deploy ON — pushing to the branch
+    // deploys automatically unless the operator turns it off.
+    autoDeploy: z.boolean().optional().default(true),
     // The operator's explicit strategy choice — omitted/null means
     // "follow whatever inspection recommends" (unchanged default
     // behavior). Inspection recommendations are advisory, not
