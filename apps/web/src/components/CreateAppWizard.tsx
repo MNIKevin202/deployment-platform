@@ -211,6 +211,8 @@ export default function CreateAppWizard({
   const [containerPortManuallySet, setContainerPortManuallySet] = useState(false);
   const [generatingPort, setGeneratingPort] = useState(false);
   const [restartPolicy, setRestartPolicy] = useState<RestartPolicy>("unless-stopped");
+  const [memoryLimit, setMemoryLimit] = useState("");
+  const [cpuLimit, setCpuLimit] = useState("");
   const [runtime, setRuntime] = useState<BuildBriefRuntime>("docker");
   const [description, setDescription] = useState("");
   const [startCommand, setStartCommand] = useState("");
@@ -743,6 +745,8 @@ export default function CreateAppWizard({
         image: trimmedImage,
         containerPort: parsedPort,
         restartPolicy,
+        memoryLimitMb: memoryLimit.trim() ? Number(memoryLimit) : null,
+        cpuLimit: cpuLimit.trim() ? Number(cpuLimit) : null,
         internalOnly: routingChoice === "internal",
         customDomain: briefCustomDomain || undefined,
         environmentVariables: envRows.map((row) => ({
@@ -1376,6 +1380,33 @@ export default function CreateAppWizard({
                       {generatingPort ? "Finding a port…" : "Generate available port"}
                     </button>
                   </div>
+
+                  <label>
+                    <span>Memory limit (MB)</span>
+                    <input
+                      type="number"
+                      value={memoryLimit}
+                      onChange={(event) => setMemoryLimit(event.target.value)}
+                      placeholder="No limit"
+                      min="16"
+                      max="131072"
+                    />
+                    <small>Optional hard cap. Leave blank for no limit.</small>
+                  </label>
+
+                  <label>
+                    <span>CPU limit (cores)</span>
+                    <input
+                      type="number"
+                      value={cpuLimit}
+                      onChange={(event) => setCpuLimit(event.target.value)}
+                      placeholder="No limit"
+                      min="0.1"
+                      max="64"
+                      step="0.1"
+                    />
+                    <small>Optional. Fractions allowed (e.g. 0.5 = half a core).</small>
+                  </label>
 
                   {sourceType === "github" && containerPort.trim() && (
                     <p className="section-description">

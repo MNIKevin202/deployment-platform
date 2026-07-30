@@ -6,6 +6,7 @@ import {
   type RedeployReconcileResult
 } from "./redeploy-service.js";
 import { buildContainerEnvArray } from "./environment-service.js";
+import { buildResourceHostConfig } from "./resource-limits.js";
 import {
   buildVolumeMounts,
   generateUniqueVolumeName,
@@ -35,6 +36,8 @@ export interface CreateAppWithConfigInput {
   image: string;
   containerPort: number;
   restartPolicy?: string;
+  memoryLimitMb?: number | null;
+  cpuLimit?: number | null;
   environmentVariables?: AppCreationEnvVarInput[];
   storageMounts?: AppCreationVolumeInput[];
   /**
@@ -345,7 +348,9 @@ async function performCreateAppWithConfig(
         containerName,
         domain,
         internalOnly,
-        restartPolicy
+        restartPolicy,
+        memoryLimitMb: input.memoryLimitMb ?? null,
+        cpuLimit: input.cpuLimit ?? null
       });
 
       for (const envVar of envVars) {
@@ -419,7 +424,8 @@ async function performCreateAppWithConfig(
         RestartPolicy: {
           Name: restartPolicy
         },
-        Mounts: mounts
+        Mounts: mounts,
+        ...buildResourceHostConfig(createdApp)
       }
     });
 

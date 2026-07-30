@@ -42,6 +42,8 @@ function appDetail(overrides: Partial<AppDetailData> = {}): AppDetailData {
     updatedAt: "2026-01-01T00:00:00.000Z",
     lastDeployedAt: "2026-01-01T00:00:00.000Z",
     restartPolicy: "unless-stopped",
+    memoryLimitMb: null,
+    cpuLimit: null,
     containerExists: true,
     dockerState: "running",
     dockerStatusText: "Up 2 minutes",

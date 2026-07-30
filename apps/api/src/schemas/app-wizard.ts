@@ -36,6 +36,8 @@ export const createAppWizardSchema = z.object({
   image: imageSchema,
   containerPort: containerPortSchema,
   restartPolicy: restartPolicySchema.optional().default("unless-stopped"),
+  memoryLimitMb: z.number().int().min(16).max(131072).nullable().optional(),
+  cpuLimit: z.number().min(0.1).max(64).nullable().optional(),
   internalOnly: z.boolean().optional().default(false),
   customDomain: customDomainSchema.optional(),
   environmentVariables: z

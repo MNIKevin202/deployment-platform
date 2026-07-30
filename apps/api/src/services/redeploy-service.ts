@@ -3,6 +3,7 @@ import type Docker from "dockerode";
 import type { AppDatabase } from "../database.js";
 import { buildContainerEnvArray } from "./environment-service.js";
 import { buildVolumeMounts } from "./storage-service.js";
+import { buildResourceHostConfig } from "./resource-limits.js";
 import { getErrorStatusCode } from "../docker-errors.js";
 import type { RecordEventFn } from "./deployment-event-service.js";
 
@@ -304,7 +305,8 @@ export async function redeployApp(
         RestartPolicy: {
           Name: app.restartPolicy || "unless-stopped"
         },
-        Mounts: buildVolumeMounts(volumes)
+        Mounts: buildVolumeMounts(volumes),
+        ...buildResourceHostConfig(app)
       }
     });
 

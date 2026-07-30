@@ -97,6 +97,10 @@ export interface StoredApp {
   updatedAt: string;
   lastDeployedAt: string | null;
   environmentTouchedAt: string | null;
+  /** Optional hard memory cap in MiB; null means no limit. */
+  memoryLimitMb: number | null;
+  /** Optional CPU-core cap (fractional allowed); null means no limit. */
+  cpuLimit: number | null;
 }
 
 interface AppRow {
@@ -115,6 +119,8 @@ interface AppRow {
   updated_at: string;
   last_deployed_at: string | null;
   environment_touched_at: string | null;
+  memory_limit_mb: number | null;
+  cpu_limit: number | null;
 }
 
 const APP_COLUMNS = `
@@ -132,7 +138,9 @@ const APP_COLUMNS = `
   created_at,
   updated_at,
   last_deployed_at,
-  environment_touched_at
+  environment_touched_at,
+  memory_limit_mb,
+  cpu_limit
 `;
 
 function mapApp(row: AppRow): StoredApp {
@@ -151,7 +159,9 @@ function mapApp(row: AppRow): StoredApp {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastDeployedAt: row.last_deployed_at,
-    environmentTouchedAt: row.environment_touched_at
+    environmentTouchedAt: row.environment_touched_at,
+    memoryLimitMb: row.memory_limit_mb,
+    cpuLimit: row.cpu_limit
   };
 }
 
@@ -163,6 +173,8 @@ export interface CreateAppInput {
   domain?: string | null;
   internalOnly?: boolean;
   restartPolicy?: string;
+  memoryLimitMb?: number | null;
+  cpuLimit?: number | null;
 }
 
 export interface UpdateAppContainerInput {
@@ -233,9 +245,11 @@ export function createAppDatabase(databasePath: string) {
           internal_only,
           status,
           desired_status,
-          restart_policy
+          restart_policy,
+          memory_limit_mb,
+          cpu_limit
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'created', 'running', ?)
+        VALUES (?, ?, ?, ?, ?, ?, 'created', 'running', ?, ?, ?)
       `
     ).run(
       input.name,
@@ -244,7 +258,9 @@ export function createAppDatabase(databasePath: string) {
       input.containerName,
       input.domain ?? null,
       input.internalOnly ? 1 : 0,
-      input.restartPolicy ?? "unless-stopped"
+      input.restartPolicy ?? "unless-stopped",
+      input.memoryLimitMb ?? null,
+      input.cpuLimit ?? null
     );
 
     const app = getAppByName(input.name);
@@ -254,6 +270,15 @@ export function createAppDatabase(databasePath: string) {
     }
 
     return app;
+  }
+
+  function updateAppResources(
+    id: number,
+    input: { memoryLimitMb: number | null; cpuLimit: number | null }
+  ): void {
+    db.prepare(
+      `UPDATE apps SET memory_limit_mb = ?, cpu_limit = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(input.memoryLimitMb, input.cpuLimit, id);
   }
 
   function updateAppContainer(
@@ -415,6 +440,7 @@ export function createAppDatabase(databasePath: string) {
     updateAppDomain,
     updateAppRouting,
     updateAppImage,
+    updateAppResources,
     deleteApp,
     touchAppEnvironment,
     touchAllAppsEnvironment,
