@@ -642,6 +642,83 @@ app.post<{ Params: AppIdParams }>(
   }
 );
 
+const appResourcesSchema = z.object({
+  memoryLimitMb: z.number().int().min(16).max(131072).nullable(),
+  cpuLimit: z.number().min(0.1).max(64).nullable()
+});
+
+/**
+ * Sets an app's optional memory/CPU caps and applies them immediately by
+ * recreating the container. The container is recreated from its *currently
+ * running* image (not app.image, which is a stale placeholder for
+ * GitHub-built apps) so the app keeps running its real image.
+ */
+app.patch<{ Params: AppIdParams }>(
+  "/apps/:id/resources",
+  { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+  async (request, reply) => {
+    const parsedParams = appIdParamSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return reply.code(400).send({ success: false, message: "Invalid app id" });
+    }
+
+    const parsedBody = appResourcesSchema.safeParse(request.body ?? {});
+    if (!parsedBody.success) {
+      return reply.code(400).send({
+        success: false,
+        message: "Invalid resource limits",
+        errors: parsedBody.error.flatten()
+      });
+    }
+
+    const storedApp = appDatabase.getAppById(parsedParams.data.id);
+    if (!storedApp) {
+      return reply.code(404).send({ success: false, message: "App not found" });
+    }
+
+    appDatabase.updateAppResources(storedApp.id, {
+      memoryLimitMb: parsedBody.data.memoryLimitMb,
+      cpuLimit: parsedBody.data.cpuLimit
+    });
+
+    // Recreate with the image the container is actually running.
+    let currentImage: string | undefined;
+    if (storedApp.containerName) {
+      try {
+        const info = await docker.getContainer(storedApp.containerName).inspect();
+        currentImage = info.Config?.Image ?? info.Image;
+      } catch {
+        currentImage = undefined;
+      }
+    }
+
+    const result = await redeployApp(
+      {
+        appDatabase,
+        dockerOps,
+        reconcileRouting: (db) => routingService.reconcile(db),
+        recordEvent
+      },
+      storedApp.id,
+      currentImage ? { imageOverride: currentImage, skipPull: true } : {}
+    );
+
+    if (!result.success) {
+      return reply.code(502).send({
+        success: false,
+        message: `Limits were saved, but applying them failed: ${result.message}`
+      });
+    }
+
+    return reply.send({
+      success: true,
+      message: "Resource limits updated and applied.",
+      memoryLimitMb: parsedBody.data.memoryLimitMb,
+      cpuLimit: parsedBody.data.cpuLimit
+    });
+  }
+);
+
 /**
  * Toggles an app between public (generated default domain, or a custom
  * domain) and internal-only (no domain, never routed), or changes a public
@@ -939,6 +1016,8 @@ app.post(
       image: parsedBody.data.image,
       containerPort: parsedBody.data.containerPort,
       restartPolicy: parsedBody.data.restartPolicy,
+      memoryLimitMb: parsedBody.data.memoryLimitMb ?? null,
+      cpuLimit: parsedBody.data.cpuLimit ?? null,
       environmentVariables: parsedBody.data.environmentVariables,
       storageMounts: parsedBody.data.storageMounts,
       internalOnly: parsedBody.data.internalOnly,

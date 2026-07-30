@@ -28,6 +28,7 @@ import PerformanceDiagnosticsPanel from "./PerformanceDiagnosticsPanel";
 import BuildLogPanel from "./BuildLogPanel";
 import ActivityPanel from "./ActivityPanel";
 import ConsolePanel from "./ConsolePanel";
+import ResourcesSection from "./ResourcesSection";
 import HistoryPanel from "./HistoryPanel";
 import SourcePanel from "./SourcePanel";
 
@@ -971,6 +972,14 @@ export default function AppDetail({
               <dd>{formatDate(detail.lastDeployedAt)}</dd>
             </div>
           </dl>
+
+          <ResourcesSection
+            appId={appId}
+            memoryLimitMb={detail.memoryLimitMb}
+            cpuLimit={detail.cpuLimit}
+            containerRunning={isRunning}
+            onSaved={() => void loadDetail()}
+          />
         </div>
       )}
 

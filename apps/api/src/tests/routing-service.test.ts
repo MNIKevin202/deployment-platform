@@ -20,6 +20,8 @@ function makeApp(overrides: Partial<StoredApp>): StoredApp {
     updatedAt: "2026-01-01T00:00:00.000Z",
     lastDeployedAt: "2026-01-01T00:00:00.000Z",
     environmentTouchedAt: null,
+    memoryLimitMb: null,
+    cpuLimit: null,
     ...overrides
   };
 }

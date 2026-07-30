@@ -2149,3 +2149,9 @@ code {
 .table-link {
   color: var(--color-accent);
 }
+
+.app-detail-resources {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-border-soft);
+}

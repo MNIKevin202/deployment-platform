@@ -3,6 +3,7 @@ import { relative } from "node:path";
 import type { AppDatabase } from "../database.js";
 import { buildContainerEnvArray } from "./environment-service.js";
 import { buildVolumeMounts } from "./storage-service.js";
+import { buildResourceHostConfig } from "./resource-limits.js";
 import type { RedeployDockerOps } from "./redeploy-service.js";
 import type { GithubBuildDockerOps } from "./github-deploy-docker-ops.js";
 import { BuildImageError } from "./github-deploy-docker-ops.js";
@@ -575,7 +576,8 @@ export async function deployFromGithub(
       HostConfig: {
         NetworkMode: "deployment-apps",
         RestartPolicy: { Name: app.restartPolicy || "unless-stopped" },
-        Mounts: buildVolumeMounts(volumes)
+        Mounts: buildVolumeMounts(volumes),
+        ...buildResourceHostConfig(app)
         // Deliberately no Privileged, no CapAdd, no Binds against the
         // Docker socket or any host path — a repository's own
         // configuration can never request any of those.

@@ -29,6 +29,8 @@ export interface AppDetail {
   updatedAt: string;
   lastDeployedAt: string | null;
   restartPolicy: string;
+  memoryLimitMb: number | null;
+  cpuLimit: number | null;
   containerExists: boolean;
   dockerState: string | null;
   dockerStatusText: string | null;
@@ -83,6 +85,8 @@ export function buildAppDetail(
     updatedAt: storedApp.updatedAt,
     lastDeployedAt: storedApp.lastDeployedAt,
     restartPolicy: storedApp.restartPolicy,
+    memoryLimitMb: storedApp.memoryLimitMb,
+    cpuLimit: storedApp.cpuLimit,
     containerExists: inspection !== null,
     dockerState: inspection ? inspection.state.status : null,
     dockerStatusText: inspection

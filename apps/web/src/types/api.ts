@@ -96,6 +96,8 @@ export interface AppDetail {
   updatedAt: string;
   lastDeployedAt: string | null;
   restartPolicy: string;
+  memoryLimitMb: number | null;
+  cpuLimit: number | null;
   containerExists: boolean;
   dockerState: string | null;
   dockerStatusText: string | null;
@@ -215,6 +217,8 @@ export interface CreateAppWizardPayload {
   image: string;
   containerPort: number;
   restartPolicy: RestartPolicy;
+  memoryLimitMb?: number | null;
+  cpuLimit?: number | null;
   internalOnly: boolean;
   customDomain?: string;
   environmentVariables: Array<{
