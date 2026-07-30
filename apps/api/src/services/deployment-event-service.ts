@@ -39,6 +39,10 @@ export type EventType =
   | "github-deploy-succeeded"
   | "github-deploy-failed"
   | "github-deploy-rolled-back"
+  /** Reverting an app to an earlier retained version (see revert-service.ts). */
+  | "revert-started"
+  | "revert-succeeded"
+  | "revert-failed"
   /**
    * GitHub connect/disconnect is a global integration event, not tied to
    * any one app. app_deployment_events requires an app_id (FK, NOT NULL),

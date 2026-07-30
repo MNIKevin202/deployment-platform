@@ -30,6 +30,9 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   "github-deploy-succeeded": "GitHub deploy succeeded",
   "github-deploy-failed": "GitHub deploy failed",
   "github-deploy-rolled-back": "GitHub deploy rolled back",
+  "revert-started": "Revert started",
+  "revert-succeeded": "Revert succeeded",
+  "revert-failed": "Revert failed",
   "performance-test-started": "Performance test started",
   "performance-test-completed": "Performance test completed",
   "performance-test-failed": "Performance test failed"

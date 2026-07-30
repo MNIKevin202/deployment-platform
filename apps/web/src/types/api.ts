@@ -399,6 +399,36 @@ export interface DeploymentEventsResponse {
   hasMore: boolean;
 }
 
+// ---------- Deployment history / version ledger ----------
+
+export type DeploymentSourceKind = "github" | "image";
+
+export interface Deployment {
+  id: number;
+  appId: number;
+  version: number;
+  imageTag: string;
+  commitSha: string | null;
+  commitMessage: string | null;
+  sourceKind: DeploymentSourceKind;
+  revertOfVersion: number | null;
+  isCurrent: boolean;
+  /** Server-computed: a retained GitHub build that isn't already live. */
+  canRevert: boolean;
+  createdAt: string;
+}
+
+export interface DeploymentsResponse {
+  success: boolean;
+  deployments: Deployment[];
+}
+
+export interface RevertResponse {
+  success: boolean;
+  message: string;
+  newVersion?: number;
+}
+
 // ---------- GitHub integration (Phase 10) ----------
 
 export type SourceProviderName = "github";

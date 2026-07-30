@@ -711,6 +711,17 @@ export async function deployFromGithub(
       deployedAt: now().toISOString()
     });
 
+    // Append this release to the per-app version ledger. The image
+    // (`deployment-app-<id>:<shortSha>`) is retained locally, so this row
+    // is a revertable target for future deployments.
+    appDatabase.recordDeployment({
+      appId,
+      imageTag,
+      commitSha,
+      commitMessage,
+      sourceKind: "github"
+    });
+
     progress("updating-route");
     let routingWarning: string | null = null;
     try {

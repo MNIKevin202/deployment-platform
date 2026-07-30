@@ -57,6 +57,8 @@ import { registerSourceRoutes } from "./routes/source.js";
 import { createGithubBuildDockerOps } from "./services/github-deploy-docker-ops.js";
 import type { GithubDeployDependencies } from "./services/github-deploy-service.js";
 import { registerGithubDeployRoutes } from "./routes/github-deploy.js";
+import { registerDeploymentRoutes } from "./routes/deployments.js";
+import type { RevertDependencies } from "./services/revert-service.js";
 import { verifyGitAvailable } from "./services/github-clone-service.js";
 import { createRealHttpProbeClient } from "./services/performance-diagnostics-service.js";
 import { registerPerformanceDiagnosticsRoutes } from "./routes/performance-diagnostics.js";
@@ -234,6 +236,18 @@ const deployDeps: GithubDeployDependencies = {
 };
 
 await registerGithubDeployRoutes(app, { appDatabase, deployDeps });
+
+// Revert reuses the same Docker operations as GitHub deploy — the merged
+// `deployDeps.dockerOps` already exposes both the redeploy container swap
+// and `imageExists` — plus the same routing reconcile and event recorder.
+const revertDeps: RevertDependencies = {
+  appDatabase,
+  dockerOps: deployDeps.dockerOps,
+  reconcileRouting: (db) => routingService.reconcile(db),
+  recordEvent
+};
+
+await registerDeploymentRoutes(app, { appDatabase, revertDeps });
 
 await registerPerformanceDiagnosticsRoutes(app, {
   appDatabase,
