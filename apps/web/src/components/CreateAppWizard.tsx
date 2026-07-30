@@ -27,9 +27,11 @@ import {
   isValidImage,
   isValidPort,
   isValidVolumeName,
+  sanitizeAppName,
   validateEnvVars,
   validateStorageMounts
 } from "../lib/wizardValidation";
+import BulkEnvVarDialog from "./BulkEnvVarDialog";
 import { useGithubRepositories } from "../hooks/useGithubRepositories";
 import { PORT_SOURCE_LABELS, PROJECT_TYPE_LABELS, STRATEGY_INFO } from "./SourcePanel";
 
@@ -213,6 +215,7 @@ export default function CreateAppWizard({
   const [healthCheckPath, setHealthCheckPath] = useState("");
 
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
+  const [showBulkEnv, setShowBulkEnv] = useState(false);
   const [volumeRows, setVolumeRows] = useState<VolumeRow[]>([]);
 
   const [globalVars, setGlobalVars] = useState<MaskedGlobalEnvVar[]>([]);
@@ -630,6 +633,37 @@ export default function CreateAppWizard({
     );
   const removeEnvRow = (rowId: number) =>
     setEnvRows((rows) => rows.filter((row) => row.rowId !== rowId));
+
+  // Merge bulk-pasted variables into the rows: existing keys are updated in
+  // place, new keys are appended — matching BulkEnvVarDialog's own wording.
+  const applyBulkEnv = (variables: { key: string; value: string; isSecret: boolean }[]) => {
+    setEnvRows((rows) => {
+      const next = [...rows];
+      for (const variable of variables) {
+        const index = next.findIndex((row) => row.key === variable.key);
+        if (index >= 0) {
+          next[index] = { ...next[index], value: variable.value, isSecret: variable.isSecret, enabled: true };
+        } else {
+          next.push({
+            rowId: nextRowId++,
+            key: variable.key,
+            value: variable.value,
+            isSecret: variable.isSecret,
+            enabled: true
+          });
+        }
+      }
+      return next;
+    });
+    setShowBulkEnv(false);
+  };
+
+  const existingEnvSecrets = new Map<string, boolean>();
+  for (const row of envRows) {
+    if (row.key) {
+      existingEnvSecrets.set(row.key, row.isSecret);
+    }
+  }
 
   const addVolumeRow = () => setVolumeRows((rows) => [...rows, makeVolumeRow()]);
   const updateVolumeRow = (rowId: number, patch: Partial<VolumeRow>) =>
@@ -1225,7 +1259,7 @@ export default function CreateAppWizard({
                     <span>App name</span>
                     <input
                       value={name}
-                      onChange={(event) => setName(event.target.value)}
+                      onChange={(event) => setName(sanitizeAppName(event.target.value))}
                       placeholder="hello-nginx"
                       pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
                       minLength={2}
@@ -1430,13 +1464,22 @@ export default function CreateAppWizard({
                   <div className="env-scope-block">
                     <div className="env-scope-heading">
                       <h3>App-Specific Variables</h3>
-                      <button
-                        className="secondary-button compact"
-                        type="button"
-                        onClick={addEnvRow}
-                      >
-                        Add Variable
-                      </button>
+                      <div className="env-scope-heading-actions">
+                        <button
+                          className="secondary-button compact"
+                          type="button"
+                          onClick={() => setShowBulkEnv(true)}
+                        >
+                          Bulk add
+                        </button>
+                        <button
+                          className="secondary-button compact"
+                          type="button"
+                          onClick={addEnvRow}
+                        >
+                          Add Variable
+                        </button>
+                      </div>
                     </div>
 
                     {envRows.length === 0 ? (
@@ -1895,6 +1938,15 @@ export default function CreateAppWizard({
           </>
         )}
       </section>
+
+      <BulkEnvVarDialog
+        open={showBulkEnv}
+        existingSecrets={existingEnvSecrets}
+        submitting={false}
+        error=""
+        onSubmit={applyBulkEnv}
+        onCancel={() => setShowBulkEnv(false)}
+      />
     </div>
   );
 }

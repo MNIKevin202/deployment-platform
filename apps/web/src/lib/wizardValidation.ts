@@ -34,6 +34,21 @@ export function isValidAppName(name: string): boolean {
   return name.length >= 2 && name.length <= 40 && APP_NAME_PATTERN.test(name);
 }
 
+/**
+ * Coerces user input toward a valid app name as they type: lowercases,
+ * turns spaces/underscores into hyphens, and drops any other disallowed
+ * character. Leaves hyphens in place (including a trailing one) so the user
+ * can keep typing a hyphenated name; final structural rules (no leading
+ * hyphen, min length) are still enforced by isValidAppName on submit.
+ */
+export function sanitizeAppName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .slice(0, 40);
+}
+
 export function isValidImage(image: string): boolean {
   return image.trim().length > 0 && image.trim().length <= 200;
 }
