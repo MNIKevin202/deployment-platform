@@ -50,6 +50,9 @@ export default function UpdatesSettings() {
           </p>
         )}
         {checkedAt && <p className="text-faint">Last checked {checkedAt.toLocaleTimeString()}.</p>}
+        <p className="text-faint">
+          This tab's build: <code className="inline-code">{__BUILD_ID__}</code>
+        </p>
 
         <div className="form-actions form-actions-start">
           <button className="secondary-button" type="button" onClick={() => void check()} disabled={checking}>
