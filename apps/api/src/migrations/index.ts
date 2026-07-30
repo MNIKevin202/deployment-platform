@@ -16,6 +16,7 @@ import { migration014GithubAppInstallations } from "./014_github_app_installatio
 import { migration015SourceSelectedStrategy } from "./015_source_selected_strategy.js";
 import { migration016AppDeployments } from "./016_app_deployments.js";
 import { migration017BuildLogs } from "./017_build_logs.js";
+import { migration018PlatformSettings } from "./018_platform_settings.js";
 import type { Migration } from "./types.js";
 
 export type { Migration } from "./types.js";
@@ -37,7 +38,8 @@ const migrations: Migration[] = [
   migration014GithubAppInstallations,
   migration015SourceSelectedStrategy,
   migration016AppDeployments,
-  migration017BuildLogs
+  migration017BuildLogs,
+  migration018PlatformSettings
 ];
 
 interface SchemaMigrationRow {

@@ -51,7 +51,15 @@ describe("SettingsPage — backup & restore", () => {
   test("surfaces a restore error", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({ ok: false, json: async () => ({ success: false, message: "Bad archive" }) }) as Response)
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        // The DiskSettings card on the same page loads image info on mount —
+        // keep it happy so only the restore path produces "Bad archive".
+        if (url === "/api/images/prune") {
+          return { ok: true, json: async () => ({ success: true, keepPerApp: 5, candidates: 0, reclaimableBytes: 0 }) } as Response;
+        }
+        return { ok: false, json: async () => ({ success: false, message: "Bad archive" }) } as Response;
+      })
     );
 
     render(<SettingsPage />);

@@ -1931,3 +1931,35 @@ code {
   vertical-align: middle;
   margin-right: 2px;
 }
+
+/* ---------- Settings forms (account, disk) ---------- */
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 480px;
+  margin-top: 12px;
+}
+
+.settings-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-form label > span {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.inline-field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.inline-field input {
+  flex: 1;
+  min-width: 0;
+}
