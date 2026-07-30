@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import ConfirmationDialog from "../components/ConfirmationDialog";
 import AccountSettings from "../components/AccountSettings";
 import DiskSettings from "../components/DiskSettings";
+import NotificationSettings from "../components/NotificationSettings";
+import BackupScheduleSettings from "../components/BackupScheduleSettings";
 import type { ApiError } from "../types/api";
 
 interface RestoreResponse {
@@ -74,7 +76,11 @@ export default function SettingsPage() {
 
       <AccountSettings />
 
+      <NotificationSettings />
+
       <DiskSettings />
+
+      <BackupScheduleSettings />
 
       <section className="page-section">
         <div className="section-heading">

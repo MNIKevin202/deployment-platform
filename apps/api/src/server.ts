@@ -63,6 +63,17 @@ import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerPortsRoutes } from "./routes/ports.js";
 import { registerImageRoutes } from "./routes/images.js";
 import { createImagePruneDockerOps } from "./services/image-prune-service.js";
+import { createBackupArchive } from "./services/backup-service.js";
+import { runScheduledBackup } from "./services/backup-schedule-service.js";
+import { createBackupScheduler } from "./services/backup-scheduler.js";
+import { notifyDeployEvent, shouldNotify } from "./services/notification-service.js";
+import {
+  registerPlatformSettingsRoutes,
+  readAutoBackupConfig,
+  readNotificationConfig,
+  AUTO_BACKUP_LAST_RUN_KEY
+} from "./routes/platform-settings.js";
+import type { RecordEventFn } from "./services/deployment-event-service.js";
 import { createAutoDeployScheduler } from "./services/auto-deploy-service.js";
 import type { RevertDependencies } from "./services/revert-service.js";
 import { verifyGitAvailable } from "./services/github-clone-service.js";
@@ -159,7 +170,19 @@ await registerAuthentication(app, {
 await registerEnvironmentRoutes(app, { appDatabase });
 await registerStorageRoutes(app, { appDatabase });
 
-const recordEvent = createEventRecorder(appDatabase, app.log);
+const baseRecordEvent = createEventRecorder(appDatabase, app.log);
+// Fire-and-forget deploy notifications for outcome events, layered on top of
+// the normal event recorder so every deploy path gets it for free.
+const recordEvent: RecordEventFn = (input) => {
+  baseRecordEvent(input);
+  if (shouldNotify(input.eventType)) {
+    void notifyDeployEvent(readNotificationConfig(appDatabase), {
+      eventType: input.eventType,
+      message: input.message,
+      severity: input.severity
+    }).catch(() => undefined);
+  }
+};
 
 /**
  * One centralized scheduler drives every managed app's health check.
@@ -282,6 +305,40 @@ await registerSettingsRoutes(app, { appDatabase, dbPath: DATABASE_PATH, backupsD
 await registerPortsRoutes(app, { appDatabase });
 
 await registerImageRoutes(app, { appDatabase, imageOps: createImagePruneDockerOps(docker) });
+
+// Scheduled backups: snapshot the DB to /data/backups on an interval, with
+// retention. Reuses the same archive builder as the manual download.
+const runScheduledBackupNow = () =>
+  runScheduledBackup({
+    createArchive: () =>
+      createBackupArchive({
+        snapshotTo: (dest) => appDatabase.db.exec(`VACUUM INTO '${dest}'`),
+        schemaVersion:
+          (appDatabase.db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as {
+            v: number | null;
+          }).v ?? 0,
+        appCount: appDatabase.listApps().length
+      }),
+    backupsDir: BACKUPS_DIR,
+    retention: readAutoBackupConfig(appDatabase).retention
+  }).then(() => undefined);
+
+const backupScheduler = createBackupScheduler({
+  getConfig: () => readAutoBackupConfig(appDatabase),
+  getLastRunAt: () => {
+    const raw = appDatabase.getSetting(AUTO_BACKUP_LAST_RUN_KEY);
+    return raw ? Number(raw) : null;
+  },
+  setLastRunAt: (ms) => appDatabase.setSetting(AUTO_BACKUP_LAST_RUN_KEY, String(ms)),
+  runBackup: () => runScheduledBackupNow(),
+  logger: app.log
+});
+
+await registerPlatformSettingsRoutes(app, {
+  appDatabase,
+  backupsDir: BACKUPS_DIR,
+  runBackupNow: () => runScheduledBackupNow()
+});
 
 // Auto-deploy: poll each auto-deploy-enabled GitHub app's branch and deploy
 // when its HEAD commit changes. Reuses the same deploy pipeline and GitHub
@@ -1226,6 +1283,7 @@ const start = async (): Promise<void> => {
 
   healthCheckScheduler.start();
   autoDeployScheduler.start();
+  backupScheduler.start();
 };
 
 let shuttingDown = false;
@@ -1243,6 +1301,7 @@ async function shutdown(signal: string): Promise<void> {
   // shutdown rather than leaving an in-flight check racing the exit.
   healthCheckScheduler.stop();
   autoDeployScheduler.stop();
+  backupScheduler.stop();
 
   try {
     await app.close();
