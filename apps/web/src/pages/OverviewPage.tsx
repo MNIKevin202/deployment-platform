@@ -1,5 +1,7 @@
 import StatCard from "../components/StatCard";
 import AppCard from "../components/AppCard";
+import AppTable from "../components/AppTable";
+import { useAppsView } from "../hooks/useAppsView";
 import { isDatabaseImage } from "../lib/appKind";
 import type {
   ContainerAction,
@@ -64,6 +66,7 @@ export default function OverviewPage({
 }: OverviewPageProps) {
   const serviceApps = managedApps.filter((c) => !isDatabaseImage(c.image));
   const databaseApps = managedApps.filter((c) => isDatabaseImage(c.image));
+  const [view, setView] = useAppsView();
   const runningCount = managedApps.filter((c) => c.state === "running").length;
   const stoppedCount = managedApps.length - runningCount;
   const routingHealth = routingHealthLabel(routingStatus);
@@ -105,9 +108,32 @@ export default function OverviewPage({
             <h2>Apps</h2>
           </div>
 
-          <button className="primary-button compact" type="button" onClick={onCreateApp}>
-            Create App
-          </button>
+          <div className="section-heading-actions">
+            {serviceApps.length > 0 && (
+              <div className="view-toggle" role="group" aria-label="Layout">
+                <button
+                  type="button"
+                  className={view === "grid" ? "active" : ""}
+                  aria-pressed={view === "grid"}
+                  onClick={() => setView("grid")}
+                >
+                  ▦ Grid
+                </button>
+                <button
+                  type="button"
+                  className={view === "table" ? "active" : ""}
+                  aria-pressed={view === "table"}
+                  onClick={() => setView("table")}
+                >
+                  ▤ Table
+                </button>
+              </div>
+            )}
+
+            <button className="primary-button compact" type="button" onClick={onCreateApp}>
+              Create App
+            </button>
+          </div>
         </div>
 
         {serviceApps.length === 0 ? (
@@ -118,6 +144,18 @@ export default function OverviewPage({
               Deploy First App
             </button>
           </div>
+        ) : view === "table" ? (
+          <AppTable
+            managedApps={serviceApps}
+            storedAppsByName={storedAppsByName}
+            missingApps={[]}
+            actionLoading={actionLoading}
+            onAction={onAction}
+            onOpenLogs={onOpenLogs}
+            onDeleteApp={onDeleteApp}
+            onDeleteMissingApp={() => {}}
+            onViewApp={onViewApp}
+          />
         ) : (
           <div className="container-grid">
             {serviceApps.map((container) => {
