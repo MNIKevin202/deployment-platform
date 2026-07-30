@@ -78,6 +78,61 @@ export function decodeDockerLogs(buffer: Buffer): string {
   return frames.map((frame) => frame.payload.toString("utf8")).join("");
 }
 
+export interface ExtractLogFramesResult {
+  frames: DockerLogFrame[];
+  /** Bytes after the last complete frame — an incomplete header/payload to carry into the next chunk. */
+  rest: Buffer;
+}
+
+/**
+ * Streaming counterpart to `parseDockerLogFrames`: pulls every *complete*
+ * Docker multiplex frame from the front of `buffer` and returns whatever
+ * trailing bytes form an incomplete header or payload as `rest`, so a
+ * caller reading a live `docker logs --follow` stream can concatenate
+ * `rest` with the next chunk and keep going without ever splitting a frame
+ * across a chunk boundary.
+ *
+ * Unlike the whole-buffer parser this never returns null: it assumes the
+ * caller has already established (from the container's TTY flag) that the
+ * stream IS multiplexed. If it encounters a structurally invalid header
+ * (bad stream type or non-zero reserved bytes) it stops there and hands
+ * the remainder back as `rest`, leaving the caller to decide — this keeps
+ * one corrupt byte from throwing on a long-lived stream.
+ */
+export function extractLogFrames(buffer: Buffer): ExtractLogFramesResult {
+  const frames: DockerLogFrame[] = [];
+  let offset = 0;
+
+  while (offset < buffer.length) {
+    if (offset + 8 > buffer.length) {
+      break;
+    }
+
+    const streamType = buffer.readUInt8(offset);
+    const reserved1 = buffer.readUInt8(offset + 1);
+    const reserved2 = buffer.readUInt8(offset + 2);
+    const reserved3 = buffer.readUInt8(offset + 3);
+
+    if (!VALID_STREAM_TYPES.has(streamType) || reserved1 !== 0 || reserved2 !== 0 || reserved3 !== 0) {
+      break;
+    }
+
+    const payloadLength = buffer.readUInt32BE(offset + 4);
+    const payloadStart = offset + 8;
+    const payloadEnd = payloadStart + payloadLength;
+
+    if (payloadEnd > buffer.length) {
+      // Payload not fully arrived yet — leave this header + partial payload in rest.
+      break;
+    }
+
+    frames.push({ streamType, payload: buffer.subarray(payloadStart, payloadEnd) });
+    offset = payloadEnd;
+  }
+
+  return { frames, rest: buffer.subarray(offset) };
+}
+
 export interface AppLogsRequestOptions {
   tail: number;
   since?: number;

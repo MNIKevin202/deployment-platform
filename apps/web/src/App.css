@@ -1907,3 +1907,27 @@ code {
 .icon-button:disabled {
   opacity: 0.5;
 }
+
+/* ---------- Live console (streaming logs) ---------- */
+
+/* The scroll lives on the outer container so the view can auto-follow the
+   newest line; the inner <pre> must not scroll independently. */
+.console-output {
+  height: 60vh;
+  overflow: auto;
+}
+
+.console-output pre {
+  max-height: none;
+  margin: 0;
+}
+
+.console-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: middle;
+  margin-right: 2px;
+}
