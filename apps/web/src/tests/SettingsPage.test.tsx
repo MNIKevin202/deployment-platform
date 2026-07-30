@@ -19,10 +19,23 @@ describe("SettingsPage — backup & restore", () => {
   });
 
   test("uploading a backup and confirming posts it to the restore endpoint", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ success: true, message: "Backup restored. The platform is restarting…" })
-    }) as Response);
+    const settingsPayload = {
+      success: true,
+      keepPerApp: 5,
+      candidates: 0,
+      reclaimableBytes: 0,
+      config: { enabled: false, type: "discord", webhookUrl: "", intervalHours: 24, retention: 7 },
+      backups: [],
+      lastRunAt: null
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/settings/restore") {
+        return { ok: true, json: async () => ({ success: true, message: "Backup restored. The platform is restarting…" }) } as Response;
+      }
+      // Every other Settings card loads on mount — give them valid config.
+      return { ok: true, json: async () => settingsPayload } as Response;
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<SettingsPage />);
@@ -53,10 +66,21 @@ describe("SettingsPage — backup & restore", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
-        // The DiskSettings card on the same page loads image info on mount —
-        // keep it happy so only the restore path produces "Bad archive".
-        if (url === "/api/images/prune") {
-          return { ok: true, json: async () => ({ success: true, keepPerApp: 5, candidates: 0, reclaimableBytes: 0 }) } as Response;
+        // The other Settings cards on the same page load on mount — keep them
+        // happy so only the restore path produces "Bad archive".
+        if (url !== "/api/settings/restore") {
+          return {
+            ok: true,
+            json: async () => ({
+              success: true,
+              keepPerApp: 5,
+              candidates: 0,
+              reclaimableBytes: 0,
+              config: { enabled: false, type: "discord", webhookUrl: "", intervalHours: 24, retention: 7 },
+              backups: [],
+              lastRunAt: null
+            })
+          } as Response;
         }
         return { ok: false, json: async () => ({ success: false, message: "Bad archive" }) } as Response;
       })

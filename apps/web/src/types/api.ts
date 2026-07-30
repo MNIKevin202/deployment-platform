@@ -470,6 +470,38 @@ export interface ImagePruneResult {
   failed: number;
 }
 
+export interface AutoBackupConfig {
+  enabled: boolean;
+  intervalHours: number;
+  retention: number;
+}
+
+export interface AutoBackupFileInfo {
+  name: string;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+export interface AutoBackupResponse {
+  success: boolean;
+  config: AutoBackupConfig;
+  lastRunAt: number | null;
+  backups: AutoBackupFileInfo[];
+}
+
+export type NotificationType = "discord" | "slack" | "generic";
+
+export interface NotificationConfig {
+  enabled: boolean;
+  type: NotificationType;
+  webhookUrl: string;
+}
+
+export interface NotificationResponse {
+  success: boolean;
+  config: NotificationConfig;
+}
+
 // ---------- GitHub integration (Phase 10) ----------
 
 export type SourceProviderName = "github";
