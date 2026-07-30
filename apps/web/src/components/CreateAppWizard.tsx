@@ -487,6 +487,18 @@ export default function CreateAppWizard({
     }
   };
 
+  // Inspect automatically as soon as a repository and branch are chosen — no
+  // manual "Inspect" click needed. Keyed on the selection identity so it runs
+  // once per repo/branch choice; the stale-clear effect above has already run
+  // for the same change, so this always inspects the current selection.
+  // (Subdirectory tweaks still use the manual Re-inspect button.)
+  useEffect(() => {
+    if (githubRepo && githubBranch) {
+      void runGithubInspect();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [githubRepo?.fullName, githubBranch]);
+
   const trimmedName = name.trim();
   const trimmedImage = image.trim();
   const parsedPort = Number(containerPort);

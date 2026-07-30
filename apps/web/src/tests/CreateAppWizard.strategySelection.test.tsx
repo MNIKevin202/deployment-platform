@@ -79,7 +79,8 @@ async function goToInspectedGithubSource(user: ReturnType<typeof userEvent.setup
   await user.click(await screen.findByText("Deploy from GitHub"));
   await user.click(await screen.findByText("MNIKevin202/DeploymentPlatformInstaller"));
   await user.click(await screen.findByText("MNIKevin202/DeploymentPlatformInstaller"));
-  await user.click(screen.getByRole("button", { name: "Inspect Repository" }));
+  // Inspection now runs automatically once a repo + branch are selected.
+  await screen.findByRole("button", { name: "Re-inspect Repository" });
   await screen.findByText("Detected type");
 }
 
