@@ -2196,12 +2196,16 @@ code {
   max-height: 86vh;
 }
 
+.template-gallery .dialog-description {
+  margin: 0;
+  padding: 16px 22px 0;
+}
+
 .template-gallery-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  margin: 4px -6px 0;
-  padding: 0 6px 4px;
+  padding: 8px 22px 22px;
 }
 
 .template-category {
@@ -2287,15 +2291,13 @@ code {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  margin: 4px -6px 0;
-  padding: 0 6px 4px;
+  padding: 20px 22px 8px;
 }
 
 .template-detail-hero {
   display: flex;
   align-items: flex-start;
   gap: 18px;
-  margin-top: 4px;
 }
 
 .template-icon.large {
@@ -2458,7 +2460,6 @@ code {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid var(--color-border);
+  padding: 16px 22px 20px;
+  border-top: 1px solid var(--color-border-soft);
 }
