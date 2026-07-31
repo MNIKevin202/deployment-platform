@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type {
   ApiError,
   AppDetail as AppDetailData,
@@ -23,7 +23,6 @@ import DomainDialog from "./DomainDialog";
 import StorageTable from "./StorageTable";
 import StorageDialog from "./StorageDialog";
 import HealthPanel from "./HealthPanel";
-import MetricsPanel from "./MetricsPanel";
 import PerformanceDiagnosticsPanel from "./PerformanceDiagnosticsPanel";
 import BuildLogPanel from "./BuildLogPanel";
 import ActivityPanel from "./ActivityPanel";
@@ -31,6 +30,10 @@ import ConsolePanel from "./ConsolePanel";
 import ResourcesSection from "./ResourcesSection";
 import HistoryPanel from "./HistoryPanel";
 import SourcePanel from "./SourcePanel";
+
+// Pulls in recharts (a large dependency) only when the Metrics tab is
+// actually opened, instead of shipping it in every page's initial bundle.
+const MetricsPanel = lazy(() => import("./MetricsPanel"));
 
 interface AppDetailProps {
   appId: number;
@@ -1190,7 +1193,9 @@ export default function AppDetail({
       )}
 
       {activeTab === "metrics" && (
-        <MetricsPanel appId={appId} containerRunning={isRunning} />
+        <Suspense fallback={<div className="empty-state">Loading metrics...</div>}>
+          <MetricsPanel appId={appId} containerRunning={isRunning} />
+        </Suspense>
       )}
 
       {activeTab === "performance" && (

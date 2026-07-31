@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   normalizeDockerStats,
-  getContainerMetrics
+  getContainerMetrics,
+  getAggregateMetrics
 } from "../services/docker-metrics-service.js";
 
 function baseRawStats() {
@@ -172,5 +173,52 @@ describe("getContainerMetrics", () => {
     if (!result.success) {
       assert.equal(result.reason, "error");
     }
+  });
+});
+
+function createFakeDockerMulti(containersById: Record<string, FakeContainer>) {
+  return {
+    getContainer: (id: string) => containersById[id]
+  } as unknown as import("dockerode");
+}
+
+describe("getAggregateMetrics", () => {
+  test("sums cpuPercent and memoryUsageBytes across several containers", async () => {
+    const docker = createFakeDockerMulti({
+      a: { stats: async () => baseRawStats() }, // cpuPercent 20, memoryUsageBytes 80_000_000
+      b: { stats: async () => baseRawStats() }
+    });
+
+    const result = await getAggregateMetrics(docker, ["a", "b"]);
+
+    assert.equal(result.sampledCount, 2);
+    assert.equal(result.cpuPercentTotal, 40);
+    assert.equal(result.memoryUsageBytesTotal, 160_000_000);
+  });
+
+  test("excludes a container whose stats call fails, without failing the whole aggregate", async () => {
+    const docker = createFakeDockerMulti({
+      a: { stats: async () => baseRawStats() },
+      b: {
+        stats: async () => {
+          throw new Error("gone");
+        }
+      }
+    });
+
+    const result = await getAggregateMetrics(docker, ["a", "b"]);
+
+    assert.equal(result.sampledCount, 1);
+    assert.equal(result.cpuPercentTotal, 20);
+    assert.equal(result.memoryUsageBytesTotal, 80_000_000);
+  });
+
+  test("returns zeros for an empty container list", async () => {
+    const docker = createFakeDockerMulti({});
+    const result = await getAggregateMetrics(docker, []);
+
+    assert.equal(result.sampledCount, 0);
+    assert.equal(result.cpuPercentTotal, 0);
+    assert.equal(result.memoryUsageBytesTotal, 0);
   });
 });

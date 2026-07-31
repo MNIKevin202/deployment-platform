@@ -434,6 +434,23 @@ code {
   color: var(--color-warning);
 }
 
+.metrics-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.metric-chart-card {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  padding: 18px 18px 4px;
+}
+
 /* ---------- Server / info card ---------- */
 
 .server-card {

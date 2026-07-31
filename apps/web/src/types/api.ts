@@ -387,6 +387,15 @@ export interface MetricsResponse {
   message?: string;
 }
 
+export interface MetricsSummaryResponse {
+  success: boolean;
+  sampledAt: string;
+  sampledCount: number;
+  cpuPercentTotal: number;
+  memoryUsageBytesTotal: number;
+  message?: string;
+}
+
 export interface AppLogsResponse {
   success: boolean;
   appId: number;

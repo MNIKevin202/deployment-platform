@@ -212,3 +212,48 @@ export async function getContainerMetrics(
     };
   }
 }
+
+export interface AggregateMetrics {
+  /** How many running managed containers were sampled. */
+  sampledCount: number;
+  /** Sum of each container's cpuPercent — up to (host cores × 100). */
+  cpuPercentTotal: number;
+  /** Sum of each container's memoryUsageBytes. */
+  memoryUsageBytesTotal: number;
+}
+
+/**
+ * A one-shot snapshot across several containers, for a cluster-wide
+ * "how busy is this host right now" reading. Fetches all snapshots
+ * concurrently (each is already a single unstreamed `stats` call) and sums
+ * whichever ones succeed — one container being mid-restart or gone doesn't
+ * fail the whole aggregate, it's just excluded from the sum.
+ */
+export async function getAggregateMetrics(
+  docker: Docker,
+  containerIds: string[]
+): Promise<AggregateMetrics> {
+  const results = await Promise.all(
+    containerIds.map((id) => getContainerMetrics(docker, id))
+  );
+
+  let sampledCount = 0;
+  let cpuPercentTotal = 0;
+  let memoryUsageBytesTotal = 0;
+
+  for (const result of results) {
+    if (!result.success) {
+      continue;
+    }
+
+    sampledCount += 1;
+    cpuPercentTotal += result.metrics.cpuPercent ?? 0;
+    memoryUsageBytesTotal += result.metrics.memoryUsageBytes ?? 0;
+  }
+
+  return {
+    sampledCount,
+    cpuPercentTotal: round2(cpuPercentTotal),
+    memoryUsageBytesTotal
+  };
+}
