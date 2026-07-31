@@ -92,6 +92,7 @@ function App() {
   const [notice, setNotice] = useState("");
 
   const [environmentRefreshKey, setEnvironmentRefreshKey] = useState(0);
+  const [checkingImageUpdates, setCheckingImageUpdates] = useState(false);
 
   const [showCreateApp, setShowCreateApp] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
@@ -198,6 +199,32 @@ function App() {
       setLoading(false);
     }
   }, []);
+
+  const checkForImageUpdates = useCallback(async () => {
+    setCheckingImageUpdates(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/apps/image-updates/check-now", { method: "POST" });
+      const result = (await response.json()) as { success: boolean; updatesAvailable?: number; message?: string };
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.message || "Update check failed");
+      }
+
+      await loadDashboard();
+
+      setNotice(
+        result.updatesAvailable
+          ? `${result.updatesAvailable} app${result.updatesAvailable === 1 ? "" : "s"} ${result.updatesAvailable === 1 ? "has" : "have"} an update available.`
+          : "All apps are up to date."
+      );
+    } catch (checkError) {
+      setError(checkError instanceof Error ? checkError.message : "Unable to check for updates");
+    } finally {
+      setCheckingImageUpdates(false);
+    }
+  }, [loadDashboard]);
 
   useEffect(() => {
     void loadDashboard();
@@ -420,19 +447,29 @@ function App() {
   }
 
   const headerActions = (
-    <button
-      className="secondary-button"
-      type="button"
-      onClick={() => {
-        if (section === "environment") {
-          setEnvironmentRefreshKey((key) => key + 1);
-        } else {
-          void loadDashboard();
-        }
-      }}
-    >
-      Refresh
-    </button>
+    <>
+      <button
+        className="secondary-button"
+        type="button"
+        onClick={() => void checkForImageUpdates()}
+        disabled={checkingImageUpdates}
+      >
+        {checkingImageUpdates ? "Checking..." : "Check for Updates"}
+      </button>
+      <button
+        className="secondary-button"
+        type="button"
+        onClick={() => {
+          if (section === "environment") {
+            setEnvironmentRefreshKey((key) => key + 1);
+          } else {
+            void loadDashboard();
+          }
+        }}
+      >
+        Refresh
+      </button>
+    </>
   );
 
   return (
