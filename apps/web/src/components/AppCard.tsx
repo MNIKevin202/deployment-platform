@@ -114,6 +114,15 @@ export default function AppCard({
               );
             })()}
 
+          {storedApp?.imageUpdateAvailable && (
+            <span
+              className="status-badge compact warning"
+              title="A newer image is available in the registry — redeploy to update"
+            >
+              Update Available
+            </span>
+          )}
+
           {(storedApp?.latestEventSeverity === "warning" ||
             storedApp?.latestEventSeverity === "error") && (
             <span

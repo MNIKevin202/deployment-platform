@@ -49,6 +49,8 @@ function appDetail(overrides: Partial<AppDetailData> = {}): AppDetailData {
     dockerStatusText: "Up 2 minutes",
     environmentStatus: "applied",
     publishedPorts: [],
+    imageUpdateAvailable: false,
+    imageUpdateCheckedAt: null,
     ...overrides
   };
 }

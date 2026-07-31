@@ -84,6 +84,9 @@ export interface StoredApp {
    */
   runtime?: { present: boolean; running: boolean; status: string | null } | null;
   publishedPorts?: PublishedPort[];
+  /** True once a background check finds this app's registry image has moved past what's running. */
+  imageUpdateAvailable?: boolean;
+  imageUpdateCheckedAt?: string | null;
 }
 
 export interface StoredAppsResponse {
@@ -114,6 +117,8 @@ export interface AppDetail {
   dockerStatusText: string | null;
   environmentStatus: EnvironmentStatus;
   publishedPorts: PublishedPort[];
+  imageUpdateAvailable: boolean;
+  imageUpdateCheckedAt: string | null;
 }
 
 export type EnvironmentVariableSource = "global" | "app" | "app-override";

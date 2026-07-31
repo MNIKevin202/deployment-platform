@@ -14,6 +14,7 @@ import type {
   UpdateAppRoutingResponse
 } from "../types/api";
 import StatusBadge from "./StatusBadge";
+import ImageUpdateBanner from "./ImageUpdateBanner";
 import ConfirmationDialog from "./ConfirmationDialog";
 import Tabs from "./Tabs";
 import EnvVarTable from "./EnvVarTable";
@@ -802,6 +803,12 @@ export default function AppDetail({
             tone={isConfigPending ? "warning" : "positive"}
           />
         </div>
+
+        <ImageUpdateBanner
+          appId={appId}
+          imageUpdateAvailable={detail.imageUpdateAvailable}
+          imageUpdateCheckedAt={detail.imageUpdateCheckedAt}
+        />
 
         <div className="container-actions app-detail-actions">
           {canOpenApp && (

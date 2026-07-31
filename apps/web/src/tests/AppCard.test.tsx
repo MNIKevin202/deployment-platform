@@ -107,3 +107,33 @@ describe("AppCard — internal-only vs public display", () => {
     expect(screen.queryByRole("link", { name: "Open App" })).not.toBeInTheDocument();
   });
 });
+
+describe("AppCard — image update indicator", () => {
+  test("shows an Update Available badge when imageUpdateAvailable is true", () => {
+    render(
+      <AppCard
+        container={container()}
+        storedApp={storedApp({ imageUpdateAvailable: true })}
+        actionLoading={null}
+        onAction={vi.fn()}
+        onOpenLogs={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("Update Available")).toBeInTheDocument();
+  });
+
+  test("shows no badge when imageUpdateAvailable is false or absent", () => {
+    render(
+      <AppCard
+        container={container()}
+        storedApp={storedApp()}
+        actionLoading={null}
+        onAction={vi.fn()}
+        onOpenLogs={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByText("Update Available")).not.toBeInTheDocument();
+  });
+});
