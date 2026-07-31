@@ -763,6 +763,39 @@ export const APP_TEMPLATES: AppTemplate[] = [
     volumes: ["/ircd"],
     publishedPorts: [{ hostPort: 6697, containerPort: 6697, protocol: "tcp" }]
   },
+  {
+    id: "quipora-bot",
+    name: "Quipora Bot",
+    category: "Apps",
+    icon: "🤖",
+    description: "Server-admin bot for Quipora IRC: auto-joins channels, moderates, and logs.",
+    longDescription:
+      "Quipora Bot is a persistent admin bot for a Quipora IRC server. It connects as an IRC operator, auto-joins every channel on the server (registered or not, checked periodically so brand-new channels get joined too), posts a configurable welcome message when someone joins, answers chat commands (!help, !rules, plus your own custom commands), does basic word-filter moderation, and logs every join/part/message to this app's own Console/Logs tab. Deploy a Quipora IRC app first, then create an IRC operator account for the bot from that app's Settings → Operators tab, and fill in its username/password below along with the IRC server's container name (e.g. app-quipora-irc).",
+    highlights: [
+      "Auto-joins every channel, including new ones, via periodic polling",
+      "Configurable welcome message, chat commands, and word-filter moderation",
+      "All activity logged to this app's own Console/Logs tab — no separate log storage"
+    ],
+    image: "ghcr.io/mnikevin202/quipora-bot:latest",
+    containerPort: 3000,
+    suggestedName: "quipora-bot",
+    internalOnly: true,
+    requiresTemplateId: "quipora-irc",
+    env: [
+      { key: "IRC_HOST", value: "app-quipora-irc" },
+      { key: "IRC_PORT", value: "6697" },
+      { key: "IRC_BOT_NICK", value: "QuiporaBot" },
+      { key: "IRC_OPER_USER", value: "" },
+      { key: "IRC_OPER_PASS", value: "", secret: true },
+      { key: "JOIN_POLL_INTERVAL_SECONDS", value: "30" },
+      { key: "WELCOME_MESSAGE_TEMPLATE", value: "Welcome to the channel, {nick}! Type !rules to see the server rules." },
+      { key: "COMMAND_PREFIX", value: "!" },
+      { key: "RULES_TEXT", value: "" },
+      { key: "BOT_COMMANDS", value: "{}" },
+      { key: "BANNED_WORDS", value: "" },
+      { key: "MODERATION_ACTION", value: "warn" }
+    ]
+  },
 
   // ---- Apps requiring a companion database (create the DB app first) ----
   {
