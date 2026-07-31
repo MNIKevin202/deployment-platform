@@ -6,6 +6,8 @@ export interface TemplateEnvVar {
   secret?: boolean;
   /** Generate a random value (e.g. a database password) at selection time. */
   generate?: "password";
+  /** Length of the generated value, when `generate` is set. Defaults to 24. */
+  generateLength?: number;
 }
 
 export type TemplateCategory = "Databases" | "Apps" | "Tools";
@@ -730,5 +732,551 @@ export const APP_TEMPLATES: AppTemplate[] = [
     env: [{ key: "EULA", value: "TRUE" }],
     volumes: ["/data"],
     publishedPorts: [{ hostPort: 19132, containerPort: 19132, protocol: "udp" }]
+  },
+
+  // ---- Apps requiring a companion database (create the DB app first) ----
+  {
+    id: "firefly-iii",
+    name: "Firefly III",
+    category: "Apps",
+    icon: "💰",
+    description: "Full-featured personal finance manager. Requires a database.",
+    longDescription:
+      "Firefly III is a self-hosted personal finance manager for tracking budgets, transactions, and accounts in detail. It needs a MySQL or MariaDB database: create a MariaDB app first, then fill in the generated password below (the defaults assume a MariaDB app named \"mariadb\" with database \"app\").",
+    highlights: [
+      "Detailed budgets, transactions, and reports",
+      "Import via CSV or bank integrations",
+      "Requires a separate MySQL/MariaDB app"
+    ],
+    image: "fireflyiii/core:latest",
+    containerPort: 8080,
+    suggestedName: "firefly-iii",
+    env: [
+      { key: "APP_KEY", generate: "password", generateLength: 32, secret: true },
+      { key: "DB_CONNECTION", value: "mysql" },
+      { key: "DB_HOST", value: "app-mariadb" },
+      { key: "DB_PORT", value: "3306" },
+      { key: "DB_DATABASE", value: "app" },
+      { key: "DB_USERNAME", value: "root" },
+      { key: "DB_PASSWORD", value: "", secret: true }
+    ],
+    volumes: ["/var/www/html/storage/upload"]
+  },
+  {
+    id: "wikijs",
+    name: "Wiki.js",
+    category: "Apps",
+    icon: "📚",
+    description: "Modern wiki/docs platform. Requires a database.",
+    longDescription:
+      "Wiki.js is a polished, modern wiki and documentation platform. It needs a PostgreSQL database: create a PostgreSQL app first, then fill in the generated password below (the defaults assume a PostgreSQL app named \"postgres\" with database \"app\").",
+    highlights: [
+      "Clean editor with Markdown and rich-text modes",
+      "Page history, permissions, and search built in",
+      "Requires a separate PostgreSQL app"
+    ],
+    image: "ghcr.io/requarks/wiki:2",
+    containerPort: 3000,
+    suggestedName: "wikijs",
+    env: [
+      { key: "DB_TYPE", value: "postgres" },
+      { key: "DB_HOST", value: "app-postgres" },
+      { key: "DB_PORT", value: "5432" },
+      { key: "DB_USER", value: "postgres" },
+      { key: "DB_PASS", value: "", secret: true },
+      { key: "DB_NAME", value: "app" }
+    ]
+  },
+  {
+    id: "bookstack",
+    name: "BookStack",
+    category: "Apps",
+    icon: "📗",
+    description: "Polished wiki/documentation platform. Requires a database.",
+    longDescription:
+      "BookStack organizes documentation into books, chapters, and pages with a clean editor. It needs a MySQL or MariaDB database: create a MariaDB app first, then fill in the generated password below (the defaults assume a MariaDB app named \"mariadb\" with database \"app\").",
+    highlights: [
+      "Books/chapters/pages structure with full search",
+      "WYSIWYG and Markdown editors",
+      "Requires a separate MySQL/MariaDB app"
+    ],
+    image: "lscr.io/linuxserver/bookstack:latest",
+    containerPort: 80,
+    suggestedName: "bookstack",
+    env: [
+      { key: "PUID", value: "1000" },
+      { key: "PGID", value: "1000" },
+      { key: "TZ", value: "Etc/UTC" },
+      { key: "APP_KEY", generate: "password", generateLength: 32, secret: true },
+      { key: "DB_HOST", value: "app-mariadb" },
+      { key: "DB_PORT", value: "3306" },
+      { key: "DB_DATABASE", value: "app" },
+      { key: "DB_USERNAME", value: "root" },
+      { key: "DB_PASSWORD", value: "", secret: true }
+    ],
+    volumes: ["/config"]
+  },
+  {
+    id: "yourls",
+    name: "YOURLS",
+    category: "Tools",
+    icon: "✂️",
+    description: "Self-hosted URL shortener with click stats. Requires a database.",
+    longDescription:
+      "YOURLS (Your Own URL Shortener) is a classic, lightweight link shortener with click analytics and a plugin system. It needs a MySQL or MariaDB database: create a MariaDB app first, then fill in the generated password below (the defaults assume a MariaDB app named \"mariadb\" with database \"app\").",
+    highlights: [
+      "Short links with click statistics",
+      "Plugin ecosystem for extra features",
+      "Requires a separate MySQL/MariaDB app"
+    ],
+    image: "yourls:latest",
+    containerPort: 80,
+    suggestedName: "yourls",
+    env: [
+      { key: "YOURLS_DB_HOST", value: "app-mariadb" },
+      { key: "YOURLS_DB_USER", value: "root" },
+      { key: "YOURLS_DB_PASS", value: "", secret: true },
+      { key: "YOURLS_DB_NAME", value: "app" },
+      { key: "YOURLS_USER", value: "admin" },
+      { key: "YOURLS_PASS", generate: "password", secret: true }
+    ],
+    volumes: ["/var/www/html"]
+  },
+  {
+    id: "umami",
+    name: "Umami",
+    category: "Tools",
+    icon: "📶",
+    description: "Privacy-focused, lightweight web analytics. Requires a database.",
+    longDescription:
+      "Umami is a simple, fast, privacy-focused alternative to Google Analytics. It needs a PostgreSQL database: create a PostgreSQL app first, then edit DATABASE_URL below to use its generated password (the placeholder assumes a PostgreSQL app named \"postgres\" with database \"app\").",
+    highlights: [
+      "Lightweight, privacy-respecting analytics",
+      "No cookies, GDPR-friendly by default",
+      "Requires a separate PostgreSQL app"
+    ],
+    image: "ghcr.io/umami-software/umami:postgresql-latest",
+    containerPort: 3000,
+    suggestedName: "umami",
+    env: [
+      {
+        key: "DATABASE_URL",
+        value: "postgresql://postgres:REPLACE_WITH_POSTGRES_PASSWORD@app-postgres:5432/app",
+        secret: true
+      },
+      { key: "DATABASE_TYPE", value: "postgresql" },
+      { key: "APP_SECRET", generate: "password", generateLength: 32, secret: true }
+    ]
+  },
+
+  // ---- Personal finance ----
+  {
+    id: "actual-budget",
+    name: "Actual Budget",
+    category: "Apps",
+    icon: "💵",
+    description: "Local-first personal budgeting app.",
+    longDescription:
+      "Actual Budget is a fast, local-first budgeting app based on envelope budgeting. It ships with its own embedded database — no external database needed.",
+    highlights: [
+      "Envelope-style budgeting",
+      "Fast, local-first sync engine",
+      "No external database required"
+    ],
+    image: "actualbudget/actual-server:latest",
+    containerPort: 5006,
+    suggestedName: "actual-budget",
+    env: [],
+    volumes: ["/data"]
+  },
+
+  // ---- Productivity / docs ----
+  {
+    id: "ghost",
+    name: "Ghost",
+    category: "Apps",
+    icon: "👻",
+    description: "Polished blogging platform, a popular WordPress alternative.",
+    longDescription:
+      "Ghost is a modern, fast publishing platform focused on blogging and newsletters. It uses its own embedded database by default — no external database needed. After install, set the site URL from Ghost's own Settings once you have your domain.",
+    highlights: [
+      "Clean, fast writing and publishing experience",
+      "Built-in newsletter and membership support",
+      "No external database required"
+    ],
+    image: "ghost:5-alpine",
+    containerPort: 2368,
+    suggestedName: "ghost",
+    env: [],
+    volumes: ["/var/lib/ghost/content"]
+  },
+  {
+    id: "linkding",
+    name: "Linkding",
+    category: "Tools",
+    icon: "🔖",
+    description: "Clean, fast self-hosted bookmark manager.",
+    longDescription:
+      "Linkding is a minimal, fast bookmark manager with tagging, full-text search, and a browser extension. Sign in with the admin account below.",
+    highlights: [
+      "Fast tagging and full-text search",
+      "Browser extension for one-click saving",
+      "Simple, no-clutter interface"
+    ],
+    image: "sissbruecker/linkding:latest",
+    containerPort: 9090,
+    suggestedName: "linkding",
+    env: [
+      { key: "LD_SUPERUSER_NAME", value: "admin" },
+      { key: "LD_SUPERUSER_PASSWORD", generate: "password", secret: true }
+    ],
+    volumes: ["/etc/linkding/data"]
+  },
+  {
+    id: "excalidraw",
+    name: "Excalidraw",
+    category: "Tools",
+    icon: "✏️",
+    description: "Collaborative whiteboard and diagramming tool.",
+    longDescription:
+      "Excalidraw is a virtual whiteboard for sketching diagrams with a hand-drawn feel. Self-hosting gives you the same editor under your own domain — no configuration required.",
+    highlights: [
+      "Hand-drawn-style diagrams and sketches",
+      "Real-time collaboration",
+      "Zero configuration"
+    ],
+    image: "excalidraw/excalidraw:latest",
+    containerPort: 80,
+    suggestedName: "excalidraw",
+    env: []
+  },
+  {
+    id: "stirling-pdf",
+    name: "Stirling-PDF",
+    category: "Tools",
+    icon: "📄",
+    description: "Swiss-army-knife PDF tool: merge, split, OCR, convert.",
+    longDescription:
+      "Stirling-PDF is a locally hosted, feature-packed PDF toolkit — merge, split, compress, OCR, convert, and dozens of other operations, all from a browser.",
+    highlights: [
+      "Merge, split, compress, and convert PDFs",
+      "OCR and dozens of other PDF tools",
+      "Nothing is uploaded to a third party"
+    ],
+    image: "stirlingtools/stirling-pdf:latest",
+    containerPort: 8080,
+    suggestedName: "stirling-pdf",
+    env: [],
+    volumes: ["/configs", "/logs"]
+  },
+
+  // ---- Dashboards / monitoring ----
+  {
+    id: "homepage",
+    name: "Homepage",
+    category: "Tools",
+    icon: "🏠",
+    description: "Popular self-hosted start page / app dashboard.",
+    longDescription:
+      "Homepage is a fast, highly customizable start page for your self-hosted services, with widgets and service integrations. HOMEPAGE_ALLOWED_HOSTS starts wide open (\"*\") so it's reachable immediately — tighten it to your actual domain from the app's env vars once you have one.",
+    highlights: [
+      "Customizable service dashboard",
+      "Live widgets for many self-hosted apps",
+      "Configured via simple YAML files"
+    ],
+    image: "ghcr.io/gethomepage/homepage:latest",
+    containerPort: 3000,
+    suggestedName: "homepage",
+    env: [{ key: "HOMEPAGE_ALLOWED_HOSTS", value: "*" }],
+    volumes: ["/app/config"]
+  },
+  {
+    id: "changedetection",
+    name: "Changedetection.io",
+    category: "Tools",
+    icon: "🕵️",
+    description: "Watches web pages and alerts you when they change.",
+    longDescription:
+      "Changedetection.io monitors web pages for changes — price drops, restock alerts, content updates — and notifies you when something changes.",
+    highlights: [
+      "Track price drops, restocks, and page changes",
+      "Notifications via email, Discord, webhooks, and more",
+      "Visual diff of what changed"
+    ],
+    image: "ghcr.io/dgtlmoon/changedetection.io:latest",
+    containerPort: 5000,
+    suggestedName: "changedetection",
+    env: [],
+    volumes: ["/datastore"]
+  },
+
+  // ---- Dev / infra ----
+  {
+    id: "libretranslate",
+    name: "LibreTranslate",
+    category: "Tools",
+    icon: "🔤",
+    description: "Self-hosted translation API and UI.",
+    longDescription:
+      "LibreTranslate is a free and open-source machine translation API and web UI, running entirely on your own server with no calls to a third-party translation service.",
+    highlights: [
+      "Translation API + web UI, self-hosted",
+      "No calls to a third-party translation service",
+      "Language models download on first run"
+    ],
+    image: "libretranslate/libretranslate:latest",
+    containerPort: 5000,
+    suggestedName: "libretranslate",
+    env: [],
+    volumes: ["/home/libretranslate/.local"]
+  },
+  {
+    id: "ntfy",
+    name: "ntfy",
+    category: "Tools",
+    icon: "🔔",
+    description: "Push notifications to your phone/desktop via simple HTTP calls.",
+    longDescription:
+      "ntfy lets any script, cron job, or app send you a push notification with one HTTP request — no accounts or API keys required by default. Subscribe to a topic in the app or browser to receive alerts.",
+    highlights: [
+      "Push notifications via a single curl/HTTP call",
+      "Apps for iOS, Android, and desktop browsers",
+      "Great for scripts, cron jobs, and CI alerts"
+    ],
+    image: "binwiederhier/ntfy:latest",
+    containerPort: 80,
+    suggestedName: "ntfy",
+    env: [],
+    volumes: ["/var/cache/ntfy", "/etc/ntfy"]
+  },
+  {
+    id: "healthchecks",
+    name: "Healthchecks",
+    category: "Tools",
+    icon: "🩺",
+    description: "Dead-man's-switch monitoring for cron jobs and scheduled tasks.",
+    longDescription:
+      "Healthchecks flips the usual monitoring model: your cron job or scheduled task pings it on success, and Healthchecks alerts you the moment a ping doesn't arrive on time — catching silent failures uptime checks miss.",
+    highlights: [
+      "Alerts when a scheduled job stops running",
+      "Simple HTTP ping from any cron job or script",
+      "Uses its own SQLite database — no external DB needed"
+    ],
+    image: "healthchecks/healthchecks:latest",
+    containerPort: 8000,
+    suggestedName: "healthchecks",
+    env: [
+      { key: "DB", value: "sqlite" },
+      { key: "DB_NAME", value: "/data/hc.sqlite" },
+      { key: "SECRET_KEY", generate: "password", generateLength: 32, secret: true },
+      { key: "ALLOWED_HOSTS", value: "*" }
+    ],
+    volumes: ["/data"]
+  },
+  {
+    id: "speedtest-tracker",
+    name: "Speedtest Tracker",
+    category: "Tools",
+    icon: "⚡",
+    description: "Tracks your internet speed over time on a graph.",
+    longDescription:
+      "Speedtest Tracker periodically runs an internet speed test and graphs the results over time, so you can spot slowdowns and hold your ISP to their advertised speed.",
+    highlights: [
+      "Scheduled speed tests, graphed over time",
+      "Great for catching ISP slowdowns",
+      "Uses its own SQLite database — no external DB needed"
+    ],
+    image: "lscr.io/linuxserver/speedtest-tracker:latest",
+    containerPort: 80,
+    suggestedName: "speedtest-tracker",
+    env: [
+      { key: "PUID", value: "1000" },
+      { key: "PGID", value: "1000" },
+      { key: "TZ", value: "Etc/UTC" },
+      { key: "APP_KEY", generate: "password", generateLength: 32, secret: true },
+      { key: "DB_CONNECTION", value: "sqlite" }
+    ],
+    volumes: ["/config"]
+  },
+
+  // ---- Media ----
+  {
+    id: "audiobookshelf",
+    name: "Audiobookshelf",
+    category: "Apps",
+    icon: "🎧",
+    description: "Audiobook and podcast server with progress sync.",
+    longDescription:
+      "Audiobookshelf is a self-hosted audiobook and podcast server. It tracks listening progress and syncs across devices, with mobile apps for iOS and Android.",
+    highlights: [
+      "Audiobooks and podcasts in one server",
+      "Progress sync across devices",
+      "Mobile apps for iOS and Android"
+    ],
+    image: "advplyr/audiobookshelf:latest",
+    containerPort: 80,
+    suggestedName: "audiobookshelf",
+    env: [],
+    volumes: ["/audiobooks", "/podcasts", "/metadata", "/config"]
+  },
+  {
+    id: "kavita",
+    name: "Kavita",
+    category: "Apps",
+    icon: "📖",
+    description: "Manga, comic, and ebook reader server.",
+    longDescription:
+      "Kavita is a fast, feature-rich reading server for manga, comics, and ebooks, with a clean web reader and mobile-friendly UI.",
+    highlights: [
+      "Manga, comics, and ebooks in one library",
+      "Clean, fast web reader",
+      "Big, active community"
+    ],
+    image: "jvmilazz0/kavita:latest",
+    containerPort: 5000,
+    suggestedName: "kavita",
+    env: [],
+    volumes: ["/kavita/config", "/manga"]
+  },
+  {
+    id: "calibre-web",
+    name: "Calibre-Web",
+    category: "Apps",
+    icon: "📕",
+    description: "Web UI for browsing and managing an ebook library.",
+    longDescription:
+      "Calibre-Web is a web app for browsing, reading, and managing an ebook collection, and pairs well with an existing Calibre library.",
+    highlights: [
+      "Browse, read, and manage ebooks from a browser",
+      "Pairs with an existing Calibre library",
+      "OPDS feed for e-reader apps"
+    ],
+    image: "lscr.io/linuxserver/calibre-web:latest",
+    containerPort: 8083,
+    suggestedName: "calibre-web",
+    env: [
+      { key: "PUID", value: "1000" },
+      { key: "PGID", value: "1000" },
+      { key: "TZ", value: "Etc/UTC" }
+    ],
+    volumes: ["/config", "/books"]
+  },
+  {
+    id: "jellyseerr",
+    name: "Jellyseerr",
+    category: "Apps",
+    icon: "🍿",
+    description: "Request manager for Jellyfin — users request, you approve.",
+    longDescription:
+      "Jellyseerr lets your Jellyfin users browse and request movies/shows, which you can then approve from a queue. Pairs naturally with the Jellyfin template already in this catalog.",
+    highlights: [
+      "Users submit requests; you approve them",
+      "Pairs with Jellyfin",
+      "Discovery browsing for movies and shows"
+    ],
+    image: "fallenbagel/jellyseerr:latest",
+    containerPort: 5055,
+    suggestedName: "jellyseerr",
+    env: [{ key: "TZ", value: "Etc/UTC" }],
+    volumes: ["/app/config"]
+  },
+
+  // ---- Notes / docs / wiki ----
+  {
+    id: "memos",
+    name: "Memos",
+    category: "Tools",
+    icon: "🗒️",
+    description: "Lightweight, fast note-taking, very popular on GitHub.",
+    longDescription:
+      "Memos is a lightweight, privacy-first note-taking app for quickly capturing ideas. It keeps its own embedded database — no external database needed.",
+    highlights: [
+      "Fast, lightweight note capture",
+      "Privacy-first, self-hosted",
+      "No external database required"
+    ],
+    image: "ghcr.io/usememos/memos:latest",
+    containerPort: 5230,
+    suggestedName: "memos",
+    env: [],
+    volumes: ["/var/opt/memos"]
+  },
+  {
+    id: "trilium",
+    name: "Trilium Notes",
+    category: "Tools",
+    icon: "🌳",
+    description: "Powerful hierarchical notes app.",
+    longDescription:
+      "Trilium Notes (via the actively maintained TriliumNext fork) is a hierarchical notes app for building a large personal knowledge base, with rich formatting, note relationships, and scripting.",
+    highlights: [
+      "Hierarchical notes for a large knowledge base",
+      "Rich formatting and note relationships",
+      "Actively maintained TriliumNext fork"
+    ],
+    image: "triliumnext/notes:latest",
+    containerPort: 8080,
+    suggestedName: "trilium",
+    env: [],
+    volumes: ["/home/node/trilium-data"]
+  },
+
+  // ---- Home / life admin ----
+  {
+    id: "mealie",
+    name: "Mealie",
+    category: "Apps",
+    icon: "🍲",
+    description: "Recipe manager with meal planning.",
+    longDescription:
+      "Mealie is a self-hosted recipe manager and meal planner — import recipes from a URL, organize them, and build a weekly meal plan and shopping list.",
+    highlights: [
+      "Import recipes straight from a URL",
+      "Meal planning and shopping lists",
+      "No external database required"
+    ],
+    image: "ghcr.io/mealie-recipes/mealie:latest",
+    containerPort: 9000,
+    suggestedName: "mealie",
+    env: [],
+    volumes: ["/app/data"]
+  },
+  {
+    id: "homebox",
+    name: "Homebox",
+    category: "Apps",
+    icon: "📦",
+    description: "Home inventory and organization tracker.",
+    longDescription:
+      "Homebox tracks the stuff in your home — items, locations, labels, warranties, and maintenance schedules — in a simple, lightweight web app.",
+    highlights: [
+      "Track items, locations, and labels",
+      "Warranty and maintenance reminders",
+      "Lightweight — no external database required"
+    ],
+    image: "ghcr.io/sysadminsmedia/homebox:latest",
+    containerPort: 7745,
+    suggestedName: "homebox",
+    env: [],
+    volumes: ["/data"]
+  },
+  {
+    id: "wallabag",
+    name: "Wallabag",
+    category: "Apps",
+    icon: "🦘",
+    description: "\"Read it later\" article saver, a Pocket alternative.",
+    longDescription:
+      "Wallabag saves articles and web pages to read later, in a clean, ad-free reading view, with tagging and full-text search. Runs in its built-in SQLite mode — no external database needed.",
+    highlights: [
+      "Clean, ad-free reading view",
+      "Tagging and full-text search",
+      "SQLite mode — no external database required"
+    ],
+    image: "wallabag/wallabag:latest",
+    containerPort: 80,
+    suggestedName: "wallabag",
+    env: [{ key: "SYMFONY__ENV__DATABASE_DRIVER", value: "pdo_sqlite" }],
+    volumes: ["/var/www/wallabag/data"]
   }
 ];
