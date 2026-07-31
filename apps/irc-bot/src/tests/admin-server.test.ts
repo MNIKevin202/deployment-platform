@@ -38,6 +38,7 @@ async function setup(runtimeOverrides: Partial<BotRuntime> = {}) {
     nick: "QuiporaBot",
     joinedChannels: new Set(["#support"]),
     registerNick: null,
+    blockChannel: null,
     ...runtimeOverrides
   };
 
@@ -136,5 +137,69 @@ describe("admin server", () => {
     const { baseUrl } = await setup();
     const res = await fetch(`${baseUrl}/nope`);
     assert.equal(res.status, 404);
+  });
+
+  test("GET /blocked-channels reflects the persisted state", async () => {
+    const { baseUrl, state } = await setup();
+    state.addBlockedChannel("#spam");
+
+    const res = await fetch(`${baseUrl}/blocked-channels`);
+    const body = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.deepEqual(body.channels, ["#spam"]);
+  });
+
+  test("POST /blocked-channels returns 503 when not connected", async () => {
+    const { baseUrl } = await setup({ blockChannel: null });
+    const res = await fetch(`${baseUrl}/blocked-channels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel: "#spam" })
+    });
+    assert.equal(res.status, 503);
+  });
+
+  test("POST /blocked-channels requires a channel starting with '#'", async () => {
+    const { baseUrl } = await setup({ blockChannel: async () => ({ ok: true, message: "done" }) });
+    const res = await fetch(`${baseUrl}/blocked-channels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel: "spam" })
+    });
+    assert.equal(res.status, 400);
+  });
+
+  test("POST /blocked-channels calls through to the runtime and returns its result", async () => {
+    let receivedChannel: string | undefined;
+    const { baseUrl } = await setup({
+      blockChannel: async (channel) => {
+        receivedChannel = channel;
+        return { ok: true, message: "Cleared and blocked." };
+      }
+    });
+
+    const res = await fetch(`${baseUrl}/blocked-channels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel: "#spam" })
+    });
+    const body = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(receivedChannel, "#spam");
+  });
+
+  test("DELETE /blocked-channels/:channel unblocks even when not connected", async () => {
+    const { baseUrl, state } = await setup({ blockChannel: null });
+    state.addBlockedChannel("#spam");
+
+    const res = await fetch(`${baseUrl}/blocked-channels/${encodeURIComponent("#spam")}`, {
+      method: "DELETE"
+    });
+
+    assert.equal(res.status, 200);
+    assert.deepEqual(state.getBlockedChannels(), []);
   });
 });

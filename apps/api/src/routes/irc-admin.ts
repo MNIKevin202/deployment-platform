@@ -20,7 +20,21 @@ import {
   upsertOperator,
   writeFileToContainer
 } from "../services/irc-admin-service.js";
-import { listRegisteredChannels, transferChannel, unregisterChannel } from "../services/irc-channel-service.js";
+import {
+  banChannelMember,
+  getChannelDetail,
+  kickChannelMember,
+  listRegisteredChannels,
+  setChannelMemberOp,
+  transferChannel,
+  unregisterChannel
+} from "../services/irc-channel-service.js";
+import {
+  blockChannelViaBot,
+  findLinkedBotApp,
+  getBotBlockedChannels,
+  unblockChannelViaBot
+} from "../services/irc-bot-admin-service.js";
 
 interface RegisterIrcAdminRoutesOptions {
   appDatabase: AppDatabase;
@@ -181,6 +195,57 @@ async function resolveIrcChannelTarget(
     containerName: resolved.app.containerName,
     containerPort: resolved.app.containerPort
   };
+}
+
+interface BotTarget {
+  containerName: string;
+  containerPort: number;
+}
+
+/**
+ * Finds the Quipora Bot app pointed at this IRC server (via its IRC_HOST env
+ * var — there's no formal link between the two apps) and confirms it's
+ * running. Channel blocking is enforced by the bot staying permanently in
+ * the channel and kicking anyone who joins, so without a running bot there's
+ * nothing to actually do the blocking.
+ */
+async function resolveLinkedBotTarget(
+  appDatabase: AppDatabase,
+  docker: Docker,
+  ircContainerName: string,
+  reply: FastifyReply
+): Promise<BotTarget | null> {
+  const candidates = appDatabase.listApps().map((app) => ({
+    id: app.id,
+    image: app.image,
+    containerName: app.containerName,
+    containerId: app.containerId
+  }));
+
+  const botApp = findLinkedBotApp(
+    candidates,
+    (appId) => appDatabase.listAppEnvVars(appId).map((v) => ({ key: v.key, value: v.value })),
+    ircContainerName
+  );
+
+  if (!botApp) {
+    reply.code(409).send({
+      success: false,
+      message: "No Quipora Bot app is configured for this server — deploy one to block channels."
+    });
+    return null;
+  }
+
+  const resolved = await resolveManagedContainer(appDatabase, docker, botApp.id);
+  if (!resolved.found || !resolved.containerExists || !resolved.running || !resolved.app.containerName) {
+    reply.code(409).send({
+      success: false,
+      message: "Quipora Bot isn't running — start it to block or unblock channels."
+    });
+    return null;
+  }
+
+  return { containerName: resolved.app.containerName, containerPort: resolved.app.containerPort };
 }
 
 const HEALTH_CHECK_DELAY_MS = 1500;
@@ -611,4 +676,253 @@ export async function registerIrcAdminRoutes(
       }
     }
   );
+
+  fastify.get<{ Params: ChannelParams }>("/apps/:id/irc/channels/:channel", async (request, reply) => {
+    const parsedParams = channelParamSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return reply.code(400).send({ success: false, message: "Invalid request" });
+    }
+
+    const channelName = parsedParams.data.channel;
+    if (!channelName.startsWith("#") && !channelName.startsWith("&")) {
+      return reply.code(400).send({ success: false, message: "Not a valid channel name" });
+    }
+
+    const target = await resolveIrcChannelTarget(appDatabase, docker, parsedParams.data.id, reply);
+    if (!target) {
+      return;
+    }
+
+    try {
+      const result = await withTemporaryIrcOperator(docker, target.containerId, (username, password) =>
+        getChannelDetail(target.containerName, target.containerPort, username, password, channelName)
+      );
+
+      if (!result.ok) {
+        return reply.code(502).send({ success: false, message: result.message });
+      }
+
+      return { success: true, channel: result.value };
+    } catch (error) {
+      request.log.error(error, "Unable to load IRC channel detail");
+      return reply.code(502).send({ success: false, message: "Unable to reach the IRC server" });
+    }
+  });
+
+  const memberActionBodySchema = z.object({
+    nick: operatorUsernameSchema
+  });
+
+  fastify.post<{ Params: ChannelParams }>("/apps/:id/irc/channels/:channel/kick", async (request, reply) => {
+    const parsedParams = channelParamSchema.safeParse(request.params);
+    const parsedBody = memberActionBodySchema.safeParse(request.body);
+    if (!parsedParams.success || !parsedBody.success) {
+      return reply.code(400).send({ success: false, message: "Invalid request" });
+    }
+
+    const channelName = parsedParams.data.channel;
+    if (!channelName.startsWith("#") && !channelName.startsWith("&")) {
+      return reply.code(400).send({ success: false, message: "Not a valid channel name" });
+    }
+
+    const target = await resolveIrcChannelTarget(appDatabase, docker, parsedParams.data.id, reply);
+    if (!target) {
+      return;
+    }
+
+    try {
+      const result = await withTemporaryIrcOperator(docker, target.containerId, (username, password) =>
+        kickChannelMember(
+          target.containerName,
+          target.containerPort,
+          username,
+          password,
+          channelName,
+          parsedBody.data.nick,
+          "Kicked by an administrator"
+        )
+      );
+
+      if (!result.ok) {
+        return reply.code(502).send({ success: false, message: result.message });
+      }
+
+      return { success: result.value.ok, message: result.value.message };
+    } catch (error) {
+      request.log.error(error, "Unable to kick from IRC channel");
+      return reply.code(502).send({ success: false, message: "Unable to reach the IRC server" });
+    }
+  });
+
+  fastify.post<{ Params: ChannelParams }>("/apps/:id/irc/channels/:channel/ban", async (request, reply) => {
+    const parsedParams = channelParamSchema.safeParse(request.params);
+    const parsedBody = memberActionBodySchema.safeParse(request.body);
+    if (!parsedParams.success || !parsedBody.success) {
+      return reply.code(400).send({ success: false, message: "Invalid request" });
+    }
+
+    const channelName = parsedParams.data.channel;
+    if (!channelName.startsWith("#") && !channelName.startsWith("&")) {
+      return reply.code(400).send({ success: false, message: "Not a valid channel name" });
+    }
+
+    const target = await resolveIrcChannelTarget(appDatabase, docker, parsedParams.data.id, reply);
+    if (!target) {
+      return;
+    }
+
+    try {
+      const result = await withTemporaryIrcOperator(docker, target.containerId, (username, password) =>
+        banChannelMember(target.containerName, target.containerPort, username, password, channelName, parsedBody.data.nick)
+      );
+
+      if (!result.ok) {
+        return reply.code(502).send({ success: false, message: result.message });
+      }
+
+      return { success: result.value.ok, message: result.value.message };
+    } catch (error) {
+      request.log.error(error, "Unable to ban from IRC channel");
+      return reply.code(502).send({ success: false, message: "Unable to reach the IRC server" });
+    }
+  });
+
+  const opBodySchema = z.object({
+    nick: operatorUsernameSchema,
+    grant: z.boolean()
+  });
+
+  fastify.post<{ Params: ChannelParams }>("/apps/:id/irc/channels/:channel/op", async (request, reply) => {
+    const parsedParams = channelParamSchema.safeParse(request.params);
+    const parsedBody = opBodySchema.safeParse(request.body);
+    if (!parsedParams.success || !parsedBody.success) {
+      return reply.code(400).send({ success: false, message: "Invalid request" });
+    }
+
+    const channelName = parsedParams.data.channel;
+    if (!channelName.startsWith("#") && !channelName.startsWith("&")) {
+      return reply.code(400).send({ success: false, message: "Not a valid channel name" });
+    }
+
+    const target = await resolveIrcChannelTarget(appDatabase, docker, parsedParams.data.id, reply);
+    if (!target) {
+      return;
+    }
+
+    try {
+      const result = await withTemporaryIrcOperator(docker, target.containerId, (username, password) =>
+        setChannelMemberOp(
+          target.containerName,
+          target.containerPort,
+          username,
+          password,
+          channelName,
+          parsedBody.data.nick,
+          parsedBody.data.grant
+        )
+      );
+
+      if (!result.ok) {
+        return reply.code(502).send({ success: false, message: result.message });
+      }
+
+      return { success: result.value.ok, message: result.value.message };
+    } catch (error) {
+      request.log.error(error, "Unable to change IRC channel op status");
+      return reply.code(502).send({ success: false, message: "Unable to reach the IRC server" });
+    }
+  });
+
+  fastify.get<{ Params: AppIdParams }>("/apps/:id/irc/blocked-channels", async (request, reply) => {
+    const parsedParams = idParamSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return reply.code(400).send({ success: false, message: "Invalid app id" });
+    }
+
+    const ircTarget = await resolveIrcChannelTarget(appDatabase, docker, parsedParams.data.id, reply);
+    if (!ircTarget) {
+      return;
+    }
+
+    const botTarget = await resolveLinkedBotTarget(appDatabase, docker, ircTarget.containerName, reply);
+    if (!botTarget) {
+      return;
+    }
+
+    try {
+      const channels = await getBotBlockedChannels(botTarget.containerName, botTarget.containerPort);
+      return { success: true, channels };
+    } catch (error) {
+      request.log.error(error, "Unable to load blocked channels");
+      return reply.code(502).send({ success: false, message: "Unable to reach the bot" });
+    }
+  });
+
+  fastify.post<{ Params: ChannelParams }>("/apps/:id/irc/channels/:channel/block", async (request, reply) => {
+    const parsedParams = channelParamSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return reply.code(400).send({ success: false, message: "Invalid request" });
+    }
+
+    const channelName = parsedParams.data.channel;
+    if (!channelName.startsWith("#") && !channelName.startsWith("&")) {
+      return reply.code(400).send({ success: false, message: "Not a valid channel name" });
+    }
+
+    const ircTarget = await resolveIrcChannelTarget(appDatabase, docker, parsedParams.data.id, reply);
+    if (!ircTarget) {
+      return;
+    }
+
+    const botTarget = await resolveLinkedBotTarget(appDatabase, docker, ircTarget.containerName, reply);
+    if (!botTarget) {
+      return;
+    }
+
+    // If the channel is registered, drop the registration first — a block
+    // is meant to be a clean slate, not a registered channel that's merely
+    // unoccupied.
+    try {
+      await withTemporaryIrcOperator(docker, ircTarget.containerId, (username, password) =>
+        unregisterChannel(ircTarget.containerName, ircTarget.containerPort, username, password, channelName)
+      );
+    } catch (error) {
+      request.log.error(error, "Unable to unregister channel before blocking it (continuing anyway)");
+    }
+
+    try {
+      const { status, result } = await blockChannelViaBot(botTarget.containerName, botTarget.containerPort, channelName);
+      return reply.code(status).send({ success: result.ok, message: result.message });
+    } catch (error) {
+      request.log.error(error, "Unable to block IRC channel");
+      return reply.code(502).send({ success: false, message: "Unable to reach the bot" });
+    }
+  });
+
+  fastify.delete<{ Params: ChannelParams }>("/apps/:id/irc/channels/:channel/block", async (request, reply) => {
+    const parsedParams = channelParamSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return reply.code(400).send({ success: false, message: "Invalid request" });
+    }
+
+    const channelName = parsedParams.data.channel;
+
+    const ircTarget = await resolveIrcChannelTarget(appDatabase, docker, parsedParams.data.id, reply);
+    if (!ircTarget) {
+      return;
+    }
+
+    const botTarget = await resolveLinkedBotTarget(appDatabase, docker, ircTarget.containerName, reply);
+    if (!botTarget) {
+      return;
+    }
+
+    try {
+      const { status, result } = await unblockChannelViaBot(botTarget.containerName, botTarget.containerPort, channelName);
+      return reply.code(status).send({ success: result.ok, message: result.message });
+    } catch (error) {
+      request.log.error(error, "Unable to unblock IRC channel");
+      return reply.code(502).send({ success: false, message: "Unable to reach the bot" });
+    }
+  });
 }

@@ -6,6 +6,7 @@ import { renderWelcomeMessage } from "./welcome.js";
 import { channelsFromListReply, channelsToJoin } from "./joins.js";
 import { pongReply } from "./ping.js";
 import { parseKick } from "./kick.js";
+import { shouldKickForBlockedChannel } from "./block.js";
 import { interpretServiceReply, isReservedNickError, type ServiceCommandResult } from "./nickserv.js";
 import { BotState } from "./state.js";
 import { startAdminServer, type BotRuntime } from "./admin-server.js";
@@ -128,6 +129,13 @@ async function runConnection(config: BotConfig, state: BotState, runtime: BotRun
         return;
       }
       log("join", { channel, nick });
+
+      if (shouldKickForBlockedChannel(channel, nick, actualNick, state.getBlockedChannels())) {
+        log("blocked-channel-kick", { channel, nick });
+        conn.send(`KICK ${channel} ${nick} :This channel has been blocked by an administrator.`);
+        return;
+      }
+
       const welcome = renderWelcomeMessage(state.get().welcomeMessageTemplate, nick);
       if (welcome) {
         conn.send(`PRIVMSG ${channel} :${welcome}`);
@@ -202,6 +210,25 @@ async function runConnection(config: BotConfig, state: BotState, runtime: BotRun
     }
     return result;
   };
+  runtime.blockChannel = async (channel: string): Promise<ServiceCommandResult> => {
+    if (!joinedChannels.has(channel)) {
+      conn.send(`SAJOIN ${actualNick} ${channel}`);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    const clearLines = await conn.serviceCommand("ChanServ", `CLEAR ${channel} users`);
+    const result = interpretServiceReply(clearLines);
+    state.addBlockedChannel(channel);
+    log("channel-blocked", { channel });
+    return result;
+  };
+
+  // Resume enforcement on every blocked channel after a reconnect — the bot
+  // needs to be present to see (and kick) any JOIN into it.
+  for (const channel of state.getBlockedChannels()) {
+    if (!joinedChannels.has(channel)) {
+      conn.send(`SAJOIN ${actualNick} ${channel}`);
+    }
+  }
 
   await joinAllChannels(conn, joinedChannels);
 
@@ -216,6 +243,7 @@ async function runConnection(config: BotConfig, state: BotState, runtime: BotRun
       clearInterval(pollTimer);
       runtime.connected = false;
       runtime.registerNick = null;
+      runtime.blockChannel = null;
       log("disconnected");
       resolve();
     });
@@ -229,7 +257,8 @@ async function main(): Promise<void> {
     connected: false,
     nick: config.nick,
     joinedChannels: new Set(),
-    registerNick: null
+    registerNick: null,
+    blockChannel: null
   };
 
   startAdminServer(config.adminPort, state, runtime);

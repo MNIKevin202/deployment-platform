@@ -4,11 +4,13 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, test } from "node:test";
 import {
   BotAdminUnreachableError,
+  findLinkedBotApp,
   getBotConfig,
   getBotStatus,
   isIrcBotImage,
   registerBotNick,
-  updateBotConfig
+  updateBotConfig,
+  type BotAppCandidate
 } from "../services/irc-bot-admin-service.js";
 
 describe("isIrcBotImage", () => {
@@ -131,5 +133,52 @@ describe("registerBotNick", () => {
 
     await registerBotNick(host, port, "hunter2", "admin@example.com");
     assert.deepEqual(receivedBody, { password: "hunter2", email: "admin@example.com" });
+  });
+});
+
+describe("findLinkedBotApp", () => {
+  const ircContainer = "app-quipora-irc";
+
+  function candidate(overrides: Partial<BotAppCandidate> = {}): BotAppCandidate {
+    return {
+      id: 1,
+      image: "ghcr.io/mnikevin202/quipora-bot:latest",
+      containerName: "app-quipora-bot",
+      containerId: "c1",
+      ...overrides
+    };
+  }
+
+  test("finds the bot app whose IRC_HOST env var matches the IRC container", () => {
+    const apps = [candidate({ id: 1 })];
+    const envVars = (appId: number) =>
+      appId === 1 ? [{ key: "IRC_HOST", value: ircContainer }] : [];
+
+    assert.deepEqual(findLinkedBotApp(apps, envVars, ircContainer), candidate({ id: 1 }));
+  });
+
+  test("ignores non-bot-image apps", () => {
+    const apps = [candidate({ id: 1, image: "postgres:16" })];
+    const envVars = () => [{ key: "IRC_HOST", value: ircContainer }];
+
+    assert.equal(findLinkedBotApp(apps, envVars, ircContainer), null);
+  });
+
+  test("ignores a bot app pointed at a different IRC server", () => {
+    const apps = [candidate({ id: 1 })];
+    const envVars = () => [{ key: "IRC_HOST", value: "app-some-other-irc" }];
+
+    assert.equal(findLinkedBotApp(apps, envVars, ircContainer), null);
+  });
+
+  test("returns null when there are no candidate apps at all", () => {
+    assert.equal(findLinkedBotApp([], () => [], ircContainer), null);
+  });
+
+  test("returns the first match when multiple bot apps somehow point at the same server", () => {
+    const apps = [candidate({ id: 1 }), candidate({ id: 2 })];
+    const envVars = () => [{ key: "IRC_HOST", value: ircContainer }];
+
+    assert.equal(findLinkedBotApp(apps, envVars, ircContainer)?.id, 1);
   });
 });

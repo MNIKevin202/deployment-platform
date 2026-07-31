@@ -14,6 +14,7 @@ export interface BotRuntime {
   nick: string;
   joinedChannels: Set<string>;
   registerNick: ((password: string, email?: string) => Promise<ServiceCommandResult>) | null;
+  blockChannel: ((channel: string) => Promise<ServiceCommandResult>) | null;
 }
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -116,6 +117,40 @@ async function handleRequest(
 
       const result = await runtime.registerNick(input.password, email);
       sendJson(res, result.ok ? 200 : 422, result);
+      return;
+    }
+
+    if (method === "GET" && url === "/blocked-channels") {
+      sendJson(res, 200, { channels: state.getBlockedChannels() });
+      return;
+    }
+
+    if (method === "POST" && url === "/blocked-channels") {
+      if (!runtime.blockChannel) {
+        sendJson(res, 503, { ok: false, message: "Not currently connected to the IRC server." });
+        return;
+      }
+
+      const body = await readJsonBody(req);
+      const input = body as { channel?: unknown };
+      if (typeof input.channel !== "string" || !input.channel.startsWith("#")) {
+        sendJson(res, 400, { message: "channel is required and must start with '#'." });
+        return;
+      }
+
+      const result = await runtime.blockChannel(input.channel);
+      sendJson(res, result.ok ? 200 : 422, result);
+      return;
+    }
+
+    if (method === "DELETE" && url.startsWith("/blocked-channels/")) {
+      const channel = decodeURIComponent(url.slice("/blocked-channels/".length));
+      if (!channel) {
+        sendJson(res, 400, { message: "channel is required." });
+        return;
+      }
+      state.removeBlockedChannel(channel);
+      sendJson(res, 200, { ok: true, message: `${channel} was unblocked` });
       return;
     }
 

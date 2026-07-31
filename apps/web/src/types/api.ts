@@ -458,6 +458,32 @@ export interface IrcChannelActionResponse {
   message: string;
 }
 
+export interface IrcChannelMember {
+  nick: string;
+  isOp: boolean;
+}
+
+export interface IrcChannelDetail {
+  name: string;
+  topic: string | null;
+  memberCount: number;
+  founder: string | null;
+  registeredAt: string | null;
+  members: IrcChannelMember[];
+}
+
+export interface IrcChannelDetailResponse {
+  success: boolean;
+  channel: IrcChannelDetail;
+  message?: string;
+}
+
+export interface IrcBlockedChannelsResponse {
+  success: boolean;
+  channels: string[];
+  message?: string;
+}
+
 export interface BotStatus {
   connected: boolean;
   nick: string;

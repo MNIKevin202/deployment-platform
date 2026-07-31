@@ -15,6 +15,9 @@ const CHANSERV_REPLY_TIMEOUT_MS = 4000;
 const LIST_REPLY_TIMEOUT_MS = 8000;
 /** How long to keep collecting ChanServ NOTICE lines after the last one arrives. */
 const CHANSERV_QUIET_PERIOD_MS = 400;
+const NAMES_REPLY_TIMEOUT_MS = 6000;
+const TOPIC_REPLY_TIMEOUT_MS = 5000;
+const ACTION_CONFIRM_TIMEOUT_MS = 4000;
 
 export interface IrcLine {
   raw: string;
@@ -255,6 +258,108 @@ export class IrcServiceSession {
       this.lineHandlers.push(handler);
       this.send("LIST");
     });
+  }
+
+  /**
+   * Sends NAMES and collects RPL_NAMREPLY (353) until RPL_ENDOFNAMES (366) or
+   * a timeout. Ergo prefixes an op's nick with "@" in the space-separated
+   * member list (other prefixes like +/%/~ exist for other privilege
+   * levels, but only "@" — full channel op — matters for this UI).
+   */
+  names(channel: string): Promise<Array<{ nick: string; isOp: boolean }>> {
+    return new Promise((resolve) => {
+      const collected: Array<{ nick: string; isOp: boolean }> = [];
+
+      const finish = () => {
+        clearTimeout(timer);
+        this.lineHandlers = this.lineHandlers.filter((h) => h !== handler);
+        resolve(collected);
+      };
+
+      const timer = setTimeout(finish, NAMES_REPLY_TIMEOUT_MS);
+
+      const handler = (line: IrcLine) => {
+        if (line.command === "353") {
+          const memberList = line.params.at(-1) ?? "";
+          for (const raw of memberList.split(" ")) {
+            if (!raw) {
+              continue;
+            }
+            const isOp = raw.startsWith("@");
+            const nick = raw.replace(/^[~&@%+]/, "");
+            collected.push({ nick, isOp });
+          }
+        } else if (line.command === "366") {
+          finish();
+        }
+      };
+
+      this.lineHandlers.push(handler);
+      this.send(`NAMES ${channel}`);
+    });
+  }
+
+  /** Sends TOPIC and waits for RPL_TOPIC (332) or RPL_NOTOPIC (331). Returns null if unset. */
+  async topic(channel: string): Promise<string | null> {
+    const resultPromise = this.waitFor(
+      (line) => line.command === "332" || line.command === "331",
+      TOPIC_REPLY_TIMEOUT_MS
+    ).catch(() => null);
+
+    this.send(`TOPIC ${channel}`);
+
+    const result = await resultPromise;
+    return result && result.command === "332" ? (result.params.at(-1) ?? null) : null;
+  }
+
+/** Forces a user out of a channel — confirmed by the server echoing the KICK back. */
+  async kick(channel: string, nick: string, reason: string): Promise<boolean> {
+    const confirmation = this.waitFor(
+      (line) => line.command === "KICK" && line.params[0] === channel && line.params[1] === nick,
+      ACTION_CONFIRM_TIMEOUT_MS
+    )
+      .then(() => true)
+      .catch(() => false);
+
+    this.send(`KICK ${channel} ${nick} :${reason}`);
+    return confirmation;
+  }
+
+  /** Bans a mask from a channel via the standard channel mode, e.g. "nick!*@*". */
+  async ban(channel: string, mask: string): Promise<boolean> {
+    const confirmation = this.waitFor(
+      (line) => line.command === "MODE" && line.params[0] === channel && line.params[1] === "+b",
+      ACTION_CONFIRM_TIMEOUT_MS
+    )
+      .then(() => true)
+      .catch(() => false);
+
+    this.send(`MODE ${channel} +b ${mask}`);
+    return confirmation;
+  }
+
+  /**
+   * Grants or revokes channel op on an arbitrary member via SAMODE — the
+   * oper-only forced mode command, confirmed live to bypass ChanServ's own
+   * OP/DEOP (which require being the channel's founder or in its AMODEs,
+   * with no operator override — verified against the real server's HELP
+   * text and by testing OP as a non-privileged account).
+   */
+  async setChannelOp(channel: string, nick: string, grant: boolean): Promise<boolean> {
+    const modeChar = grant ? "+o" : "-o";
+    const confirmation = this.waitFor(
+      (line) =>
+        line.command === "MODE" &&
+        line.params[0] === channel &&
+        line.params[1] === modeChar &&
+        line.params[2] === nick,
+      ACTION_CONFIRM_TIMEOUT_MS
+    )
+      .then(() => true)
+      .catch(() => false);
+
+    this.send(`SAMODE ${channel} ${modeChar} ${nick}`);
+    return confirmation;
   }
 
   close(): void {
