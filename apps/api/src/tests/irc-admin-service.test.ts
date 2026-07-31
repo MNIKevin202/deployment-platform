@@ -1,13 +1,29 @@
 import assert from "node:assert/strict";
+import { PassThrough } from "node:stream";
 import { describe, test } from "node:test";
 import * as bcrypt from "bcryptjs";
+import Docker from "dockerode";
 import {
   hashOperatorPassword,
   isIrcServerImage,
   parseOperators,
+  readFileFromContainer,
   removeOperator,
   upsertOperator
 } from "../services/irc-admin-service.js";
+
+/**
+ * Frames a chunk exactly the way Docker's own multiplexed exec stream does
+ * (no TTY): an 8-byte header — stream type (1=stdout), 3 reserved bytes,
+ * then a big-endian uint32 payload length — followed by the payload itself.
+ */
+function muxFrame(streamType: 1 | 2, payload: string): Buffer {
+  const body = Buffer.from(payload, "utf8");
+  const header = Buffer.alloc(8);
+  header.writeUInt8(streamType, 0);
+  header.writeUInt32BE(body.length, 4);
+  return Buffer.concat([header, body]);
+}
 
 // A trimmed but structurally faithful excerpt of Ergo's default.yaml, opers
 // section, including the comments Ergo ships with — round-tripping through
@@ -35,6 +51,65 @@ accounts:
     registration:
         enabled: true
 `;
+
+describe("readFileFromContainer", () => {
+  test("reads a multi-frame multiplexed exec stream back byte-for-byte (regression: a TTY exec previously reflowed and corrupted this)", async () => {
+    // Split the config across several frames, interleaved with a stderr
+    // frame that must be discarded rather than mixed into the result —
+    // exactly what a real multi-KB `cat` produces in multiple chunks.
+    const third = Math.floor(SAMPLE_CONFIG.length / 3);
+    const part1 = SAMPLE_CONFIG.slice(0, third);
+    const part2 = SAMPLE_CONFIG.slice(third, third * 2);
+    const part3 = SAMPLE_CONFIG.slice(third * 2);
+
+    const execStream = new PassThrough();
+    execStream.write(muxFrame(1, part1));
+    execStream.write(muxFrame(2, "some stderr noise\n"));
+    execStream.write(muxFrame(1, part2));
+    execStream.write(muxFrame(1, part3));
+    execStream.end();
+
+    let requestedTty: boolean | undefined;
+
+    const fakeContainer = {
+      exec: async (options: { Tty: boolean }) => {
+        requestedTty = options.Tty;
+        return {
+          start: async () => execStream,
+          inspect: async () => ({ ExitCode: 0 })
+        };
+      }
+    };
+
+    // A real Docker instance so `.modem.demuxStream` is the actual library
+    // implementation, not a hand-rolled stand-in for it.
+    const docker = new Docker({ socketPath: "/nonexistent-for-this-test" });
+    docker.getContainer = (() => fakeContainer) as unknown as Docker["getContainer"];
+
+    const result = await readFileFromContainer(docker, "container-1", "/ircd/ircd.yaml");
+
+    assert.equal(requestedTty, false);
+    assert.equal(result, SAMPLE_CONFIG);
+  });
+
+  test("returns null on a non-zero exit code (e.g. file doesn't exist)", async () => {
+    const execStream = new PassThrough();
+    execStream.end();
+
+    const fakeContainer = {
+      exec: async () => ({
+        start: async () => execStream,
+        inspect: async () => ({ ExitCode: 1 })
+      })
+    };
+
+    const docker = new Docker({ socketPath: "/nonexistent-for-this-test" });
+    docker.getContainer = (() => fakeContainer) as unknown as Docker["getContainer"];
+
+    const result = await readFileFromContainer(docker, "container-1", "/ircd/ircd.motd");
+    assert.equal(result, null);
+  });
+});
 
 describe("isIrcServerImage", () => {
   test("recognizes the Ergo image regardless of tag or registry path", () => {

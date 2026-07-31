@@ -1,3 +1,4 @@
+import { PassThrough } from "node:stream";
 import type Docker from "dockerode";
 import * as bcrypt from "bcryptjs";
 import { isScalar, parseDocument, YAMLMap } from "yaml";
@@ -98,7 +99,17 @@ interface ExecResult {
   output: string;
 }
 
-/** Runs a command inside the container and captures its combined stdout+stderr. */
+/**
+ * Runs a command inside the container and captures its stdout.
+ *
+ * Deliberately non-TTY: a PTY reflows output to a terminal width and
+ * translates line endings, which silently corrupts anything larger than a
+ * short status line (a multi-KB YAML file gets re-wrapped mid-line and comes
+ * back structurally different from what's actually on disk). Without a TTY,
+ * Docker instead multiplexes stdout/stderr behind 8-byte frame headers, so
+ * the output has to be demuxed — that's what carries the file through byte
+ * for byte.
+ */
 async function execInContainer(
   docker: Docker,
   containerId: string,
@@ -110,15 +121,20 @@ async function execInContainer(
     Cmd: cmd,
     AttachStdout: true,
     AttachStderr: true,
-    Tty: true
+    Tty: false
   });
 
-  const stream = await exec.start({ hijack: true, stdin: false, Tty: true });
+  const stream = await exec.start({ hijack: true, stdin: false, Tty: false });
 
-  const chunks: Buffer[] = [];
+  const stdoutChunks: Buffer[] = [];
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+  stderr.on("data", () => {});
+
+  docker.modem.demuxStream(stream, stdout, stderr);
 
   await new Promise<void>((resolve, reject) => {
-    stream.on("data", (chunk: Buffer) => chunks.push(chunk));
     stream.on("end", () => resolve());
     stream.on("error", reject);
   });
@@ -127,7 +143,7 @@ async function execInContainer(
 
   return {
     exitCode: inspectResult.ExitCode ?? 1,
-    output: Buffer.concat(chunks).toString("utf8")
+    output: Buffer.concat(stdoutChunks).toString("utf8")
   };
 }
 
@@ -146,13 +162,24 @@ export async function readFileFromContainer(
   return result.output;
 }
 
-/** Writes a file inside the container, overwriting it entirely. */
+/**
+ * Writes a file inside the container, overwriting it entirely. First copies
+ * whatever is currently there to `<path>.bak` (best-effort — a missing
+ * source file, e.g. the very first write, is not an error) so a bad write
+ * is always recoverable by hand, not just theoretically prevented.
+ */
 export async function writeFileToContainer(
   docker: Docker,
   containerId: string,
   path: string,
   content: string
 ): Promise<void> {
+  await execInContainer(docker, containerId, [
+    "sh",
+    "-c",
+    `cp ${JSON.stringify(path)} ${JSON.stringify(`${path}.bak`)} 2>/dev/null || true`
+  ]);
+
   const container = docker.getContainer(containerId);
 
   const exec = await container.exec({
