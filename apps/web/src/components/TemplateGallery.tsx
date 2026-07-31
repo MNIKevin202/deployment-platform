@@ -7,7 +7,7 @@ interface TemplateGalleryProps {
   onSelect: (template: AppTemplate) => void;
 }
 
-const CATEGORIES: TemplateCategory[] = ["Databases", "Tools"];
+const CATEGORIES: TemplateCategory[] = ["Databases", "Apps", "Tools"];
 
 function envSummary(env: AppTemplate["env"][number]): string {
   if (env.generate === "password") {
