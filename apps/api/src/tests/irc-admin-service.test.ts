@@ -5,11 +5,13 @@ import * as bcrypt from "bcryptjs";
 import Docker from "dockerode";
 import {
   hashOperatorPassword,
+  isContainerRunning,
   isIrcServerImage,
   parseGeneralSettings,
   parseOperators,
   readFileFromContainer,
   removeOperator,
+  restoreConfigBackup,
   updateGeneralSettings,
   upsertOperator
 } from "../services/irc-admin-service.js";
@@ -310,5 +312,99 @@ describe("updateGeneralSettings", () => {
       allowRegistrationBeforeConnect: false,
       emailVerificationEnabled: true
     });
+  });
+});
+
+describe("isContainerRunning", () => {
+  test("returns true when the container inspect reports Running", async () => {
+    const docker = new Docker({ socketPath: "/nonexistent-for-this-test" });
+    docker.getContainer = (() => ({
+      inspect: async () => ({ State: { Running: true } })
+    })) as unknown as Docker["getContainer"];
+
+    assert.equal(await isContainerRunning(docker, "container-1"), true);
+  });
+
+  test("returns false when the container is not running (e.g. mid crash-loop)", async () => {
+    const docker = new Docker({ socketPath: "/nonexistent-for-this-test" });
+    docker.getContainer = (() => ({
+      inspect: async () => ({ State: { Running: false } })
+    })) as unknown as Docker["getContainer"];
+
+    assert.equal(await isContainerRunning(docker, "container-1"), false);
+  });
+
+  test("returns false (never throws) when the container can't be inspected at all", async () => {
+    const docker = new Docker({ socketPath: "/nonexistent-for-this-test" });
+    docker.getContainer = (() => ({
+      inspect: async () => {
+        throw new Error("no such container");
+      }
+    })) as unknown as Docker["getContainer"];
+
+    assert.equal(await isContainerRunning(docker, "container-1"), false);
+  });
+});
+
+describe("restoreConfigBackup", () => {
+  test("copies the .bak file back over the original and rehashes", async () => {
+    const commands: string[][] = [];
+    const fakeContainer = {
+      exec: async (options: { Cmd: string[] }) => {
+        commands.push(options.Cmd);
+        return {
+          start: async () => {
+            const stream = new PassThrough();
+            stream.end();
+            return stream;
+          },
+          inspect: async () => ({ ExitCode: 0 })
+        };
+      },
+      kill: async () => {
+        commands.push(["KILL_SIGHUP"]);
+      }
+    };
+
+    const docker = new Docker({ socketPath: "/nonexistent-for-this-test" });
+    docker.getContainer = (() => fakeContainer) as unknown as Docker["getContainer"];
+
+    const restored = await restoreConfigBackup(docker, "container-1", "/ircd/ircd.yaml");
+
+    assert.equal(restored, true);
+    // cp <path>.bak <path>, then a SIGHUP rehash.
+    assert.deepEqual(commands[0], ["sh", "-c", 'cp "/ircd/ircd.yaml.bak" "/ircd/ircd.yaml"']);
+    assert.deepEqual(commands[1], ["KILL_SIGHUP"]);
+  });
+
+  test("returns false (never throws) when the container can't be reached, e.g. mid crash-loop", async () => {
+    const docker = new Docker({ socketPath: "/nonexistent-for-this-test" });
+    docker.getContainer = (() => ({
+      exec: async () => {
+        throw new Error("container is restarting, wait until the container is running");
+      }
+    })) as unknown as Docker["getContainer"];
+
+    const restored = await restoreConfigBackup(docker, "container-1", "/ircd/ircd.yaml");
+    assert.equal(restored, false);
+  });
+
+  test("returns false when the copy itself fails (e.g. no .bak exists yet)", async () => {
+    const fakeContainer = {
+      exec: async () => ({
+        start: async () => {
+          const stream = new PassThrough();
+          stream.end();
+          return stream;
+        },
+        inspect: async () => ({ ExitCode: 1 })
+      })
+    };
+
+    const docker = new Docker({ socketPath: "/nonexistent-for-this-test" });
+    docker.getContainer = (() => fakeContainer) as unknown as Docker["getContainer"];
+
+    const restored = await restoreConfigBackup(docker, "container-1", "/ircd/ircd.yaml");
+    assert.equal(restored, false);
   });
 });

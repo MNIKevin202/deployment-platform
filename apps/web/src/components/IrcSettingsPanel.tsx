@@ -286,7 +286,12 @@ export default function IrcSettingsPanel({ appId, containerRunning }: IrcSetting
             <input
               value={settings.networkName}
               onChange={(event) => updateSettingsField("networkName", event.target.value)}
+              pattern="[A-Za-z0-9_.\-]+"
+              title="Letters, digits, '.', '_', and '-' only — no spaces"
             />
+            <small className="text-faint">
+              Sent as a raw IRC protocol token — letters, digits, '.', '_', and '-' only, no spaces.
+            </small>
           </label>
 
           <label>

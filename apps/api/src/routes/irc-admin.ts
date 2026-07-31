@@ -7,12 +7,14 @@ import {
   IRC_CONFIG_PATH,
   IRC_MOTD_PATH,
   hashOperatorPassword,
+  isContainerRunning,
   isIrcServerImage,
   parseGeneralSettings,
   parseOperators,
   readFileFromContainer,
   rehashIrcServer,
   removeOperator,
+  restoreConfigBackup,
   updateGeneralSettings,
   upsertOperator,
   writeFileToContainer
@@ -53,10 +55,30 @@ const channelNameSchema = z
   .string()
   .regex(/^[#&][^\s,:]{1,49}$/, "Channel names must start with # or & and contain no spaces, commas, or colons");
 
+// Ergo sends this raw as an IRC ISUPPORT NETWORK= token, whose value is a
+// single space-delimited field in the protocol — any whitespace in it is
+// invalid enough that Ergo refuses to load the whole config file, not just
+// that one setting (confirmed live: this exact case took the server down in
+// a boot loop until fixed by hand). Restricting to a conservative charset
+// up front means the write is rejected before it's ever saved, rather than
+// only discovered after the server fails to come back up.
+const networkNameSchema = z
+  .string()
+  .min(1)
+  .max(50)
+  .regex(/^[A-Za-z0-9_.-]+$/, "Network name can only contain letters, digits, '.', '_', and '-' (no spaces)");
+
+// Ergo also sends this as a raw IRC mode string (e.g. "+ntC") — same
+// single-token constraint applies.
+const channelModesSchema = z
+  .string()
+  .max(50)
+  .regex(/^[+-][A-Za-z]*$/, "Must be a mode string like +ntC, with no spaces");
+
 const generalSettingsSchema = z.object({
-  networkName: z.string().min(1).max(100).optional(),
+  networkName: networkNameSchema.optional(),
   autoJoinChannels: z.array(channelNameSchema).max(20).optional(),
-  defaultChannelModes: z.string().max(50).optional(),
+  defaultChannelModes: channelModesSchema.optional(),
   maxChannelsPerClient: z.number().int().min(1).max(10_000).optional(),
   channelRegistrationEnabled: z.boolean().optional(),
   channelRegistrationOperatorOnly: z.boolean().optional(),
@@ -105,6 +127,52 @@ async function resolveIrcContainer(
   }
 
   return resolved.containerId;
+}
+
+const HEALTH_CHECK_DELAY_MS = 1500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+interface WriteConfigResult {
+  ok: boolean;
+  /** Only meaningful when ok is false: whether the pre-write backup was restored. */
+  restored: boolean;
+}
+
+/**
+ * Writes a config file, rehashes, and then actually checks the server came
+ * back up. Schema validation can catch known-bad shapes, but not every way a
+ * value can be semantically invalid to Ergo — confirmed live, a network name
+ * with a space passed validation, then took the whole server down in a boot
+ * loop until someone noticed and fixed it by hand. This is the backstop: on
+ * a failed health check it attempts to restore the pre-write backup and
+ * rehash again, and reports honestly whether that restore worked, rather
+ * than a route silently returning success into what's actually a crash loop.
+ */
+async function writeConfigSafely(
+  docker: Docker,
+  containerId: string,
+  path: string,
+  content: string
+): Promise<WriteConfigResult> {
+  await writeFileToContainer(docker, containerId, path, content);
+  await rehashIrcServer(docker, containerId);
+  await sleep(HEALTH_CHECK_DELAY_MS);
+
+  if (await isContainerRunning(docker, containerId)) {
+    return { ok: true, restored: false };
+  }
+
+  const restored = await restoreConfigBackup(docker, containerId, path);
+  return { ok: false, restored };
+}
+
+function writeFailureMessage(restored: boolean): string {
+  return restored
+    ? "That change stopped the server from starting, so it was automatically reverted. Double-check the value and try again."
+    : "That change stopped the server from starting, and the automatic revert couldn't reach the container. Check the Console tab and the app's own .bak config file.";
 }
 
 export async function registerIrcAdminRoutes(
@@ -166,8 +234,11 @@ export async function registerIrcAdminRoutes(
         role: parsedBody.data.role
       });
 
-      await writeFileToContainer(docker, containerId, IRC_CONFIG_PATH, updatedConfig);
-      await rehashIrcServer(docker, containerId);
+      const result = await writeConfigSafely(docker, containerId, IRC_CONFIG_PATH, updatedConfig);
+
+      if (!result.ok) {
+        return reply.code(502).send({ success: false, message: writeFailureMessage(result.restored) });
+      }
 
       return { success: true, operators: parseOperators(updatedConfig) };
     } catch (error) {
@@ -196,8 +267,11 @@ export async function registerIrcAdminRoutes(
 
       const updatedConfig = removeOperator(configText, parsedParams.data.username);
 
-      await writeFileToContainer(docker, containerId, IRC_CONFIG_PATH, updatedConfig);
-      await rehashIrcServer(docker, containerId);
+      const result = await writeConfigSafely(docker, containerId, IRC_CONFIG_PATH, updatedConfig);
+
+      if (!result.ok) {
+        return reply.code(502).send({ success: false, message: writeFailureMessage(result.restored) });
+      }
 
       return { success: true, operators: parseOperators(updatedConfig) };
     } catch (error) {
@@ -243,8 +317,11 @@ export async function registerIrcAdminRoutes(
     }
 
     try {
-      await writeFileToContainer(docker, containerId, IRC_MOTD_PATH, parsedBody.data.content);
-      await rehashIrcServer(docker, containerId);
+      const result = await writeConfigSafely(docker, containerId, IRC_MOTD_PATH, parsedBody.data.content);
+
+      if (!result.ok) {
+        return reply.code(502).send({ success: false, message: writeFailureMessage(result.restored) });
+      }
 
       return { success: true };
     } catch (error) {
@@ -306,8 +383,11 @@ export async function registerIrcAdminRoutes(
 
       const updatedConfig = updateGeneralSettings(configText, parsedBody.data);
 
-      await writeFileToContainer(docker, containerId, IRC_CONFIG_PATH, updatedConfig);
-      await rehashIrcServer(docker, containerId);
+      const result = await writeConfigSafely(docker, containerId, IRC_CONFIG_PATH, updatedConfig);
+
+      if (!result.ok) {
+        return reply.code(502).send({ success: false, message: writeFailureMessage(result.restored) });
+      }
 
       return { success: true, settings: parseGeneralSettings(updatedConfig) };
     } catch (error) {
