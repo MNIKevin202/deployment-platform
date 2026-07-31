@@ -452,6 +452,42 @@ export interface IrcChannelActionResponse {
   message: string;
 }
 
+export interface BotStatus {
+  connected: boolean;
+  nick: string;
+  nickRegistered: boolean;
+  joinedChannels: string[];
+}
+
+export interface BotStatusResponse {
+  success: boolean;
+  status: BotStatus;
+  message?: string;
+}
+
+export type BotModerationAction = "warn" | "kick";
+
+export interface BotConfig {
+  welcomeMessageTemplate: string;
+  commandPrefix: string;
+  rulesText: string;
+  botCommands: Record<string, string>;
+  bannedWords: string[];
+  moderationAction: BotModerationAction;
+  nickRegistered: boolean;
+}
+
+export interface BotConfigResponse {
+  success: boolean;
+  config: BotConfig;
+  message?: string;
+}
+
+export interface BotRegisterNickResponse {
+  ok: boolean;
+  message: string;
+}
+
 export interface AppLogsResponse {
   success: boolean;
   appId: number;

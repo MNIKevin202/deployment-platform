@@ -11,6 +11,8 @@ export interface BotConfig {
   botCommands: Record<string, string>;
   bannedWords: string[];
   moderationAction: "warn" | "kick";
+  stateFilePath: string;
+  adminPort: number;
 }
 
 function requireEnv(env: NodeJS.ProcessEnv, key: string): string {
@@ -64,6 +66,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BotConfig {
     rulesText: env.RULES_TEXT ?? "",
     botCommands: parseBotCommands(env.BOT_COMMANDS),
     bannedWords: parseBannedWords(env.BANNED_WORDS),
-    moderationAction
+    moderationAction,
+    stateFilePath: env.STATE_FILE_PATH?.trim() || "/data/bot-state.json",
+    adminPort: env.ADMIN_PORT ? Number(env.ADMIN_PORT) : 3000
   };
 }

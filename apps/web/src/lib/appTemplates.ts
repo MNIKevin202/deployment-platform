@@ -794,7 +794,8 @@ export const APP_TEMPLATES: AppTemplate[] = [
       { key: "BOT_COMMANDS", value: "{}" },
       { key: "BANNED_WORDS", value: "" },
       { key: "MODERATION_ACTION", value: "warn" }
-    ]
+    ],
+    volumes: ["/data"]
   },
 
   // ---- Apps requiring a companion database (create the DB app first) ----

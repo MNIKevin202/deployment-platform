@@ -98,3 +98,8 @@ export function appKind(image: string): AppKind {
 export function isIrcServerImage(image: string): boolean {
   return imageRepoName(image) === "ergo";
 }
+
+/** Whether an image is our Quipora Bot template, for showing the Bot Settings tab. */
+export function isIrcBotImage(image: string): boolean {
+  return imageRepoName(image) === "quipora-bot";
+}

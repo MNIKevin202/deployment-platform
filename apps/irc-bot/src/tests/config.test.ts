@@ -18,6 +18,8 @@ describe("loadConfig", () => {
     assert.equal(config.moderationAction, "warn");
     assert.deepEqual(config.botCommands, {});
     assert.deepEqual(config.bannedWords, []);
+    assert.equal(config.stateFilePath, "/data/bot-state.json");
+    assert.equal(config.adminPort, 3000);
   });
 
   test("throws a clear error when a required var is missing", () => {

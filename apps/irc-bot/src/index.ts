@@ -1,8 +1,12 @@
-import { loadConfig } from "./config.js";
+import { loadConfig, type BotConfig } from "./config.js";
 import { matchCommand } from "./commands.js";
 import { findBannedWord } from "./moderation.js";
 import { renderWelcomeMessage } from "./welcome.js";
 import { channelsFromListReply, channelsToJoin } from "./joins.js";
+import { pongReply } from "./ping.js";
+import { interpretRegisterReply, type ServiceCommandResult } from "./nickserv.js";
+import { BotState } from "./state.js";
+import { startAdminServer, type BotRuntime } from "./admin-server.js";
 import { IrcConnection, prefixNick, type IrcLine } from "./irc-client.js";
 
 const RECONNECT_BASE_DELAY_MS = 2000;
@@ -41,15 +45,42 @@ function requestChannelList(conn: IrcConnection): Promise<IrcLine[]> {
   });
 }
 
-async function runConnection(config: ReturnType<typeof loadConfig>): Promise<void> {
+async function joinAllChannels(conn: IrcConnection, joinedChannels: Set<string>): Promise<void> {
+  const listLines = await requestChannelList(conn);
+  const serverChannels = channelsFromListReply(listLines);
+  const toJoin = channelsToJoin(serverChannels, joinedChannels);
+
+  for (const channel of toJoin) {
+    conn.send(`JOIN ${channel}`);
+  }
+}
+
+async function runConnection(config: BotConfig, state: BotState, runtime: BotRuntime): Promise<void> {
   const conn = await IrcConnection.connect(config.host, config.port);
   await conn.register(config.nick);
   await conn.oper(config.operUsername, config.operPassword);
   log("connected", { host: config.host, port: config.port, nick: config.nick });
 
   const joinedChannels = new Set<string>();
+  runtime.connected = true;
+  runtime.joinedChannels = joinedChannels;
+  runtime.registerNick = async (password: string, email?: string): Promise<ServiceCommandResult> => {
+    const command = email ? `REGISTER ${password} ${email}` : `REGISTER ${password}`;
+    const lines = await conn.serviceCommand("NickServ", command);
+    const result = interpretRegisterReply(lines);
+    if (result.ok) {
+      state.setNickRegistered(true);
+    }
+    return result;
+  };
 
   conn.onLine((line) => {
+    const pong = pongReply(line);
+    if (pong) {
+      conn.send(pong);
+      return;
+    }
+
     if (line.command === "JOIN") {
       const channel = line.params[0];
       const nick = prefixNick(line.prefix);
@@ -62,7 +93,7 @@ async function runConnection(config: ReturnType<typeof loadConfig>): Promise<voi
         return;
       }
       log("join", { channel, nick });
-      const welcome = renderWelcomeMessage(config.welcomeMessageTemplate, nick);
+      const welcome = renderWelcomeMessage(state.get().welcomeMessageTemplate, nick);
       if (welcome) {
         conn.send(`PRIVMSG ${channel} :${welcome}`);
       }
@@ -82,20 +113,21 @@ async function runConnection(config: ReturnType<typeof loadConfig>): Promise<voi
       }
       log("privmsg", { channel: target, nick, message });
 
+      const current = state.get();
       const reply = matchCommand(message, {
-        prefix: config.commandPrefix,
-        rulesText: config.rulesText,
-        customCommands: config.botCommands
+        prefix: current.commandPrefix,
+        rulesText: current.rulesText,
+        customCommands: current.botCommands
       });
       if (reply) {
         conn.send(`PRIVMSG ${target} :${reply}`);
       }
 
-      const bannedWord = findBannedWord(message, config.bannedWords);
+      const bannedWord = findBannedWord(message, current.bannedWords);
       if (bannedWord) {
-        log("moderation-match", { channel: target, nick, bannedWord, action: config.moderationAction });
+        log("moderation-match", { channel: target, nick, bannedWord, action: current.moderationAction });
         conn.send(`NOTICE ${target} :${nick}: that message was flagged by the server's word filter.`);
-        if (config.moderationAction === "kick") {
+        if (current.moderationAction === "kick") {
           conn.send(`KICK ${target} ${nick} :Message violated server rules`);
         }
       }
@@ -113,29 +145,31 @@ async function runConnection(config: ReturnType<typeof loadConfig>): Promise<voi
   await new Promise<void>((resolve) => {
     conn.onClose(() => {
       clearInterval(pollTimer);
+      runtime.connected = false;
+      runtime.registerNick = null;
       log("disconnected");
       resolve();
     });
   });
 }
 
-async function joinAllChannels(conn: IrcConnection, joinedChannels: Set<string>): Promise<void> {
-  const listLines = await requestChannelList(conn);
-  const serverChannels = channelsFromListReply(listLines);
-  const toJoin = channelsToJoin(serverChannels, joinedChannels);
-
-  for (const channel of toJoin) {
-    conn.send(`JOIN ${channel}`);
-  }
-}
-
 async function main(): Promise<void> {
   const config = loadConfig();
+  const state = BotState.load(config, config.stateFilePath);
+  const runtime: BotRuntime = {
+    connected: false,
+    nick: config.nick,
+    joinedChannels: new Set(),
+    registerNick: null
+  };
+
+  startAdminServer(config.adminPort, state, runtime);
+
   let delayMs = RECONNECT_BASE_DELAY_MS;
 
   for (;;) {
     try {
-      await runConnection(config);
+      await runConnection(config, state, runtime);
       delayMs = RECONNECT_BASE_DELAY_MS;
     } catch (error) {
       log("connection-error", { message: error instanceof Error ? error.message : String(error) });
