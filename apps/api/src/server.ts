@@ -528,7 +528,8 @@ app.get("/apps", async () => {
       routingReady: isRoutingReady(storedApp.domain !== null),
       health: summarizeAppHealth(storedApp.id),
       latestEventSeverity: latestEventSeverity(storedApp.id),
-      runtime: resolveAppRuntime(storedApp.containerName, runtimeByName)
+      runtime: resolveAppRuntime(storedApp.containerName, runtimeByName),
+      publishedPorts: appDatabase.listAppPublishedPorts(storedApp.id)
     }))
   };
 });
@@ -572,7 +573,8 @@ app.get<{ Params: AppIdParams }>("/apps/:id", async (request, reply) => {
       computeEnvironmentStatus(
         storedApp.lastDeployedAt,
         storedApp.environmentTouchedAt
-      )
+      ),
+      appDatabase.listAppPublishedPorts(storedApp.id)
     );
   } catch (error) {
     return sendDockerError(
@@ -1020,6 +1022,7 @@ app.post(
       cpuLimit: parsedBody.data.cpuLimit ?? null,
       environmentVariables: parsedBody.data.environmentVariables,
       storageMounts: parsedBody.data.storageMounts,
+      publishedPorts: parsedBody.data.publishedPorts,
       internalOnly: parsedBody.data.internalOnly,
       ...(parsedBody.data.customDomain ? { customDomain: parsedBody.data.customDomain } : {}),
       ...(idempotency.present ? { idempotencyKey: idempotency.key } : {})

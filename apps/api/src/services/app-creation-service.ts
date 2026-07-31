@@ -7,6 +7,7 @@ import {
 } from "./redeploy-service.js";
 import { buildContainerEnvArray } from "./environment-service.js";
 import { buildResourceHostConfig } from "./resource-limits.js";
+import { buildPublishedPortConfig, isValidPort } from "./port-bindings.js";
 import {
   buildVolumeMounts,
   generateUniqueVolumeName,
@@ -31,6 +32,12 @@ export interface AppCreationVolumeInput {
   readOnly: boolean;
 }
 
+export interface AppCreationPublishedPortInput {
+  hostPort: number;
+  containerPort: number;
+  protocol: "tcp" | "udp";
+}
+
 export interface CreateAppWithConfigInput {
   name: string;
   image: string;
@@ -40,6 +47,12 @@ export interface CreateAppWithConfigInput {
   cpuLimit?: number | null;
   environmentVariables?: AppCreationEnvVarInput[];
   storageMounts?: AppCreationVolumeInput[];
+  /**
+   * Raw TCP/UDP ports to publish on the host, for non-HTTP services (game
+   * servers, etc.) that can't be reached through the HTTP reverse proxy.
+   * Defaults to none — the existing behavior where apps publish no host ports.
+   */
+  publishedPorts?: AppCreationPublishedPortInput[];
   /**
    * When true, this app never receives a public domain/route — see
    * domain.ts's resolveAppDomainChoice. Mutually exclusive with
@@ -335,6 +348,50 @@ async function performCreateAppWithConfig(
     });
   }
 
+  // Validate every published port up front — before any database write — so a
+  // bad or already-claimed port can never leave a half-created app behind.
+  const portInputs = input.publishedPorts ?? [];
+  const claimedHostPorts = new Set<string>();
+
+  for (const port of portInputs) {
+    const protocol = port.protocol === "udp" ? "udp" : "tcp";
+
+    if (!isValidPort(port.hostPort) || !isValidPort(port.containerPort)) {
+      return {
+        success: false,
+        statusCode: 400,
+        message: `Published ports must be between 1 and 65535 (got host ${port.hostPort}, container ${port.containerPort})`
+      };
+    }
+
+    const claimKey = `${port.hostPort}/${protocol}`;
+
+    if (claimedHostPorts.has(claimKey)) {
+      return {
+        success: false,
+        statusCode: 400,
+        message: `Host port ${port.hostPort}/${protocol} is listed more than once`
+      };
+    }
+
+    const conflict = appDatabase.getAppPublishedPortByHost(port.hostPort, protocol);
+    if (conflict) {
+      return {
+        success: false,
+        statusCode: 409,
+        message: `Host port ${port.hostPort}/${protocol} is already published by another app`
+      };
+    }
+
+    claimedHostPorts.add(claimKey);
+  }
+
+  const resolvedPorts = portInputs.map((port) => ({
+    hostPort: port.hostPort,
+    containerPort: port.containerPort,
+    protocol: (port.protocol === "udp" ? "udp" : "tcp") as "tcp" | "udp"
+  }));
+
   // Coordinated write: the app row, its environment variables, and its
   // storage records are created in one transaction — all or nothing.
   let createdApp: StoredApp;
@@ -369,6 +426,15 @@ async function performCreateAppWithConfig(
           volumeName: volume.volumeName,
           containerPath: volume.containerPath,
           readOnly: volume.readOnly
+        });
+      }
+
+      for (const port of resolvedPorts) {
+        appDatabase.createAppPublishedPort({
+          appId: app.id,
+          hostPort: port.hostPort,
+          containerPort: port.containerPort,
+          protocol: port.protocol
         });
       }
 
@@ -408,6 +474,10 @@ async function performCreateAppWithConfig(
       appDatabase.listAppVolumes(createdApp.id)
     );
 
+    const portConfig = buildPublishedPortConfig(
+      appDatabase.listAppPublishedPorts(createdApp.id)
+    );
+
     const created = await dockerOps.createContainer({
       name: containerName,
       Image: input.image,
@@ -417,7 +487,8 @@ async function performCreateAppWithConfig(
         "com.deployment-platform.app-name": input.name
       },
       ExposedPorts: {
-        [exposedPort]: {}
+        [exposedPort]: {},
+        ...portConfig.ExposedPorts
       },
       HostConfig: {
         NetworkMode: "deployment-apps",
@@ -425,6 +496,7 @@ async function performCreateAppWithConfig(
           Name: restartPolicy
         },
         Mounts: mounts,
+        PortBindings: portConfig.PortBindings,
         ...buildResourceHostConfig(createdApp)
       }
     });

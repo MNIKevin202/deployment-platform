@@ -4,6 +4,7 @@ import type { AppDatabase } from "../database.js";
 import { buildContainerEnvArray } from "./environment-service.js";
 import { buildVolumeMounts } from "./storage-service.js";
 import { buildResourceHostConfig } from "./resource-limits.js";
+import { buildPublishedPortConfig } from "./port-bindings.js";
 import { getErrorStatusCode } from "../docker-errors.js";
 import type { RecordEventFn } from "./deployment-event-service.js";
 
@@ -262,6 +263,9 @@ export async function redeployApp(
   }
 
   const volumes = appDatabase.listAppVolumes(app.id);
+  const portConfig = buildPublishedPortConfig(
+    appDatabase.listAppPublishedPorts(app.id)
+  );
 
   try {
     for (const volume of volumes) {
@@ -298,7 +302,8 @@ export async function redeployApp(
         "com.deployment-platform.app-name": app.name
       },
       ExposedPorts: {
-        [exposedPort]: {}
+        [exposedPort]: {},
+        ...portConfig.ExposedPorts
       },
       HostConfig: {
         NetworkMode: "deployment-apps",
@@ -306,6 +311,7 @@ export async function redeployApp(
           Name: app.restartPolicy || "unless-stopped"
         },
         Mounts: buildVolumeMounts(volumes),
+        PortBindings: portConfig.PortBindings,
         ...buildResourceHostConfig(app)
       }
     });

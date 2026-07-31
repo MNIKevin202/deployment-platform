@@ -29,6 +29,27 @@ describe("APP_TEMPLATES catalog", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  test("published ports (when present) are well-formed", () => {
+    for (const template of APP_TEMPLATES) {
+      for (const port of template.publishedPorts ?? []) {
+        expect(port.hostPort).toBeGreaterThanOrEqual(1);
+        expect(port.hostPort).toBeLessThanOrEqual(65535);
+        expect(port.containerPort).toBeGreaterThanOrEqual(1);
+        expect(port.containerPort).toBeLessThanOrEqual(65535);
+        expect(["tcp", "udp"]).toContain(port.protocol);
+      }
+    }
+  });
+
+  test("the Minecraft templates publish a host port and skip a public domain", () => {
+    const minecraft = APP_TEMPLATES.filter((t) => t.id.startsWith("minecraft"));
+    expect(minecraft.length).toBeGreaterThanOrEqual(2);
+    for (const template of minecraft) {
+      expect(template.internalOnly).toBe(true);
+      expect(template.publishedPorts?.length).toBeGreaterThan(0);
+    }
+  });
+
   test("at least one template generates a secret (e.g. a DB password)", () => {
     const hasGenerated = APP_TEMPLATES.some((t) => t.env.some((e) => e.generate === "password"));
     expect(hasGenerated).toBe(true);

@@ -930,6 +930,25 @@ export default function AppDetail({
               <dd>{detail.containerPort}</dd>
             </div>
 
+            {detail.publishedPorts.length > 0 && (
+              <div>
+                <dt>Published ports</dt>
+                <dd>
+                  {detail.publishedPorts.map((port) => (
+                    <div key={`${port.hostPort}/${port.protocol}`} className="published-port-line">
+                      <code>
+                        {port.hostPort} → {port.containerPort}/{port.protocol}
+                      </code>
+                    </div>
+                  ))}
+                  <small className="text-faint">
+                    Reachable on the server's public IP at the host port
+                    (firewall permitting).
+                  </small>
+                </dd>
+              </div>
+            )}
+
             <div>
               <dt>Container name</dt>
               <dd>{detail.containerName ?? "Unknown"}</dd>

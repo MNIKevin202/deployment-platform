@@ -31,7 +31,7 @@ describe("appDatabase", () => {
       .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
       .all() as { version: number; name: string }[];
 
-    assert.equal(rows.length, 19);
+    assert.equal(rows.length, 20);
     assert.equal(rows[0].version, 1);
     assert.equal(rows[0].name, "initial_schema");
     assert.equal(rows[1].version, 2);
@@ -70,6 +70,8 @@ describe("appDatabase", () => {
     assert.equal(rows[17].name, "platform_settings");
     assert.equal(rows[18].version, 19);
     assert.equal(rows[18].name, "app_resource_limits");
+    assert.equal(rows[19].version, 20);
+    assert.equal(rows[19].name, "app_published_ports");
 
     cleanup();
   });
@@ -83,9 +85,9 @@ describe("appDatabase", () => {
       .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
       .all() as { version: number; name: string }[];
 
-    assert.equal(rows.length, 19);
-    assert.equal(rows[rows.length - 1].version, 19);
-    assert.equal(rows[rows.length - 1].name, "app_resource_limits");
+    assert.equal(rows.length, 20);
+    assert.equal(rows[rows.length - 1].version, 20);
+    assert.equal(rows[rows.length - 1].name, "app_published_ports");
 
     reopened.close();
     rmSync(tempDir, { recursive: true, force: true });

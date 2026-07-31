@@ -1,5 +1,11 @@
-import type { StoredApp } from "../database.js";
+import type { StoredApp, StoredAppPublishedPort } from "../database.js";
 import type { EnvironmentStatus } from "./environment-service.js";
+
+export interface AppDetailPublishedPort {
+  hostPort: number;
+  containerPort: number;
+  protocol: "tcp" | "udp";
+}
 
 export interface ContainerInspection {
   id: string;
@@ -35,6 +41,7 @@ export interface AppDetail {
   dockerState: string | null;
   dockerStatusText: string | null;
   environmentStatus: EnvironmentStatus;
+  publishedPorts: AppDetailPublishedPort[];
 }
 
 /**
@@ -65,7 +72,8 @@ export function buildAppDetail(
   storedApp: StoredApp,
   inspection: ContainerInspection | null,
   routingReady: boolean,
-  environmentStatus: EnvironmentStatus
+  environmentStatus: EnvironmentStatus,
+  publishedPorts: StoredAppPublishedPort[] = []
 ): AppDetail {
   return {
     id: storedApp.id,
@@ -92,6 +100,11 @@ export function buildAppDetail(
     dockerStatusText: inspection
       ? formatDockerStatusText(inspection.state)
       : null,
-    environmentStatus
+    environmentStatus,
+    publishedPorts: publishedPorts.map((port) => ({
+      hostPort: port.hostPort,
+      containerPort: port.containerPort,
+      protocol: port.protocol
+    }))
   };
 }

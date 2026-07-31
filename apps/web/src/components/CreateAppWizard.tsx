@@ -13,6 +13,7 @@ import type {
   GithubConnectionInfo,
   InspectSourceResponse,
   MaskedGlobalEnvVar,
+  PortProtocol,
   RepositoryInspectionResult,
   RestartPolicy,
   SourceBranch,
@@ -90,6 +91,13 @@ interface VolumeRow extends WizardVolumeInput {
   rowId: number;
 }
 
+interface PortRow {
+  rowId: number;
+  hostPort: string;
+  containerPort: string;
+  protocol: PortProtocol;
+}
+
 let nextRowId = 1;
 
 function makeEnvRow(): EnvRow {
@@ -98,6 +106,38 @@ function makeEnvRow(): EnvRow {
 
 function makeVolumeRow(): VolumeRow {
   return { rowId: nextRowId++, containerPath: "", volumeName: "", readOnly: false };
+}
+
+function makePortRow(): PortRow {
+  return { rowId: nextRowId++, hostPort: "", containerPort: "", protocol: "tcp" };
+}
+
+/** null when the rows are a valid published-port set, else an error message. */
+function validatePortRows(rows: PortRow[]): string | null {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const host = Number(row.hostPort);
+    const container = Number(row.containerPort);
+    if (!row.hostPort.trim() || !row.containerPort.trim()) {
+      return "Every published port needs both a host and a container port.";
+    }
+    if (
+      !Number.isInteger(host) ||
+      !Number.isInteger(container) ||
+      host < 1 ||
+      host > 65535 ||
+      container < 1 ||
+      container > 65535
+    ) {
+      return "Ports must be whole numbers between 1 and 65535.";
+    }
+    const key = `${host}/${row.protocol}`;
+    if (seen.has(key)) {
+      return `Host port ${host}/${row.protocol} is listed more than once.`;
+    }
+    seen.add(key);
+  }
+  return null;
 }
 
 async function readApiError(
@@ -225,6 +265,7 @@ export default function CreateAppWizard({
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   const [showBulkEnv, setShowBulkEnv] = useState(false);
   const [volumeRows, setVolumeRows] = useState<VolumeRow[]>([]);
+  const [portRows, setPortRows] = useState<PortRow[]>([]);
 
   const [globalVars, setGlobalVars] = useState<MaskedGlobalEnvVar[]>([]);
   const [globalVarsLoaded, setGlobalVarsLoaded] = useState(false);
@@ -280,6 +321,7 @@ export default function CreateAppWizard({
     setHealthCheckPath("");
     setEnvRows([]);
     setVolumeRows([]);
+    setPortRows([]);
     setRoutingChoice("public");
     setDomainChoice("default");
     setCustomDomain("");
@@ -327,6 +369,19 @@ export default function CreateAppWizard({
         readOnly: false
       }))
     );
+    setPortRows(
+      (initialTemplate.publishedPorts ?? []).map((port) => ({
+        rowId: nextRowId++,
+        hostPort: String(port.hostPort),
+        containerPort: String(port.containerPort),
+        protocol: port.protocol
+      }))
+    );
+    // Game/raw-TCP servers have no meaningful HTTP route — a template can opt
+    // out of a public domain so it's reached purely via its published port.
+    if (initialTemplate.internalOnly) {
+      setRoutingChoice("internal");
+    }
     setStep(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialTemplate]);
@@ -577,6 +632,7 @@ export default function CreateAppWizard({
   }));
   const storageValidationError = validateStorageMounts(volumesForValidation);
   const storageValid = storageValidationError === null;
+  const portsValidationError = validatePortRows(portRows);
 
   const trimmedCustomDomain = customDomain.trim();
   const domainValid =
@@ -589,7 +645,7 @@ export default function CreateAppWizard({
     basicsValid,
     runtimeValid,
     environmentValid,
-    storageValid,
+    storageValid && portsValidationError === null,
     domainValid,
     true
   ][step];
@@ -727,6 +783,14 @@ export default function CreateAppWizard({
   const removeVolumeRow = (rowId: number) =>
     setVolumeRows((rows) => rows.filter((row) => row.rowId !== rowId));
 
+  const addPortRow = () => setPortRows((rows) => [...rows, makePortRow()]);
+  const updatePortRow = (rowId: number, patch: Partial<PortRow>) =>
+    setPortRows((rows) =>
+      rows.map((row) => (row.rowId === rowId ? { ...row, ...patch } : row))
+    );
+  const removePortRow = (rowId: number) =>
+    setPortRows((rows) => rows.filter((row) => row.rowId !== rowId));
+
   // Ask the server for a container port not already assigned to another app.
   const generatePort = async () => {
     try {
@@ -795,6 +859,11 @@ export default function CreateAppWizard({
           containerPath: row.containerPath,
           volumeName: row.volumeName ? row.volumeName : undefined,
           readOnly: row.readOnly
+        })),
+        publishedPorts: portRows.map((row) => ({
+          hostPort: Number(row.hostPort),
+          containerPort: Number(row.containerPort),
+          protocol: row.protocol
         }))
       };
 
@@ -1778,6 +1847,93 @@ export default function CreateAppWizard({
 
                   {storageValidationError && (
                     <div className="error-banner">{storageValidationError}</div>
+                  )}
+
+                  <div className="env-scope-heading published-ports-heading">
+                    <h3>Published Ports</h3>
+                    <button
+                      className="secondary-button compact"
+                      type="button"
+                      onClick={addPortRow}
+                    >
+                      Add Published Port
+                    </button>
+                  </div>
+                  <p className="section-description">
+                    Open a raw TCP/UDP port on the server for non-HTTP services
+                    (game servers, etc.). Most web apps don't need this — they're
+                    already reachable over HTTPS. The host port must also be
+                    allowed by the server's firewall.
+                  </p>
+
+                  {portRows.length === 0 ? (
+                    <div className="empty-state">
+                      No published ports. This app is reachable only over the
+                      platform's HTTP routing and the private network.
+                    </div>
+                  ) : (
+                    <div className="wizard-row-list">
+                      {portRows.map((row) => (
+                        <div className="wizard-row" key={row.rowId}>
+                          <div className="wizard-row-fields">
+                            <label>
+                              <span>Host port</span>
+                              <input
+                                inputMode="numeric"
+                                value={row.hostPort}
+                                onChange={(event) =>
+                                  updatePortRow(row.rowId, {
+                                    hostPort: event.target.value
+                                  })
+                                }
+                                placeholder="25565"
+                              />
+                            </label>
+                            <label>
+                              <span>Container port</span>
+                              <input
+                                inputMode="numeric"
+                                value={row.containerPort}
+                                onChange={(event) =>
+                                  updatePortRow(row.rowId, {
+                                    containerPort: event.target.value
+                                  })
+                                }
+                                placeholder="25565"
+                              />
+                            </label>
+                            <label>
+                              <span>Protocol</span>
+                              <select
+                                value={row.protocol}
+                                onChange={(event) =>
+                                  updatePortRow(row.rowId, {
+                                    protocol: event.target.value as PortProtocol
+                                  })
+                                }
+                              >
+                                <option value="tcp">TCP</option>
+                                <option value="udp">UDP</option>
+                              </select>
+                            </label>
+                          </div>
+
+                          <div className="wizard-row-actions">
+                            <button
+                              className="danger-button compact"
+                              type="button"
+                              onClick={() => removePortRow(row.rowId)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {portsValidationError && (
+                    <div className="error-banner">{portsValidationError}</div>
                   )}
                 </div>
               )}

@@ -28,6 +28,22 @@ export interface AppTemplate {
   env: TemplateEnvVar[];
   /** Container paths that should be backed by a persistent volume. */
   volumes?: string[];
+  /**
+   * Raw host ports to publish (game servers, etc.). Most templates omit this —
+   * they're reached over the platform's HTTP routing.
+   */
+  publishedPorts?: TemplatePublishedPort[];
+  /**
+   * When true, the seeded app skips a public HTTP domain — appropriate for
+   * services reached only through a published port (e.g. a game server).
+   */
+  internalOnly?: boolean;
+}
+
+export interface TemplatePublishedPort {
+  hostPort: number;
+  containerPort: number;
+  protocol: "tcp" | "udp";
 }
 
 /** A random URL-safe secret, e.g. for a generated database password. */
@@ -584,11 +600,11 @@ export const APP_TEMPLATES: AppTemplate[] = [
     icon: "📁",
     description: "Web-based file manager for a volume.",
     longDescription:
-      "File Browser gives you a clean web UI to upload, download, and manage files stored on a persistent volume — a practical alternative to FTP, which needs open ports this platform doesn't expose. It first starts with the login admin / admin; change it immediately.",
+      "File Browser gives you a clean web UI to upload, download, and manage files stored on a persistent volume — a practical alternative to FTP, which needs open ports this platform doesn't expose. First sign-in is admin / admin; change it inside File Browser's own Settings → User Management (it manages its own accounts, so there's nothing to set here).",
     highlights: [
       "Upload, download, rename, and share files",
       "Runs entirely over HTTPS — no FTP ports needed",
-      "Default login admin / admin (change it right away)"
+      "First login admin / admin — change it in its own settings"
     ],
     image: "filebrowser/filebrowser:latest",
     containerPort: 80,
@@ -665,5 +681,47 @@ export const APP_TEMPLATES: AppTemplate[] = [
       { key: "JOOMLA_DB_NAME", value: "app" }
     ],
     volumes: ["/var/www/html"]
+  },
+  {
+    id: "minecraft-java",
+    name: "Minecraft (Java)",
+    category: "Apps",
+    icon: "🧱",
+    description: "Java Edition game server. Publishes TCP 25565.",
+    longDescription:
+      "A Minecraft: Java Edition server. Because Minecraft speaks a raw TCP protocol rather than HTTP, it's published on a host port (25565 by default) — players connect using your server's IP address and that port. By selecting this you agree to the Minecraft EULA (https://aka.ms/MinecraftEULA).",
+    highlights: [
+      "Java Edition multiplayer server",
+      "Players connect at your-server-ip:25565",
+      "World data persists on a volume; EULA acceptance required"
+    ],
+    image: "itzg/minecraft-server:latest",
+    containerPort: 25565,
+    suggestedName: "minecraft",
+    internalOnly: true,
+    env: [{ key: "EULA", value: "TRUE" }],
+    volumes: ["/data"],
+    publishedPorts: [{ hostPort: 25565, containerPort: 25565, protocol: "tcp" }]
+  },
+  {
+    id: "minecraft-bedrock",
+    name: "Minecraft (Bedrock)",
+    category: "Apps",
+    icon: "⛏️",
+    description: "Bedrock Edition game server. Publishes UDP 19132.",
+    longDescription:
+      "A Minecraft: Bedrock Edition server (phones, consoles, Windows 10/11). Bedrock uses a raw UDP protocol, so it's published on a host port (19132/UDP by default) — players add your server by its IP address and that port. By selecting this you agree to the Minecraft EULA (https://aka.ms/MinecraftEULA).",
+    highlights: [
+      "Bedrock Edition server (mobile, console, Windows)",
+      "Players connect at your-server-ip on UDP 19132",
+      "World data persists on a volume; EULA acceptance required"
+    ],
+    image: "itzg/minecraft-bedrock-server:latest",
+    containerPort: 19132,
+    suggestedName: "minecraft-bedrock",
+    internalOnly: true,
+    env: [{ key: "EULA", value: "TRUE" }],
+    volumes: ["/data"],
+    publishedPorts: [{ hostPort: 19132, containerPort: 19132, protocol: "udp" }]
   }
 ];

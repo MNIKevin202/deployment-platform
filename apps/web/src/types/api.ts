@@ -48,6 +48,14 @@ export interface LogsResponse {
   logs: string;
 }
 
+export type PortProtocol = "tcp" | "udp";
+
+export interface PublishedPort {
+  hostPort: number;
+  containerPort: number;
+  protocol: PortProtocol;
+}
+
 export interface StoredApp {
   id: number;
   name: string;
@@ -75,6 +83,7 @@ export interface StoredApp {
    * queried, so `status` should be trusted as the best available signal.
    */
   runtime?: { present: boolean; running: boolean; status: string | null } | null;
+  publishedPorts?: PublishedPort[];
 }
 
 export interface StoredAppsResponse {
@@ -104,6 +113,7 @@ export interface AppDetail {
   dockerState: string | null;
   dockerStatusText: string | null;
   environmentStatus: EnvironmentStatus;
+  publishedPorts: PublishedPort[];
 }
 
 export type EnvironmentVariableSource = "global" | "app" | "app-override";
@@ -234,6 +244,7 @@ export interface CreateAppWizardPayload {
     volumeName?: string;
     readOnly: boolean;
   }>;
+  publishedPorts: PublishedPort[];
 }
 
 export interface CreatedAppSummary {
