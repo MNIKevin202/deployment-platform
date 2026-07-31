@@ -1,10 +1,15 @@
 import { useEffect, useState } from "react";
 import { templatesInCategory, type AppTemplate, type TemplateCategory } from "../lib/appTemplates";
+import { findInstalledTemplateApp, type InstalledTemplateMatch } from "../lib/templateInstallStatus";
 
 interface TemplateGalleryProps {
   open: boolean;
   onClose: () => void;
   onSelect: (template: AppTemplate) => void;
+  /** Existing apps, used to detect a template that's already installed. */
+  storedApps: ReadonlyArray<{ id: number; name: string; image: string }>;
+  /** Closes the gallery and navigates to the given app's detail page. */
+  onViewApp: (appId: number) => void;
 }
 
 const CATEGORIES: TemplateCategory[] = ["Databases", "Apps", "Tools"];
@@ -19,7 +24,13 @@ function envSummary(env: AppTemplate["env"][number]): string {
   return "set at install";
 }
 
-export default function TemplateGallery({ open, onClose, onSelect }: TemplateGalleryProps) {
+export default function TemplateGallery({
+  open,
+  onClose,
+  onSelect,
+  storedApps,
+  onViewApp
+}: TemplateGalleryProps) {
   const [selected, setSelected] = useState<AppTemplate | null>(null);
 
   // Escape backs out of the detail view first, then closes. Clicking the
@@ -55,6 +66,8 @@ export default function TemplateGallery({ open, onClose, onSelect }: TemplateGal
     return null;
   }
 
+  const selectedMatch = selected ? findInstalledTemplateApp(selected, storedApps) : null;
+
   return (
     <div className="modal-backdrop">
       <section className="form-modal wide template-gallery" role="dialog" aria-modal="true" aria-label="App templates">
@@ -71,8 +84,10 @@ export default function TemplateGallery({ open, onClose, onSelect }: TemplateGal
         {selected ? (
           <TemplateDetail
             template={selected}
+            installedMatch={selectedMatch}
             onBack={() => setSelected(null)}
             onInstall={() => onSelect(selected)}
+            onViewApp={onViewApp}
           />
         ) : (
           <>
@@ -92,22 +107,26 @@ export default function TemplateGallery({ open, onClose, onSelect }: TemplateGal
                   <div key={category} className="template-category">
                     <h3>{category}</h3>
                     <div className="template-grid">
-                      {items.map((template) => (
-                        <button
-                          key={template.id}
-                          type="button"
-                          className="template-card"
-                          onClick={() => setSelected(template)}
-                        >
-                          <span className="template-icon" aria-hidden="true">
-                            {template.icon}
-                          </span>
-                          <span className="template-card-body">
-                            <span className="template-name">{template.name}</span>
-                            <span className="template-desc">{template.description}</span>
-                          </span>
-                        </button>
-                      ))}
+                      {items.map((template) => {
+                        const installed = findInstalledTemplateApp(template, storedApps) !== null;
+                        return (
+                          <button
+                            key={template.id}
+                            type="button"
+                            className="template-card"
+                            onClick={() => setSelected(template)}
+                          >
+                            {installed && <span className="template-installed-badge">Installed</span>}
+                            <span className="template-icon" aria-hidden="true">
+                              {template.icon}
+                            </span>
+                            <span className="template-card-body">
+                              <span className="template-name">{template.name}</span>
+                              <span className="template-desc">{template.description}</span>
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 );
@@ -122,14 +141,27 @@ export default function TemplateGallery({ open, onClose, onSelect }: TemplateGal
 
 interface TemplateDetailProps {
   template: AppTemplate;
+  installedMatch: InstalledTemplateMatch | null;
   onBack: () => void;
   onInstall: () => void;
+  onViewApp: (appId: number) => void;
 }
 
-function TemplateDetail({ template, onBack, onInstall }: TemplateDetailProps) {
+function TemplateDetail({ template, installedMatch, onBack, onInstall, onViewApp }: TemplateDetailProps) {
   return (
     <>
       <div className="template-detail-body">
+        {installedMatch && (
+          <div className="template-installed-banner">
+            <span>
+              Already installed as <strong>{installedMatch.appName}</strong>.
+            </span>
+            <button type="button" className="secondary-button compact" onClick={() => onViewApp(installedMatch.appId)}>
+              View App
+            </button>
+          </div>
+        )}
+
         <div className="template-detail-hero">
           <span className="template-icon large" aria-hidden="true">
             {template.icon}
