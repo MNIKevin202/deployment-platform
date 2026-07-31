@@ -5,6 +5,7 @@ import { findBannedWord } from "./moderation.js";
 import { renderWelcomeMessage } from "./welcome.js";
 import { channelsFromListReply, channelsToJoin } from "./joins.js";
 import { pongReply } from "./ping.js";
+import { parseKick } from "./kick.js";
 import { interpretServiceReply, isReservedNickError, type ServiceCommandResult } from "./nickserv.js";
 import { BotState } from "./state.js";
 import { startAdminServer, type BotRuntime } from "./admin-server.js";
@@ -134,8 +135,24 @@ async function runConnection(config: BotConfig, state: BotState, runtime: BotRun
       return;
     }
 
-    if (line.command === "PART" || line.command === "KICK") {
-      log(line.command.toLowerCase(), { channel: line.params[0], nick: prefixNick(line.prefix) });
+    if (line.command === "PART") {
+      log("part", { channel: line.params[0], nick: prefixNick(line.prefix) });
+      return;
+    }
+
+    if (line.command === "KICK") {
+      const kick = parseKick(line);
+      log("kick", { channel: kick?.channel, target: kick?.target, by: prefixNick(line.prefix) });
+
+      if (kick && kick.target === actualNick) {
+        // The bot should never actually leave a channel it's meant to be
+        // moderating. SAJOIN is Ergo's oper-only forced join (confirmed via
+        // the server's own binary: "join arbitrary channels, including
+        // private channels") — bypasses whatever a plain JOIN could still
+        // be blocked by (e.g. a ban set by whoever just kicked it).
+        log("auto-rejoin-after-kick", { channel: kick.channel });
+        conn.send(`SAJOIN ${actualNick} ${kick.channel}`);
+      }
       return;
     }
 
