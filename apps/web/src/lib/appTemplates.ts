@@ -255,6 +255,77 @@ export const APP_TEMPLATES: AppTemplate[] = [
     volumes: ["/opt/couchdb/data"]
   },
   {
+    id: "immich-postgres",
+    name: "Immich PostgreSQL",
+    category: "Databases",
+    icon: "🐘",
+    description: "PostgreSQL with the vector extension Immich requires.",
+    longDescription:
+      "A PostgreSQL image bundled with the pgvecto/VectorChord extension that Immich needs for its facial recognition and smart search features — plain PostgreSQL won't run Immich's database migrations. Deploy this before the Immich template.",
+    highlights: [
+      "Drop-in PostgreSQL with vector search support built in",
+      "Required by the Immich template — deploy this first",
+      "Not a general-purpose database; use plain PostgreSQL for other apps"
+    ],
+    image: "ghcr.io/immich-app/postgres:14-vectorchord-0.3.0",
+    containerPort: 5432,
+    suggestedName: "immich-postgres",
+    internalOnly: true,
+    env: [
+      { key: "POSTGRES_PASSWORD", generate: "password", secret: true },
+      { key: "POSTGRES_USER", value: "postgres" },
+      { key: "POSTGRES_DB", value: "immich" }
+    ],
+    volumes: ["/var/lib/postgresql/data"]
+  },
+  {
+    id: "immich-machine-learning",
+    name: "Immich Machine Learning",
+    category: "Apps",
+    icon: "🧠",
+    description: "Facial recognition and smart search backend for Immich.",
+    longDescription:
+      "The machine learning worker Immich uses for facial recognition, object detection, and natural-language smart search. It has no web UI of its own — deploy it alongside Immich and point the main Immich server's IMMICH_MACHINE_LEARNING_URL at it (the default already assumes an app named \"immich-machine-learning\").",
+    highlights: [
+      "Powers Immich's facial recognition and smart search",
+      "No web UI — internal service only",
+      "Deploy alongside the Immich template"
+    ],
+    image: "ghcr.io/immich-app/immich-machine-learning:release",
+    containerPort: 3003,
+    suggestedName: "immich-machine-learning",
+    internalOnly: true,
+    env: [],
+    volumes: ["/cache"]
+  },
+  {
+    id: "immich",
+    name: "Immich",
+    category: "Apps",
+    icon: "📸",
+    description: "Self-hosted photo and video backup, Google Photos alternative. Requires companion apps.",
+    longDescription:
+      "Immich is a fast, full-featured self-hosted photo and video backup solution with mobile apps, facial recognition, and smart search. It needs three companion apps deployed first: \"Immich PostgreSQL\" (a Postgres build with the vector extension it requires — plain PostgreSQL won't work), \"Redis\" (from the Databases templates), and \"Immich Machine Learning\". The defaults below assume they're named immich-postgres, redis, and immich-machine-learning.",
+    highlights: [
+      "Mobile apps with automatic background backup",
+      "Facial recognition and smart, natural-language search",
+      "Requires Immich PostgreSQL, Redis, and Immich Machine Learning apps"
+    ],
+    image: "ghcr.io/immich-app/immich-server:release",
+    containerPort: 2283,
+    suggestedName: "immich",
+    requiresTemplateId: "immich-postgres",
+    env: [
+      { key: "DB_HOSTNAME", value: "app-immich-postgres" },
+      { key: "DB_USERNAME", value: "postgres" },
+      { key: "DB_PASSWORD", value: "", secret: true },
+      { key: "DB_DATABASE_NAME", value: "immich" },
+      { key: "REDIS_HOSTNAME", value: "app-redis" },
+      { key: "IMMICH_MACHINE_LEARNING_URL", value: "http://app-immich-machine-learning:3003" }
+    ],
+    volumes: ["/usr/src/app/upload"]
+  },
+  {
     id: "influxdb",
     name: "InfluxDB",
     category: "Databases",
