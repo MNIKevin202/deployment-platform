@@ -93,3 +93,8 @@ export function isDatabaseImage(image: string): boolean {
 export function appKind(image: string): AppKind {
   return isDatabaseImage(image) ? "database" : "service";
 }
+
+/** Whether an image is our Ergo-based IRC server template, for showing the IRC Settings tab. */
+export function isIrcServerImage(image: string): boolean {
+  return imageRepoName(image) === "ergo";
+}

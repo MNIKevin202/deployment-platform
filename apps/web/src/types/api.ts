@@ -396,6 +396,26 @@ export interface MetricsSummaryResponse {
   message?: string;
 }
 
+export type IrcOperatorRole = "admin" | "moderator";
+
+export interface IrcOperator {
+  username: string;
+  role: IrcOperatorRole;
+  knownRole: boolean;
+}
+
+export interface IrcOperatorsResponse {
+  success: boolean;
+  operators: IrcOperator[];
+  message?: string;
+}
+
+export interface IrcMotdResponse {
+  success: boolean;
+  content: string;
+  message?: string;
+}
+
 export interface AppLogsResponse {
   success: boolean;
   appId: number;
