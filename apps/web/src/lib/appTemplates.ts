@@ -544,6 +544,25 @@ export const APP_TEMPLATES: AppTemplate[] = [
     volumes: ["/config", "/cache"]
   },
   {
+    id: "navidrome",
+    name: "Navidrome",
+    category: "Apps",
+    icon: "🎵",
+    description: "Self-hosted music streaming, Spotify-like UI.",
+    longDescription:
+      "Navidrome turns your music collection into a private streaming service with a clean, Spotify-like web UI. It also speaks the Subsonic API, so most Subsonic-compatible mobile and desktop apps work with it out of the box. No external database needed — it keeps its own SQLite library.",
+    highlights: [
+      "Stream your own music library from anywhere",
+      "Works with Subsonic-compatible apps (DSub, play:Sub, Substreamer, etc.)",
+      "No external database required"
+    ],
+    image: "deluan/navidrome:latest",
+    containerPort: 4533,
+    suggestedName: "navidrome",
+    env: [],
+    volumes: ["/data", "/music"]
+  },
+  {
     id: "baserow",
     name: "Baserow",
     category: "Apps",
