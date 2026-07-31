@@ -105,6 +105,32 @@ describe("BotState", () => {
     assert.equal(reloaded.get().nickRegistered, true);
   });
 
+  test("blocked channels: add/remove persist across a reload, get() returns a defensive copy", () => {
+    const dir = makeTmpDir();
+    const filePath = join(dir, "bot-state.json");
+    const config = loadConfig(REQUIRED_ENV as NodeJS.ProcessEnv);
+    const state = BotState.load(config, filePath);
+
+    assert.deepEqual(state.getBlockedChannels(), []);
+
+    state.addBlockedChannel("#spam");
+    state.addBlockedChannel("#spam");
+    assert.deepEqual(state.getBlockedChannels(), ["#spam"], "adding the same channel twice is a no-op");
+
+    const snapshot = state.getBlockedChannels();
+    snapshot.push("#mutated");
+    assert.deepEqual(state.getBlockedChannels(), ["#spam"]);
+
+    const reloaded = BotState.load(config, filePath);
+    assert.deepEqual(reloaded.getBlockedChannels(), ["#spam"]);
+
+    reloaded.removeBlockedChannel("#spam");
+    assert.deepEqual(reloaded.getBlockedChannels(), []);
+
+    const reloadedAgain = BotState.load(config, filePath);
+    assert.deepEqual(reloadedAgain.getBlockedChannels(), []);
+  });
+
   test("setNickServPassword() persists the password for later reconnects, but get() never exposes it", () => {
     const dir = makeTmpDir();
     const filePath = join(dir, "bot-state.json");

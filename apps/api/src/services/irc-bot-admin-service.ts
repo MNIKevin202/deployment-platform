@@ -118,6 +118,79 @@ export async function updateBotConfig(
   return { ok: true, config: body as BotConfig };
 }
 
+export async function getBotBlockedChannels(containerName: string, containerPort: number): Promise<string[]> {
+  const response = await botFetch(containerName, containerPort, "/blocked-channels");
+  if (!response.ok) {
+    throw new BotAdminUnreachableError(`Bot admin API returned ${response.status}`);
+  }
+  const body = (await response.json()) as { channels: string[] };
+  return body.channels;
+}
+
+export async function blockChannelViaBot(
+  containerName: string,
+  containerPort: number,
+  channel: string
+): Promise<{ status: number; result: RegisterNickResult }> {
+  const response = await botFetch(containerName, containerPort, "/blocked-channels", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ channel })
+  });
+  const result = (await response.json()) as RegisterNickResult;
+  return { status: response.status, result };
+}
+
+export async function unblockChannelViaBot(
+  containerName: string,
+  containerPort: number,
+  channel: string
+): Promise<{ status: number; result: RegisterNickResult }> {
+  const response = await botFetch(containerName, containerPort, `/blocked-channels/${encodeURIComponent(channel)}`, {
+    method: "DELETE"
+  });
+  const result = (await response.json()) as RegisterNickResult;
+  return { status: response.status, result };
+}
+
+export interface BotAppCandidate {
+  id: number;
+  image: string;
+  containerName: string | null;
+  containerId: string | null;
+}
+
+export interface EnvVarLookup {
+  key: string;
+  value: string;
+}
+
+/**
+ * Finds the Quipora Bot app that's configured to point at a given IRC
+ * server container. There's no formal link between the two apps — the
+ * bot's own IRC_HOST env var (set at deploy time, defaulting to
+ * "app-quipora-irc") is the only available signal, so this scans every
+ * bot-image app for one whose IRC_HOST matches. Returns null if none match
+ * (or more than one candidate app resolves ambiguously — first match wins,
+ * same as any other "find" semantics).
+ */
+export function findLinkedBotApp(
+  apps: BotAppCandidate[],
+  envVarsByAppId: (appId: number) => EnvVarLookup[],
+  ircContainerName: string
+): BotAppCandidate | null {
+  for (const app of apps) {
+    if (!isIrcBotImage(app.image)) {
+      continue;
+    }
+    const hostVar = envVarsByAppId(app.id).find((v) => v.key === "IRC_HOST");
+    if (hostVar?.value === ircContainerName) {
+      return app;
+    }
+  }
+  return null;
+}
+
 export async function registerBotNick(
   containerName: string,
   containerPort: number,

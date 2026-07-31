@@ -12,6 +12,20 @@ export interface ChanServActionResult {
   message: string;
 }
 
+export interface ChannelMember {
+  nick: string;
+  isOp: boolean;
+}
+
+export interface ChannelDetail {
+  name: string;
+  topic: string | null;
+  memberCount: number;
+  founder: string | null;
+  registeredAt: string | null;
+  members: ChannelMember[];
+}
+
 /**
  * Parses `ChanServ INFO #channel`'s reply. Verified against the real
  * server's exact wording:
@@ -153,6 +167,89 @@ export async function transferChannel(
     return {
       ok: success,
       message: confirmReply.at(-1) ?? (success ? "Channel transferred" : "Unable to transfer this channel")
+    };
+  });
+}
+
+/** Full detail for one channel: topic, member list (with op status), and registration info. */
+export async function getChannelDetail(
+  host: string,
+  port: number,
+  operatorUsername: string,
+  operatorPassword: string,
+  channelName: string
+): Promise<ChannelDetail> {
+  return withIrcServiceSession(host, port, operatorUsername, operatorPassword, async (session) => {
+    const [members, topic, infoReply] = await Promise.all([
+      session.names(channelName),
+      session.topic(channelName),
+      session.chanServCommand(`INFO ${channelName}`)
+    ]);
+    const info = parseChannelInfo(infoReply, channelName);
+
+    return {
+      name: channelName,
+      topic,
+      memberCount: members.length,
+      founder: info?.founder ?? null,
+      registeredAt: info?.registeredAt ?? null,
+      members
+    };
+  });
+}
+
+/** Kicks one member out of a channel. */
+export async function kickChannelMember(
+  host: string,
+  port: number,
+  operatorUsername: string,
+  operatorPassword: string,
+  channelName: string,
+  nick: string,
+  reason: string
+): Promise<ChanServActionResult> {
+  return withIrcServiceSession(host, port, operatorUsername, operatorPassword, async (session) => {
+    const ok = await session.kick(channelName, nick, reason);
+    return { ok, message: ok ? `${nick} was kicked from ${channelName}` : "Unable to kick this user" };
+  });
+}
+
+/** Bans a nick from a channel (mask "<nick>!*@*"), then kicks them if still present. */
+export async function banChannelMember(
+  host: string,
+  port: number,
+  operatorUsername: string,
+  operatorPassword: string,
+  channelName: string,
+  nick: string
+): Promise<ChanServActionResult> {
+  return withIrcServiceSession(host, port, operatorUsername, operatorPassword, async (session) => {
+    const banned = await session.ban(channelName, `${nick}!*@*`);
+    await session.kick(channelName, nick, "Banned");
+    return {
+      ok: banned,
+      message: banned ? `${nick} was banned from ${channelName}` : "Unable to ban this user"
+    };
+  });
+}
+
+/** Grants or revokes channel op for a member, via the oper-only SAMODE override. */
+export async function setChannelMemberOp(
+  host: string,
+  port: number,
+  operatorUsername: string,
+  operatorPassword: string,
+  channelName: string,
+  nick: string,
+  grant: boolean
+): Promise<ChanServActionResult> {
+  return withIrcServiceSession(host, port, operatorUsername, operatorPassword, async (session) => {
+    const ok = await session.setChannelOp(channelName, nick, grant);
+    return {
+      ok,
+      message: ok
+        ? `${nick} is ${grant ? "now" : "no longer"} an op in ${channelName}`
+        : `Unable to ${grant ? "op" : "deop"} this user`
     };
   });
 }

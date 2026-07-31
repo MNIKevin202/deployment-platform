@@ -25,6 +25,7 @@ export interface BotStateData extends MutableBotFields {
  */
 interface PersistedFile extends BotStateData {
   nickServPassword?: string | null;
+  blockedChannels?: string[];
 }
 
 export function stateFromConfig(config: BotConfig): BotStateData {
@@ -60,20 +61,23 @@ function readPersistedState(filePath: string): PersistedFile | null {
 export class BotState {
   private data: BotStateData;
   private nickServPassword: string | null;
+  private blockedChannels: string[];
 
   private constructor(
     data: BotStateData,
     nickServPassword: string | null,
+    blockedChannels: string[],
     private readonly filePath: string
   ) {
     this.data = data;
     this.nickServPassword = nickServPassword;
+    this.blockedChannels = blockedChannels;
   }
 
   static load(config: BotConfig, filePath: string): BotState {
     const persisted = readPersistedState(filePath);
     const merged = mergeState(stateFromConfig(config), persisted);
-    return new BotState(merged, persisted?.nickServPassword ?? null, filePath);
+    return new BotState(merged, persisted?.nickServPassword ?? null, persisted?.blockedChannels ?? [], filePath);
   }
 
   get(): BotStateData {
@@ -100,10 +104,30 @@ export class BotState {
     this.persist();
   }
 
+  getBlockedChannels(): string[] {
+    return [...this.blockedChannels];
+  }
+
+  addBlockedChannel(channel: string): void {
+    if (!this.blockedChannels.includes(channel)) {
+      this.blockedChannels = [...this.blockedChannels, channel];
+      this.persist();
+    }
+  }
+
+  removeBlockedChannel(channel: string): void {
+    this.blockedChannels = this.blockedChannels.filter((c) => c !== channel);
+    this.persist();
+  }
+
   private persist(): void {
     try {
       mkdirSync(dirname(this.filePath), { recursive: true });
-      const payload: PersistedFile = { ...this.data, nickServPassword: this.nickServPassword };
+      const payload: PersistedFile = {
+        ...this.data,
+        nickServPassword: this.nickServPassword,
+        blockedChannels: this.blockedChannels
+      };
       writeFileSync(this.filePath, JSON.stringify(payload, null, 2));
     } catch (error) {
       console.error("Failed to persist bot state:", error);
