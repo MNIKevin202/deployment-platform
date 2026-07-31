@@ -10,6 +10,9 @@ import * as tls from "node:tls";
 const CONNECT_TIMEOUT_MS = 5000;
 const REGISTER_TIMEOUT_MS = 5000;
 const OPER_TIMEOUT_MS = 5000;
+const SERVICE_REPLY_TIMEOUT_MS = 4000;
+/** How long to keep collecting a service's NOTICE lines after the last one arrives. */
+const SERVICE_QUIET_PERIOD_MS = 400;
 
 export interface IrcLine {
   raw: string;
@@ -128,20 +131,27 @@ export class IrcConnection {
   /** Opens a TLS connection. Certificate is expected to be self-signed (an internal, platform-managed connection). */
   static connect(host: string, port: number): Promise<IrcConnection> {
     return new Promise((resolve, reject) => {
-      const socket = tls.connect(
-        { host, port, rejectUnauthorized: false, timeout: CONNECT_TIMEOUT_MS },
-        () => {
-          socket.removeListener("error", onError);
-          resolve(new IrcConnection(socket));
-        }
-      );
+      const socket = tls.connect({ host, port, rejectUnauthorized: false }, () => {
+        socket.removeListener("error", onError);
+        clearTimeout(connectTimer);
+        // `tls.connect`'s own `timeout` option sets a persistent idle-socket
+        // timeout, not a one-shot connect timeout — it would fire again after
+        // every quiet period on the wire and silently kill live connections.
+        // Use a manual timer for the connect phase only, and never arm the
+        // socket-level timeout at all.
+        resolve(new IrcConnection(socket));
+      });
 
-      const onError = (error: Error) => reject(error);
+      const onError = (error: Error) => {
+        clearTimeout(connectTimer);
+        reject(error);
+      };
       socket.once("error", onError);
-      socket.once("timeout", () => {
+
+      const connectTimer = setTimeout(() => {
         socket.destroy();
         reject(new Error("Timed out connecting to the IRC server"));
-      });
+      }, CONNECT_TIMEOUT_MS);
     });
   }
 
@@ -175,6 +185,43 @@ export class IrcConnection {
     if (result.command !== "381") {
       throw new IrcOperAuthError(`Unable to gain operator privileges: ${result.params.at(-1) ?? result.raw}`);
     }
+  }
+
+  /**
+   * Sends a PRIVMSG to an IRC service (NickServ, ChanServ, ...) and collects
+   * its NOTICE reply lines until a short quiet period passes with no new
+   * lines — service replies are a burst of NOTICEs with no explicit
+   * terminator token in the protocol itself.
+   */
+  serviceCommand(target: string, command: string): Promise<string[]> {
+    return new Promise((resolve) => {
+      const collected: string[] = [];
+      let quietTimer: NodeJS.Timeout | null = null;
+
+      const finish = () => {
+        clearTimeout(overallTimer);
+        if (quietTimer) {
+          clearTimeout(quietTimer);
+        }
+        unsubscribe();
+        resolve(collected);
+      };
+
+      const overallTimer = setTimeout(finish, SERVICE_REPLY_TIMEOUT_MS);
+
+      const unsubscribe = this.onLine((line) => {
+        if (line.command !== "NOTICE" || prefixNick(line.prefix) !== target) {
+          return;
+        }
+        collected.push(line.params.at(-1) ?? "");
+        if (quietTimer) {
+          clearTimeout(quietTimer);
+        }
+        quietTimer = setTimeout(finish, SERVICE_QUIET_PERIOD_MS);
+      });
+
+      this.send(`PRIVMSG ${target} :${command}`);
+    });
   }
 
   destroy(): void {

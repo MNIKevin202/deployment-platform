@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { appKind, imageRepoName, isDatabaseImage } from "../lib/appKind";
+import { appKind, imageRepoName, isDatabaseImage, isIrcBotImage } from "../lib/appKind";
 
 describe("imageRepoName — reduce an image reference to its bare repo name", () => {
   test.each([
@@ -14,6 +14,19 @@ describe("imageRepoName — reduce an image reference to its bare repo name", ()
     ["postgres@sha256:abc123", "postgres"] // digest stripped
   ])("%s -> %s", (image, expected) => {
     expect(imageRepoName(image)).toBe(expected);
+  });
+});
+
+describe("isIrcBotImage", () => {
+  test.each(["ghcr.io/mnikevin202/quipora-bot:latest", "quipora-bot", "QUIPORA-BOT:v2"])(
+    "%s -> true",
+    (image) => {
+      expect(isIrcBotImage(image)).toBe(true);
+    }
+  );
+
+  test.each(["ghcr.io/ergochat/ergo:latest", "postgres:16"])("%s -> false", (image) => {
+    expect(isIrcBotImage(image)).toBe(false);
   });
 });
 
