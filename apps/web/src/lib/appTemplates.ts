@@ -681,11 +681,12 @@ export const APP_TEMPLATES: AppTemplate[] = [
     icon: "🌐",
     description: "Flexible open-source CMS. Requires a database.",
     longDescription:
-      "Joomla is a flexible open-source CMS for websites and applications. Like WordPress, it needs a MySQL or MariaDB database: create one from the Databases templates first, then set the connection details below (the defaults assume a MariaDB app named \"mariadb\" with database \"app\").",
+      "Joomla is a flexible open-source CMS for websites and applications. Like WordPress, it needs a MySQL or MariaDB database: create one from the Databases templates first, then set the connection details below (the defaults assume a MariaDB app named \"mariadb\" with database \"app\"). Unlike most templates here, Joomla's own web installer (at /installation) doesn't read these env vars for its form — when it asks for a database host, type app-mariadb, not the \"localhost\" it suggests by default.",
     highlights: [
       "Powerful content and user management",
       "Large extension and template ecosystem",
-      "Requires a separate MySQL/MariaDB app"
+      "Requires a separate MySQL/MariaDB app",
+      "Its installer needs app-mariadb typed in manually, not localhost"
     ],
     image: "joomla:latest",
     containerPort: 80,
