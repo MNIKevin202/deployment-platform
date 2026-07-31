@@ -8,7 +8,7 @@ export interface TemplateEnvVar {
   generate?: "password";
 }
 
-export type TemplateCategory = "Databases" | "Tools";
+export type TemplateCategory = "Databases" | "Apps" | "Tools";
 
 export interface AppTemplate {
   id: string;
@@ -350,7 +350,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
   {
     id: "metabase",
     name: "Metabase",
-    category: "Tools",
+    category: "Apps",
     icon: "🧮",
     description: "Business intelligence and analytics.",
     longDescription:
@@ -369,7 +369,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
   {
     id: "gitea",
     name: "Gitea",
-    category: "Tools",
+    category: "Apps",
     icon: "🍵",
     description: "Lightweight self-hosted Git service.",
     longDescription:
@@ -410,7 +410,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
   {
     id: "nextcloud",
     name: "Nextcloud",
-    category: "Tools",
+    category: "Apps",
     icon: "☁️",
     description: "Self-hosted files, calendar, and collaboration.",
     longDescription:
@@ -485,7 +485,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
   {
     id: "freshrss",
     name: "FreshRSS",
-    category: "Tools",
+    category: "Apps",
     icon: "📰",
     description: "Self-hosted RSS feed aggregator.",
     longDescription:
@@ -504,7 +504,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
   {
     id: "jellyfin",
     name: "Jellyfin",
-    category: "Tools",
+    category: "Apps",
     icon: "🎬",
     description: "Free software media server.",
     longDescription:
@@ -523,7 +523,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
   {
     id: "baserow",
     name: "Baserow",
-    category: "Tools",
+    category: "Apps",
     icon: "🧾",
     description: "Open-source no-code database (Airtable alternative).",
     longDescription:
@@ -557,5 +557,113 @@ export const APP_TEMPLATES: AppTemplate[] = [
     suggestedName: "prometheus",
     env: [],
     volumes: ["/prometheus"]
+  },
+  {
+    id: "mailpit",
+    name: "Mailpit",
+    category: "Tools",
+    icon: "📬",
+    description: "SMTP testing inbox for your other apps.",
+    longDescription:
+      "Mailpit captures email your other apps send so you can inspect it in a web inbox — nothing is delivered to the outside world. Point your apps' SMTP settings at app-mailpit on port 1025, then read the messages in the UI.",
+    highlights: [
+      "Catch outbound email in a web inbox",
+      "Great for testing sign-up, reset, and receipt emails",
+      "Apps send to app-mailpit:1025; you read it in the browser"
+    ],
+    image: "axllent/mailpit:latest",
+    containerPort: 8025,
+    suggestedName: "mailpit",
+    env: [{ key: "MP_DATABASE", value: "/data/mailpit.db" }],
+    volumes: ["/data"]
+  },
+  {
+    id: "filebrowser",
+    name: "File Browser",
+    category: "Tools",
+    icon: "📁",
+    description: "Web-based file manager for a volume.",
+    longDescription:
+      "File Browser gives you a clean web UI to upload, download, and manage files stored on a persistent volume — a practical alternative to FTP, which needs open ports this platform doesn't expose. It first starts with the login admin / admin; change it immediately.",
+    highlights: [
+      "Upload, download, rename, and share files",
+      "Runs entirely over HTTPS — no FTP ports needed",
+      "Default login admin / admin (change it right away)"
+    ],
+    image: "filebrowser/filebrowser:latest",
+    containerPort: 80,
+    suggestedName: "filebrowser",
+    env: [],
+    volumes: ["/srv", "/database"]
+  },
+  {
+    id: "photoprism",
+    name: "PhotoPrism",
+    category: "Apps",
+    icon: "🖼️",
+    description: "Self-hosted photo library and image storage.",
+    longDescription:
+      "PhotoPrism is an AI-powered app for browsing, organizing, and sharing your photo collection. Upload images, and it automatically tags and groups them. Sign in as admin with the generated password below.",
+    highlights: [
+      "Store and organize your whole photo library",
+      "Automatic tagging, search, and albums",
+      "Originals kept on a persistent volume you control"
+    ],
+    image: "photoprism/photoprism:latest",
+    containerPort: 2342,
+    suggestedName: "photoprism",
+    env: [
+      { key: "PHOTOPRISM_ADMIN_USER", value: "admin" },
+      { key: "PHOTOPRISM_ADMIN_PASSWORD", generate: "password", secret: true }
+    ],
+    volumes: ["/photoprism/originals", "/photoprism/storage"]
+  },
+  {
+    id: "wordpress",
+    name: "WordPress",
+    category: "Apps",
+    icon: "📝",
+    description: "The world's most popular CMS. Requires a database.",
+    longDescription:
+      "WordPress powers a huge share of the web — blogs, marketing sites, and full CMS-driven apps. It needs a MySQL or MariaDB database: create one from the Databases templates first, then set the connection details below (the defaults assume a MariaDB app named \"mariadb\" with database \"app\").",
+    highlights: [
+      "Themes and plugins for almost anything",
+      "Full-featured blogging and CMS",
+      "Requires a separate MySQL/MariaDB app"
+    ],
+    image: "wordpress:latest",
+    containerPort: 80,
+    suggestedName: "wordpress",
+    env: [
+      { key: "WORDPRESS_DB_HOST", value: "app-mariadb" },
+      { key: "WORDPRESS_DB_USER", value: "root" },
+      { key: "WORDPRESS_DB_PASSWORD", value: "", secret: true },
+      { key: "WORDPRESS_DB_NAME", value: "app" }
+    ],
+    volumes: ["/var/www/html"]
+  },
+  {
+    id: "joomla",
+    name: "Joomla",
+    category: "Apps",
+    icon: "🌐",
+    description: "Flexible open-source CMS. Requires a database.",
+    longDescription:
+      "Joomla is a flexible open-source CMS for websites and applications. Like WordPress, it needs a MySQL or MariaDB database: create one from the Databases templates first, then set the connection details below (the defaults assume a MariaDB app named \"mariadb\" with database \"app\").",
+    highlights: [
+      "Powerful content and user management",
+      "Large extension and template ecosystem",
+      "Requires a separate MySQL/MariaDB app"
+    ],
+    image: "joomla:latest",
+    containerPort: 80,
+    suggestedName: "joomla",
+    env: [
+      { key: "JOOMLA_DB_HOST", value: "app-mariadb" },
+      { key: "JOOMLA_DB_USER", value: "root" },
+      { key: "JOOMLA_DB_PASSWORD", value: "", secret: true },
+      { key: "JOOMLA_DB_NAME", value: "app" }
+    ],
+    volumes: ["/var/www/html"]
   }
 ];
