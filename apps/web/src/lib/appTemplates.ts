@@ -742,6 +742,27 @@ export const APP_TEMPLATES: AppTemplate[] = [
     volumes: ["/data"],
     publishedPorts: [{ hostPort: 19132, containerPort: 19132, protocol: "udp" }]
   },
+  {
+    id: "quipora-irc",
+    name: "Quipora IRC",
+    category: "Apps",
+    icon: "💬",
+    description: "Our own IRC server, built on Ergo. Publishes TCP 6697 (TLS).",
+    longDescription:
+      "Quipora IRC is our own IRC server template, built on Ergo — a modern IRC daemon that works out of the box with no config file required. It generates a self-signed TLS certificate and listens on a published host port (6697 by default), so any IRC client (mIRC, etc.) can connect at your-server-ip on port 6697 with TLS enabled. Because the certificate is self-signed, your client needs to be told to accept/trust it. After install, check this app's Console/Logs tab for the one-time operator username and password Ergo prints on first boot — use it to /oper in, then register your nickname and channel from your IRC client with NickServ/ChanServ, same as any Ergo server.",
+    highlights: [
+      "IRC over TLS on port 6697 — no config file needed to start",
+      "One-time operator password appears in this app's Console/Logs on first boot",
+      "Config, account/channel registrations, and certs persist on a volume"
+    ],
+    image: "ghcr.io/ergochat/ergo:latest",
+    containerPort: 6697,
+    suggestedName: "quipora-irc",
+    internalOnly: true,
+    env: [],
+    volumes: ["/ircd"],
+    publishedPorts: [{ hostPort: 6697, containerPort: 6697, protocol: "tcp" }]
+  },
 
   // ---- Apps requiring a companion database (create the DB app first) ----
   {
