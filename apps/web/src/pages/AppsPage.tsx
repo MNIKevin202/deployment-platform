@@ -19,6 +19,7 @@ interface AppsPageProps {
   onDeleteMissingApp: (storedApp: StoredApp) => void;
   onViewApp: (storedApp: StoredApp) => void;
   onCreateApp: () => void;
+  onBrowseTemplates?: () => void;
   /** Heading + empty-state copy, so the same list serves both Apps and Databases. */
   eyebrow?: string;
   title?: string;
@@ -37,6 +38,7 @@ export default function AppsPage({
   onDeleteMissingApp,
   onViewApp,
   onCreateApp,
+  onBrowseTemplates,
   eyebrow = "Applications",
   title = "All Managed Apps",
   emptyTitle = "No managed apps yet",
@@ -74,6 +76,12 @@ export default function AppsPage({
                   ▤ Table
                 </button>
               </div>
+            )}
+
+            {onBrowseTemplates && (
+              <button className="secondary-button compact" type="button" onClick={onBrowseTemplates}>
+                Templates
+              </button>
             )}
 
             <button className="primary-button compact" type="button" onClick={onCreateApp}>

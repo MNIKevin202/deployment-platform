@@ -8,6 +8,8 @@ import Notice from "./components/Notice";
 import LogViewer from "./components/LogViewer";
 import AppDetail from "./components/AppDetail";
 import CreateAppWizard from "./components/CreateAppWizard";
+import TemplateGallery from "./components/TemplateGallery";
+import type { AppTemplate } from "./lib/appTemplates";
 import OverviewPage from "./pages/OverviewPage";
 import AppsPage from "./pages/AppsPage";
 import RepositoriesPage from "./pages/RepositoriesPage";
@@ -92,6 +94,8 @@ function App() {
   const [environmentRefreshKey, setEnvironmentRefreshKey] = useState(0);
 
   const [showCreateApp, setShowCreateApp] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [templateSeed, setTemplateSeed] = useState<AppTemplate | null>(null);
 
   const systemContainers = useMemo(
     () => containers.filter((container) => container.isSystemContainer),
@@ -361,6 +365,15 @@ function App() {
   const openCreateApp = () => {
     setError("");
     setNotice("");
+    setTemplateSeed(null);
+    setShowCreateApp(true);
+  };
+
+  const selectTemplate = (template: AppTemplate) => {
+    setShowTemplates(false);
+    setError("");
+    setNotice("");
+    setTemplateSeed(template);
     setShowCreateApp(true);
   };
 
@@ -464,6 +477,7 @@ function App() {
           onDeleteApp={(container) => void deleteApp(container)}
           onViewApp={viewApp}
           onCreateApp={openCreateApp}
+          onBrowseTemplates={() => setShowTemplates(true)}
         />
       ) : section === "apps" ? (
         <AppsPage
@@ -477,6 +491,7 @@ function App() {
           onDeleteMissingApp={(storedApp) => void deleteMissingApp(storedApp)}
           onViewApp={viewApp}
           onCreateApp={openCreateApp}
+          onBrowseTemplates={() => setShowTemplates(true)}
         />
       ) : section === "databases" ? (
         <AppsPage
@@ -507,9 +522,19 @@ function App() {
         />
       )}
 
+      <TemplateGallery
+        open={showTemplates}
+        onClose={() => setShowTemplates(false)}
+        onSelect={selectTemplate}
+      />
+
       <CreateAppWizard
         open={showCreateApp}
-        onClose={() => setShowCreateApp(false)}
+        initialTemplate={templateSeed}
+        onClose={() => {
+          setShowCreateApp(false);
+          setTemplateSeed(null);
+        }}
         onCreated={(createdApp) => void handleAppCreated(createdApp)}
       />
 

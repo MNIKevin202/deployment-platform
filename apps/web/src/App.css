@@ -2187,3 +2187,63 @@ code {
 .host-pressure-banner.over .host-pressure-dot {
   background: var(--color-danger);
 }
+
+/* ---------- App template gallery ---------- */
+
+.template-category {
+  margin-top: 20px;
+}
+
+.template-category h3 {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.template-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  text-align: left;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.template-card:hover {
+  border-color: var(--color-accent);
+  background: var(--color-surface-raised);
+}
+
+.template-icon {
+  font-size: 1.6rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.template-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.template-name {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.template-desc {
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+}
