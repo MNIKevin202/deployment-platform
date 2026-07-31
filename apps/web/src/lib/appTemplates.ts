@@ -600,11 +600,11 @@ export const APP_TEMPLATES: AppTemplate[] = [
     icon: "📁",
     description: "Web-based file manager for a volume.",
     longDescription:
-      "File Browser gives you a clean web UI to upload, download, and manage files stored on a persistent volume — a practical alternative to FTP, which needs open ports this platform doesn't expose. It first starts with the login admin / admin; change it immediately.",
+      "File Browser gives you a clean web UI to upload, download, and manage files stored on a persistent volume — a practical alternative to FTP, which needs open ports this platform doesn't expose. First sign-in is admin / admin; change it inside File Browser's own Settings → User Management (it manages its own accounts, so there's nothing to set here).",
     highlights: [
       "Upload, download, rename, and share files",
       "Runs entirely over HTTPS — no FTP ports needed",
-      "Default login admin / admin (change it right away)"
+      "First login admin / admin — change it in its own settings"
     ],
     image: "filebrowser/filebrowser:latest",
     containerPort: 80,
