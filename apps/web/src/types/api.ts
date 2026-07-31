@@ -442,6 +442,7 @@ export interface IrcSettingsResponse {
 
 export interface IrcRegisteredChannel {
   name: string;
+  memberCount: number;
   founder: string | null;
   registeredAt: string | null;
 }

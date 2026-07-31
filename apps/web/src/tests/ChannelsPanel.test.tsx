@@ -25,10 +25,11 @@ describe("ChannelsPanel", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  test("lists registered channels with founder and registration date", async () => {
+  test("lists every active channel, registered or not", async () => {
     const channels: IrcRegisteredChannel[] = [
-      { name: "#lobby", founder: "alice", registeredAt: "Fri, 31 Jul 2026 16:13:27 UTC" },
-      { name: "#dev", founder: "bob", registeredAt: null }
+      { name: "#lobby", memberCount: 3, founder: "alice", registeredAt: "Fri, 31 Jul 2026 16:13:27 UTC" },
+      { name: "#dev", memberCount: 1, founder: "bob", registeredAt: null },
+      { name: "#random", memberCount: 2, founder: null, registeredAt: null }
     ];
 
     vi.stubGlobal(
@@ -44,9 +45,30 @@ describe("ChannelsPanel", () => {
     expect(screen.getByText(/Founder: alice/)).toBeInTheDocument();
     expect(screen.getByText("#dev")).toBeInTheDocument();
     expect(screen.getByText(/Founder: bob/)).toBeInTheDocument();
+    expect(screen.getByText("#random")).toBeInTheDocument();
+    expect(screen.getByText(/Not registered/)).toBeInTheDocument();
   });
 
-  test("shows an empty state when no channels are registered", async () => {
+  test("an unregistered channel shows no Manage button", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          success: true,
+          channels: [{ name: "#random", memberCount: 2, founder: null, registeredAt: null }]
+        })
+      )
+    );
+
+    render(<ChannelsPanel appId={1} containerRunning />);
+
+    await waitFor(() => {
+      expect(screen.getByText("#random")).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "Manage" })).not.toBeInTheDocument();
+  });
+
+  test("shows an empty state when no channels are active", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => jsonResponse({ success: true, channels: [] }))
@@ -55,7 +77,7 @@ describe("ChannelsPanel", () => {
     render(<ChannelsPanel appId={1} containerRunning />);
 
     await waitFor(() => {
-      expect(screen.getByText("No channels are registered yet.")).toBeInTheDocument();
+      expect(screen.getByText("No channels are currently active on this server.")).toBeInTheDocument();
     });
   });
 
@@ -74,7 +96,7 @@ describe("ChannelsPanel", () => {
             success: true,
             channels: unregisterCalled
               ? []
-              : [{ name: "#lobby", founder: "alice", registeredAt: null }]
+              : [{ name: "#lobby", memberCount: 1, founder: "alice", registeredAt: null }]
           });
         }
         return jsonResponse({ success: true, channels: [] });
@@ -94,7 +116,7 @@ describe("ChannelsPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Confirm Unregister" }));
 
     await waitFor(() => {
-      expect(screen.getByText("No channels are registered yet.")).toBeInTheDocument();
+      expect(screen.getByText("No channels are currently active on this server.")).toBeInTheDocument();
     });
     expect(unregisterCalled).toBe(true);
   });
@@ -111,7 +133,7 @@ describe("ChannelsPanel", () => {
         }
         return jsonResponse({
           success: true,
-          channels: [{ name: "#lobby", founder: "alice", registeredAt: null }]
+          channels: [{ name: "#lobby", memberCount: 1, founder: "alice", registeredAt: null }]
         });
       })
     );

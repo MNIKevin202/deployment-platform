@@ -12,6 +12,7 @@ const CONNECT_TIMEOUT_MS = 5000;
 const REGISTER_TIMEOUT_MS = 5000;
 const OPER_TIMEOUT_MS = 5000;
 const CHANSERV_REPLY_TIMEOUT_MS = 4000;
+const LIST_REPLY_TIMEOUT_MS = 8000;
 /** How long to keep collecting ChanServ NOTICE lines after the last one arrives. */
 const CHANSERV_QUIET_PERIOD_MS = 400;
 
@@ -218,6 +219,41 @@ export class IrcServiceSession {
 
       this.lineHandlers.push(handler);
       this.send(`PRIVMSG ChanServ :${command}`);
+    });
+  }
+
+  /**
+   * Sends the standard IRC LIST command and collects RPL_LIST (322) until
+   * RPL_LISTEND (323) or a timeout. Unlike ChanServ's own LIST (which only
+   * shows *registered* channels), this returns every channel currently
+   * active on the server — anyone in it, registered or not — the same
+   * signal the platform's own IRC bot uses to auto-join new channels.
+   */
+  listChannels(): Promise<Array<{ name: string; memberCount: number }>> {
+    return new Promise((resolve) => {
+      const collected: Array<{ name: string; memberCount: number }> = [];
+
+      const finish = () => {
+        clearTimeout(timer);
+        this.lineHandlers = this.lineHandlers.filter((h) => h !== handler);
+        resolve(collected);
+      };
+
+      const timer = setTimeout(finish, LIST_REPLY_TIMEOUT_MS);
+
+      const handler = (line: IrcLine) => {
+        if (line.command === "322") {
+          const [, channel, count] = line.params;
+          if (channel) {
+            collected.push({ name: channel, memberCount: Number(count) || 0 });
+          }
+        } else if (line.command === "323") {
+          finish();
+        }
+      };
+
+      this.lineHandlers.push(handler);
+      this.send("LIST");
     });
   }
 

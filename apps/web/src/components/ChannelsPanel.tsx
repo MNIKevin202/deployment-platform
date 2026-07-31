@@ -129,15 +129,15 @@ export default function ChannelsPanel({ appId, containerRunning }: ChannelsPanel
   return (
     <div className="app-detail-tab-panel">
       <div className="env-scope-heading">
-        <h3>Registered Channels</h3>
+        <h3>Channels</h3>
         <button className="secondary-button compact" type="button" onClick={() => void loadChannels()} disabled={loading}>
           {loading ? "Loading..." : "Refresh"}
         </button>
       </div>
       <p className="section-description">
-        Every channel currently registered with ChanServ, and who founded it. Listing briefly
-        creates a temporary operator account to query the server, then removes it — this can take
-        a few seconds.
+        Every channel currently active on the server — anyone in it, whether or not it's
+        registered with ChanServ. Listing briefly creates a temporary operator account to query
+        the server, then removes it — this can take a few seconds.
       </p>
 
       {error && <div className="error-banner">{error}</div>}
@@ -155,25 +155,34 @@ export default function ChannelsPanel({ appId, containerRunning }: ChannelsPanel
                     {channel.name}
                   </span>
                   <span className="text-faint">
-                    Founder: {channel.founder ?? "unknown"} · Registered: {formatDate(channel.registeredAt)}
+                    {channel.memberCount} member{channel.memberCount === 1 ? "" : "s"} ·{" "}
+                    {channel.founder ? (
+                      <>
+                        Founder: {channel.founder} · Registered: {formatDate(channel.registeredAt)}
+                      </>
+                    ) : (
+                      "Not registered"
+                    )}
                   </span>
                 </div>
                 <div className="wizard-row-actions">
-                  <button
-                    className="secondary-button compact"
-                    type="button"
-                    onClick={() => {
-                      setExpanded(expanded === channel.name ? null : channel.name);
-                      setTransferTarget("");
-                      setActionError("");
-                    }}
-                  >
-                    {expanded === channel.name ? "Close" : "Manage"}
-                  </button>
+                  {channel.founder && (
+                    <button
+                      className="secondary-button compact"
+                      type="button"
+                      onClick={() => {
+                        setExpanded(expanded === channel.name ? null : channel.name);
+                        setTransferTarget("");
+                        setActionError("");
+                      }}
+                    >
+                      {expanded === channel.name ? "Close" : "Manage"}
+                    </button>
+                  )}
                 </div>
               </div>
 
-              {expanded === channel.name && (
+              {expanded === channel.name && channel.founder && (
                 <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--color-border-soft)" }}>
                   <div className="wizard-row-fields">
                     <label>
@@ -235,7 +244,7 @@ export default function ChannelsPanel({ appId, containerRunning }: ChannelsPanel
           ))}
         </div>
       ) : (
-        <div className="empty-state">No channels are registered yet.</div>
+        <div className="empty-state">No channels are currently active on this server.</div>
       )}
     </div>
   );
