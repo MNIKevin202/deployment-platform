@@ -113,7 +113,7 @@ describe("BotState", () => {
 
     state.setNickServPassword("hunter2");
     assert.equal(state.getNickServPassword(), "hunter2");
-    assert.equal((state.get() as Record<string, unknown>).nickServPassword, undefined);
+    assert.equal((state.get() as unknown as Record<string, unknown>).nickServPassword, undefined);
 
     const reloaded = BotState.load(config, filePath);
     assert.equal(reloaded.getNickServPassword(), "hunter2");
