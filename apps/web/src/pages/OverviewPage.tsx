@@ -1,6 +1,11 @@
+import { lazy, Suspense } from "react";
 import StatCard from "../components/StatCard";
 import AppCard from "../components/AppCard";
 import AppTable from "../components/AppTable";
+
+// Pulls in recharts (a large dependency) only once Overview actually
+// mounts, instead of shipping it in the app's initial bundle.
+const ClusterMetricsChart = lazy(() => import("../components/ClusterMetricsChart"));
 import { useAppsView } from "../hooks/useAppsView";
 import { computeHostPressure, formatMib } from "../lib/hostPressure";
 import { isDatabaseImage } from "../lib/appKind";
@@ -121,6 +126,10 @@ export default function OverviewPage({
           hint={dockerInfo ? formatMemory(dockerInfo.memoryTotalBytes) : undefined}
         />
       </section>
+
+      <Suspense fallback={null}>
+        <ClusterMetricsChart dockerInfo={dockerInfo} />
+      </Suspense>
 
       <section className="page-section">
         <div className="section-heading">
