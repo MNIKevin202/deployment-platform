@@ -323,3 +323,50 @@ export async function rehashIrcServer(docker: Docker, containerId: string): Prom
   const container = docker.getContainer(containerId);
   await container.kill({ signal: "SIGHUP" });
 }
+
+/**
+ * Whether the container is still actually running, a beat after a rehash.
+ * Schema validation can't catch every way a value might be semantically
+ * invalid to Ergo (confirmed live: a network name with a space passed schema
+ * validation before this check existed, then took the whole server down in
+ * a boot loop) — this is the backstop that notices when a rehash was
+ * accepted by SIGHUP but rejected by Ergo's own config loader.
+ */
+export async function isContainerRunning(docker: Docker, containerId: string): Promise<boolean> {
+  try {
+    const info = await docker.getContainer(containerId).inspect();
+    return info.State?.Running === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Best-effort restore of the `.bak` copy writeFileToContainer() made just
+ * before the bad write, followed by a rehash. Returns false (never throws)
+ * if the container isn't reachable to attempt it on — e.g. mid-crash-loop —
+ * so the route can report accurately what did or didn't happen rather than
+ * claiming a recovery that may not have occurred.
+ */
+export async function restoreConfigBackup(
+  docker: Docker,
+  containerId: string,
+  path: string
+): Promise<boolean> {
+  try {
+    const result = await execInContainer(docker, containerId, [
+      "sh",
+      "-c",
+      `cp ${JSON.stringify(`${path}.bak`)} ${JSON.stringify(path)}`
+    ]);
+
+    if (result.exitCode !== 0) {
+      return false;
+    }
+
+    await rehashIrcServer(docker, containerId);
+    return true;
+  } catch {
+    return false;
+  }
+}
