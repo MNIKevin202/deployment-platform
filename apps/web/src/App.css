@@ -2197,6 +2197,8 @@ code {
 }
 
 .template-gallery-body {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   margin: 4px -6px 0;
   padding: 0 6px 4px;
@@ -2277,4 +2279,123 @@ code {
   font-size: 0.82rem;
   color: var(--color-text-muted);
   line-height: 1.35;
+}
+
+/* ---------- Template detail view ---------- */
+
+.template-detail-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 4px -6px 0;
+  padding: 0 6px 4px;
+}
+
+.template-detail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.template-icon.large {
+  width: 56px;
+  height: 56px;
+  font-size: 1.9rem;
+}
+
+.template-detail-category {
+  display: inline-block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+}
+
+.template-detail-blurb {
+  margin: 0;
+  color: var(--color-text);
+  line-height: 1.5;
+}
+
+.template-detail-specs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin: 20px 0 4px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.template-detail-specs div {
+  min-width: 0;
+}
+
+.template-detail-specs dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  margin-bottom: 4px;
+}
+
+.template-detail-specs dd {
+  margin: 0;
+  color: var(--color-text);
+  word-break: break-word;
+}
+
+.template-detail-section {
+  margin-top: 20px;
+}
+
+.template-detail-section h4 {
+  margin: 0 0 10px;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.template-detail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.template-detail-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.template-detail-envvalue {
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+}
+
+.template-badge {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.template-detail-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
 }

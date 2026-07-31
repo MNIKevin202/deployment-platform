@@ -15,7 +15,10 @@ export interface AppTemplate {
   name: string;
   category: TemplateCategory;
   icon: string;
+  /** One-line summary shown on the card. */
   description: string;
+  /** Optional longer blurb shown on the template detail view. */
+  longDescription?: string;
   image: string;
   containerPort: number;
   /** Suggested app name (a valid slug). */
@@ -125,6 +128,20 @@ export const APP_TEMPLATES: AppTemplate[] = [
     volumes: ["/data"]
   },
   {
+    id: "valkey",
+    name: "Valkey",
+    category: "Databases",
+    icon: "🗝️",
+    description: "Open-source Redis fork; drop-in compatible.",
+    longDescription:
+      "Valkey is a community-driven fork of Redis that stays protocol-compatible, so existing Redis clients work unchanged. A solid choice for caching, queues, and pub/sub.",
+    image: "valkey/valkey:8",
+    containerPort: 6379,
+    suggestedName: "valkey",
+    env: [],
+    volumes: ["/data"]
+  },
+  {
     id: "memcached",
     name: "Memcached",
     category: "Databases",
@@ -134,6 +151,43 @@ export const APP_TEMPLATES: AppTemplate[] = [
     containerPort: 11211,
     suggestedName: "memcached",
     env: []
+  },
+  {
+    id: "couchdb",
+    name: "CouchDB",
+    category: "Databases",
+    icon: "🛋️",
+    description: "Document database with an HTTP/JSON API.",
+    longDescription:
+      "Apache CouchDB stores documents as JSON and speaks HTTP natively, with multi-master replication built in. The admin credentials below are created on first boot.",
+    image: "couchdb:3",
+    containerPort: 5984,
+    suggestedName: "couchdb",
+    env: [
+      { key: "COUCHDB_USER", value: "admin" },
+      { key: "COUCHDB_PASSWORD", generate: "password", secret: true }
+    ],
+    volumes: ["/opt/couchdb/data"]
+  },
+  {
+    id: "influxdb",
+    name: "InfluxDB",
+    category: "Databases",
+    icon: "📉",
+    description: "Time-series database for metrics and events.",
+    longDescription:
+      "InfluxDB 2 is purpose-built for time-series data — metrics, sensors, and events. It boots in setup mode and creates the org, bucket, and admin user below automatically.",
+    image: "influxdb:2",
+    containerPort: 8086,
+    suggestedName: "influxdb",
+    env: [
+      { key: "DOCKER_INFLUXDB_INIT_MODE", value: "setup" },
+      { key: "DOCKER_INFLUXDB_INIT_USERNAME", value: "admin" },
+      { key: "DOCKER_INFLUXDB_INIT_PASSWORD", generate: "password", secret: true },
+      { key: "DOCKER_INFLUXDB_INIT_ORG", value: "app" },
+      { key: "DOCKER_INFLUXDB_INIT_BUCKET", value: "app" }
+    ],
+    volumes: ["/var/lib/influxdb2"]
   },
 
   // ---- Tools ----
@@ -261,5 +315,88 @@ export const APP_TEMPLATES: AppTemplate[] = [
     suggestedName: "vaultwarden",
     env: [],
     volumes: ["/data"]
+  },
+  {
+    id: "code-server",
+    name: "code-server",
+    category: "Tools",
+    icon: "💻",
+    description: "VS Code in the browser.",
+    longDescription:
+      "Run a full VS Code editor in the browser, backed by your server. Great for editing from any device. Sign in with the generated password below.",
+    image: "codercom/code-server:latest",
+    containerPort: 8080,
+    suggestedName: "code-server",
+    env: [{ key: "PASSWORD", generate: "password", secret: true }],
+    volumes: ["/home/coder"]
+  },
+  {
+    id: "it-tools",
+    name: "IT-Tools",
+    category: "Tools",
+    icon: "🛠️",
+    description: "A handy collection of developer utilities.",
+    longDescription:
+      "IT-Tools bundles dozens of everyday developer utilities — encoders, converters, generators, formatters — in one fast, self-hosted page. No configuration required.",
+    image: "corentinth/it-tools:latest",
+    containerPort: 80,
+    suggestedName: "it-tools",
+    env: []
+  },
+  {
+    id: "freshrss",
+    name: "FreshRSS",
+    category: "Tools",
+    icon: "📰",
+    description: "Self-hosted RSS feed aggregator.",
+    longDescription:
+      "FreshRSS is a fast, self-hosted RSS/Atom reader. Follow sites and newsletters in one place, with a mobile-friendly UI and an API for third-party apps.",
+    image: "freshrss/freshrss:latest",
+    containerPort: 80,
+    suggestedName: "freshrss",
+    env: [],
+    volumes: ["/var/www/FreshRSS/data"]
+  },
+  {
+    id: "jellyfin",
+    name: "Jellyfin",
+    category: "Tools",
+    icon: "🎬",
+    description: "Free software media server.",
+    longDescription:
+      "Jellyfin streams your movies, shows, and music to any device — no tracking, no fees. Point it at your media after install through the setup wizard.",
+    image: "jellyfin/jellyfin:latest",
+    containerPort: 8096,
+    suggestedName: "jellyfin",
+    env: [],
+    volumes: ["/config", "/cache"]
+  },
+  {
+    id: "baserow",
+    name: "Baserow",
+    category: "Tools",
+    icon: "🧾",
+    description: "Open-source no-code database (Airtable alternative).",
+    longDescription:
+      "Baserow is a self-hosted, no-code database you use like a spreadsheet. Build tables, link records, and access everything over a REST API.",
+    image: "baserow/baserow:1.30.1",
+    containerPort: 80,
+    suggestedName: "baserow",
+    env: [],
+    volumes: ["/baserow/data"]
+  },
+  {
+    id: "prometheus",
+    name: "Prometheus",
+    category: "Tools",
+    icon: "🔥",
+    description: "Metrics collection and alerting.",
+    longDescription:
+      "Prometheus scrapes and stores time-series metrics and powers alerting. It boots with a default config you can extend once it's running (pairs well with Grafana).",
+    image: "prom/prometheus:latest",
+    containerPort: 9090,
+    suggestedName: "prometheus",
+    env: [],
+    volumes: ["/prometheus"]
   }
 ];
