@@ -2,10 +2,26 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import IrcSettingsPanel from "../components/IrcSettingsPanel";
-import type { IrcOperator } from "../types/api";
+import type { IrcGeneralSettings, IrcOperator } from "../types/api";
 
 function jsonResponse(body: unknown, ok = true): Response {
   return new Response(JSON.stringify(body), { status: ok ? 200 : 500 });
+}
+
+function defaultSettings(overrides: Partial<IrcGeneralSettings> = {}): IrcGeneralSettings {
+  return {
+    networkName: "ExampleNet",
+    autoJoinChannels: [],
+    defaultChannelModes: "+ntC",
+    maxChannelsPerClient: 100,
+    channelRegistrationEnabled: true,
+    channelRegistrationOperatorOnly: false,
+    maxChannelsPerAccount: 15,
+    accountRegistrationEnabled: true,
+    allowRegistrationBeforeConnect: true,
+    emailVerificationEnabled: false,
+    ...overrides
+  };
 }
 
 describe("IrcSettingsPanel", () => {
@@ -151,5 +167,76 @@ describe("IrcSettingsPanel", () => {
       expect(screen.getByText("MOTD saved.")).toBeInTheDocument();
     });
     expect(putBody).toEqual({ content: "Welcome!" });
+  });
+
+  test("loads general settings, including auto-join channels one per line", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/irc/settings")) {
+          return jsonResponse({
+            success: true,
+            settings: defaultSettings({ autoJoinChannels: ["#lobby", "#general"] })
+          });
+        }
+        if (url.includes("/irc/operators")) {
+          return jsonResponse({ success: true, operators: [] });
+        }
+        return jsonResponse({ success: true, content: "" });
+      })
+    );
+
+    render(<IrcSettingsPanel appId={1} containerRunning />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("ExampleNet")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByDisplayValue("#lobby\n#general", { normalizer: (text) => text })
+    ).toBeInTheDocument();
+    expect(screen.getByDisplayValue("+ntC")).toBeInTheDocument();
+  });
+
+  test("saving settings sends the edited auto-join list split back into an array, and shows a confirmation", async () => {
+    let putBody: unknown = null;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.includes("/irc/settings") && init?.method === "PUT") {
+          putBody = JSON.parse(init.body as string);
+          return jsonResponse({
+            success: true,
+            settings: defaultSettings({ autoJoinChannels: ["#lobby", "#welcome"] })
+          });
+        }
+        if (url.includes("/irc/settings")) {
+          return jsonResponse({ success: true, settings: defaultSettings() });
+        }
+        if (url.includes("/irc/operators")) {
+          return jsonResponse({ success: true, operators: [] });
+        }
+        return jsonResponse({ success: true, content: "" });
+      })
+    );
+
+    render(<IrcSettingsPanel appId={1} containerRunning />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("ExampleNet")).toBeInTheDocument();
+    });
+
+    const autoJoinField = screen.getByPlaceholderText("#lobby\n#general", {
+      normalizer: (text) => text
+    });
+    await userEvent.clear(autoJoinField);
+    await userEvent.type(autoJoinField, "#lobby{enter}#welcome");
+
+    await userEvent.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Settings saved.")).toBeInTheDocument();
+    });
+    expect((putBody as { autoJoinChannels: string[] }).autoJoinChannels).toEqual(["#lobby", "#welcome"]);
   });
 });

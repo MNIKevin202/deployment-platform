@@ -8,10 +8,12 @@ import {
   IRC_MOTD_PATH,
   hashOperatorPassword,
   isIrcServerImage,
+  parseGeneralSettings,
   parseOperators,
   readFileFromContainer,
   rehashIrcServer,
   removeOperator,
+  updateGeneralSettings,
   upsertOperator,
   writeFileToContainer
 } from "../services/irc-admin-service.js";
@@ -45,6 +47,23 @@ const createOperatorSchema = z.object({
 
 const motdSchema = z.object({
   content: z.string().max(50_000)
+});
+
+const channelNameSchema = z
+  .string()
+  .regex(/^[#&][^\s,:]{1,49}$/, "Channel names must start with # or & and contain no spaces, commas, or colons");
+
+const generalSettingsSchema = z.object({
+  networkName: z.string().min(1).max(100).optional(),
+  autoJoinChannels: z.array(channelNameSchema).max(20).optional(),
+  defaultChannelModes: z.string().max(50).optional(),
+  maxChannelsPerClient: z.number().int().min(1).max(10_000).optional(),
+  channelRegistrationEnabled: z.boolean().optional(),
+  channelRegistrationOperatorOnly: z.boolean().optional(),
+  maxChannelsPerAccount: z.number().int().min(1).max(10_000).optional(),
+  accountRegistrationEnabled: z.boolean().optional(),
+  allowRegistrationBeforeConnect: z.boolean().optional(),
+  emailVerificationEnabled: z.boolean().optional()
 });
 
 interface AppIdParams {
@@ -231,6 +250,69 @@ export async function registerIrcAdminRoutes(
     } catch (error) {
       request.log.error(error, "Unable to save IRC MOTD");
       return reply.code(502).send({ success: false, message: "Unable to save the MOTD" });
+    }
+  });
+
+  fastify.get<{ Params: AppIdParams }>("/apps/:id/irc/settings", async (request, reply) => {
+    const parsedParams = idParamSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return reply.code(400).send({ success: false, message: "Invalid app id" });
+    }
+
+    const containerId = await resolveIrcContainer(appDatabase, docker, parsedParams.data.id, reply);
+    if (!containerId) {
+      return;
+    }
+
+    try {
+      const configText = await readFileFromContainer(docker, containerId, IRC_CONFIG_PATH);
+
+      if (configText === null) {
+        return reply.code(502).send({ success: false, message: "The server's config file could not be found" });
+      }
+
+      return { success: true, settings: parseGeneralSettings(configText) };
+    } catch (error) {
+      request.log.error(error, "Unable to read IRC settings");
+      return reply.code(502).send({ success: false, message: "Unable to read the server's config" });
+    }
+  });
+
+  fastify.put<{ Params: AppIdParams }>("/apps/:id/irc/settings", async (request, reply) => {
+    const parsedParams = idParamSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return reply.code(400).send({ success: false, message: "Invalid app id" });
+    }
+
+    const parsedBody = generalSettingsSchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      return reply.code(400).send({
+        success: false,
+        message: parsedBody.error.issues[0]?.message ?? "Invalid settings"
+      });
+    }
+
+    const containerId = await resolveIrcContainer(appDatabase, docker, parsedParams.data.id, reply);
+    if (!containerId) {
+      return;
+    }
+
+    try {
+      const configText = await readFileFromContainer(docker, containerId, IRC_CONFIG_PATH);
+
+      if (configText === null) {
+        return reply.code(502).send({ success: false, message: "The server's config file could not be found" });
+      }
+
+      const updatedConfig = updateGeneralSettings(configText, parsedBody.data);
+
+      await writeFileToContainer(docker, containerId, IRC_CONFIG_PATH, updatedConfig);
+      await rehashIrcServer(docker, containerId);
+
+      return { success: true, settings: parseGeneralSettings(updatedConfig) };
+    } catch (error) {
+      request.log.error(error, "Unable to save IRC settings");
+      return reply.code(502).send({ success: false, message: "Unable to save the server's settings" });
     }
   });
 }

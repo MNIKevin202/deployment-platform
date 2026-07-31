@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
   ApiError,
+  IrcGeneralSettings,
   IrcMotdResponse,
   IrcOperator,
   IrcOperatorRole,
-  IrcOperatorsResponse
+  IrcOperatorsResponse,
+  IrcSettingsResponse
 } from "../types/api";
 
 interface IrcSettingsPanelProps {
@@ -26,6 +28,17 @@ const ROLE_LABELS: Record<IrcOperatorRole, string> = {
   moderator: "Moderator"
 };
 
+function channelsToLines(channels: string[]): string {
+  return channels.join("\n");
+}
+
+function linesToChannels(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
 export default function IrcSettingsPanel({ appId, containerRunning }: IrcSettingsPanelProps) {
   const [operators, setOperators] = useState<IrcOperator[] | null>(null);
   const [operatorsLoading, setOperatorsLoading] = useState(true);
@@ -43,6 +56,13 @@ export default function IrcSettingsPanel({ appId, containerRunning }: IrcSetting
   const [motdError, setMotdError] = useState("");
   const [motdSaving, setMotdSaving] = useState(false);
   const [motdSaved, setMotdSaved] = useState(false);
+
+  const [settings, setSettings] = useState<IrcGeneralSettings | null>(null);
+  const [autoJoinText, setAutoJoinText] = useState("");
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
+  const [settingsSaved, setSettingsSaved] = useState(false);
 
   const loadOperators = useCallback(async () => {
     setOperatorsLoading(true);
@@ -80,15 +100,36 @@ export default function IrcSettingsPanel({ appId, containerRunning }: IrcSetting
     }
   }, [appId]);
 
+  const loadSettings = useCallback(async () => {
+    setSettingsLoading(true);
+    setSettingsError("");
+
+    try {
+      const response = await fetch(`/api/apps/${appId}/irc/settings`);
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Unable to load settings"));
+      }
+      const result = (await response.json()) as IrcSettingsResponse;
+      setSettings(result.settings);
+      setAutoJoinText(channelsToLines(result.settings.autoJoinChannels));
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : "Unable to load settings");
+    } finally {
+      setSettingsLoading(false);
+    }
+  }, [appId]);
+
   useEffect(() => {
     if (!containerRunning) {
       setOperatorsLoading(false);
       setMotdLoading(false);
+      setSettingsLoading(false);
       return;
     }
     void loadOperators();
     void loadMotd();
-  }, [containerRunning, loadOperators, loadMotd]);
+    void loadSettings();
+  }, [containerRunning, loadOperators, loadMotd, loadSettings]);
 
   const addOperator = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -164,6 +205,47 @@ export default function IrcSettingsPanel({ appId, containerRunning }: IrcSetting
     }
   };
 
+  const updateSettingsField = <K extends keyof IrcGeneralSettings>(key: K, value: IrcGeneralSettings[K]) => {
+    setSettings((current) => (current ? { ...current, [key]: value } : current));
+    setSettingsSaved(false);
+  };
+
+  const saveSettings = async () => {
+    if (!settings) {
+      return;
+    }
+
+    setSettingsSaving(true);
+    setSettingsError("");
+    setSettingsSaved(false);
+
+    const payload: IrcGeneralSettings = {
+      ...settings,
+      autoJoinChannels: linesToChannels(autoJoinText)
+    };
+
+    try {
+      const response = await fetch(`/api/apps/${appId}/irc/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Unable to save settings"));
+      }
+
+      const result = (await response.json()) as IrcSettingsResponse;
+      setSettings(result.settings);
+      setAutoJoinText(channelsToLines(result.settings.autoJoinChannels));
+      setSettingsSaved(true);
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : "Unable to save settings");
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
   if (!containerRunning) {
     return (
       <div className="app-detail-tab-panel">
@@ -177,6 +259,137 @@ export default function IrcSettingsPanel({ appId, containerRunning }: IrcSetting
   return (
     <div className="app-detail-tab-panel">
       <div className="env-scope-heading">
+        <h3>General</h3>
+        <button
+          className="secondary-button compact"
+          type="button"
+          onClick={() => void saveSettings()}
+          disabled={settingsSaving || !settings}
+        >
+          {settingsSaving ? "Saving..." : "Save Settings"}
+        </button>
+      </div>
+      <p className="section-description">
+        Server-wide behavior. Applied via a config rehash — no restart, and connected users stay
+        connected.
+      </p>
+
+      {settingsError && <div className="error-banner">{settingsError}</div>}
+      {settingsSaved && <div className="notice-banner">Settings saved.</div>}
+
+      {settingsLoading ? (
+        <div className="empty-state">Loading settings...</div>
+      ) : settings ? (
+        <div className="wizard-form-grid">
+          <label>
+            <span>Network name</span>
+            <input
+              value={settings.networkName}
+              onChange={(event) => updateSettingsField("networkName", event.target.value)}
+            />
+          </label>
+
+          <label>
+            <span>Auto-join channels</span>
+            <textarea
+              className="bulk-env-textarea"
+              value={autoJoinText}
+              onChange={(event) => {
+                setAutoJoinText(event.target.value);
+                setSettingsSaved(false);
+              }}
+              rows={3}
+              placeholder={"#lobby\n#general"}
+            />
+            <small className="text-faint">
+              One channel per line. Everyone joins these automatically on connect.
+            </small>
+          </label>
+
+          <label>
+            <span>Default channel modes</span>
+            <input
+              value={settings.defaultChannelModes}
+              onChange={(event) => updateSettingsField("defaultChannelModes", event.target.value)}
+              placeholder="+ntC"
+            />
+            <small className="text-faint">Applied to newly created channels.</small>
+          </label>
+
+          <label>
+            <span>Max channels per client</span>
+            <input
+              type="number"
+              min={1}
+              value={settings.maxChannelsPerClient}
+              onChange={(event) => updateSettingsField("maxChannelsPerClient", Number(event.target.value))}
+            />
+          </label>
+
+          <fieldset className="wizard-fieldset">
+            <legend>Channel registration</legend>
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={settings.channelRegistrationEnabled}
+                onChange={(event) => updateSettingsField("channelRegistrationEnabled", event.target.checked)}
+              />
+              <span>Enabled</span>
+            </label>
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={settings.channelRegistrationOperatorOnly}
+                onChange={(event) =>
+                  updateSettingsField("channelRegistrationOperatorOnly", event.target.checked)
+                }
+              />
+              <span>Operators only</span>
+            </label>
+            <label>
+              <span>Max channels per account</span>
+              <input
+                type="number"
+                min={1}
+                value={settings.maxChannelsPerAccount}
+                onChange={(event) => updateSettingsField("maxChannelsPerAccount", Number(event.target.value))}
+              />
+            </label>
+          </fieldset>
+
+          <fieldset className="wizard-fieldset">
+            <legend>Account registration</legend>
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={settings.accountRegistrationEnabled}
+                onChange={(event) => updateSettingsField("accountRegistrationEnabled", event.target.checked)}
+              />
+              <span>Enabled</span>
+            </label>
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={settings.allowRegistrationBeforeConnect}
+                onChange={(event) =>
+                  updateSettingsField("allowRegistrationBeforeConnect", event.target.checked)
+                }
+              />
+              <span>Allow registering before connecting (SASL/NickServ REGISTER pre-auth)</span>
+            </label>
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={settings.emailVerificationEnabled}
+                onChange={(event) => updateSettingsField("emailVerificationEnabled", event.target.checked)}
+              />
+              <span>Require email verification</span>
+            </label>
+          </fieldset>
+        </div>
+      ) : null}
+
+      <div className="env-scope-heading" style={{ marginTop: 28 }}>
         <h3>Operators</h3>
       </div>
       <p className="section-description">

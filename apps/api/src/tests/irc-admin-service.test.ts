@@ -6,9 +6,11 @@ import Docker from "dockerode";
 import {
   hashOperatorPassword,
   isIrcServerImage,
+  parseGeneralSettings,
   parseOperators,
   readFileFromContainer,
   removeOperator,
+  updateGeneralSettings,
   upsertOperator
 } from "../services/irc-admin-service.js";
 
@@ -47,9 +49,29 @@ opers:
     #    whois-line: "can help with moderation issues!"
     #    password: "$2a$04$0123456789abcdef0123456789abcdef0123456789abcdef01234"
 
+channels:
+    # channels that new clients will automatically join. this should be used
+    # with caution, since traditional IRC users will likely view it as an
+    # antifeature.
+    #auto-join:
+    #    - "#lounge"
+
+    # modes that are set when new channels are created
+    default-modes: +ntC
+
+    max-channels-per-client: 100
+
+    registration:
+        enabled: true
+        operator-only: false
+        max-channels-per-account: 15
+
 accounts:
     registration:
         enabled: true
+        allow-before-connect: true
+        email-verification:
+            enabled: false
 `;
 
 describe("readFileFromContainer", () => {
@@ -212,5 +234,81 @@ describe("removeOperator", () => {
   test("is a no-op when the username isn't present", () => {
     const updated = removeOperator(SAMPLE_CONFIG, "nobody");
     assert.equal(parseOperators(updated).length, 1);
+  });
+});
+
+describe("parseGeneralSettings", () => {
+  test("reads every field from a config shaped like Ergo's real default.yaml", () => {
+    const settings = parseGeneralSettings(SAMPLE_CONFIG);
+
+    assert.equal(settings.networkName, "ExampleNet");
+    assert.deepEqual(settings.autoJoinChannels, []); // commented out in the sample, same as Ergo ships by default
+    assert.equal(settings.defaultChannelModes, "+ntC");
+    assert.equal(settings.maxChannelsPerClient, 100);
+    assert.equal(settings.channelRegistrationEnabled, true);
+    assert.equal(settings.channelRegistrationOperatorOnly, false);
+    assert.equal(settings.maxChannelsPerAccount, 15);
+    assert.equal(settings.accountRegistrationEnabled, true);
+    assert.equal(settings.allowRegistrationBeforeConnect, true);
+    assert.equal(settings.emailVerificationEnabled, false);
+  });
+
+  test("falls back sensibly when a section is entirely absent", () => {
+    const settings = parseGeneralSettings("network:\n    name: X\n");
+    assert.deepEqual(settings.autoJoinChannels, []);
+    assert.equal(settings.maxChannelsPerClient, 100);
+    assert.equal(settings.accountRegistrationEnabled, true);
+  });
+});
+
+describe("updateGeneralSettings", () => {
+  test("sets auto-join channels, preserving everything else including comments", () => {
+    const updated = updateGeneralSettings(SAMPLE_CONFIG, {
+      autoJoinChannels: ["#lobby", "#welcome"]
+    });
+
+    const settings = parseGeneralSettings(updated);
+    assert.deepEqual(settings.autoJoinChannels, ["#lobby", "#welcome"]);
+    // Untouched fields keep their original values.
+    assert.equal(settings.networkName, "ExampleNet");
+    assert.match(updated, /This is the default config file for Ergo/);
+    assert.match(updated, /antifeature/);
+  });
+
+  test("only changes the fields that were actually provided", () => {
+    const updated = updateGeneralSettings(SAMPLE_CONFIG, { networkName: "QuiporaNet" });
+    const settings = parseGeneralSettings(updated);
+
+    assert.equal(settings.networkName, "QuiporaNet");
+    assert.equal(settings.maxChannelsPerClient, 100);
+    assert.equal(settings.channelRegistrationEnabled, true);
+  });
+
+  test("round-trips a full settings update through parse -> update -> parse", () => {
+    const updated = updateGeneralSettings(SAMPLE_CONFIG, {
+      networkName: "QuiporaNet",
+      autoJoinChannels: ["#general"],
+      defaultChannelModes: "+nt",
+      maxChannelsPerClient: 50,
+      channelRegistrationEnabled: false,
+      channelRegistrationOperatorOnly: true,
+      maxChannelsPerAccount: 5,
+      accountRegistrationEnabled: false,
+      allowRegistrationBeforeConnect: false,
+      emailVerificationEnabled: true
+    });
+
+    assert.deepEqual(parseGeneralSettings(updated), {
+      networkName: "QuiporaNet",
+      autoJoinChannels: ["#general"],
+      defaultChannelModes: "+nt",
+      maxChannelsPerClient: 50,
+      channelRegistrationEnabled: false,
+      channelRegistrationOperatorOnly: true,
+      maxChannelsPerAccount: 5,
+      accountRegistrationEnabled: false,
+      allowRegistrationBeforeConnect: false,
+      emailVerificationEnabled: true
+    });
   });
 });
