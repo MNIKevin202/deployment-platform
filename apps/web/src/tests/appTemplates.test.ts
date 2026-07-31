@@ -13,6 +13,11 @@ describe("APP_TEMPLATES catalog", () => {
       expect(template.image).toMatch(/.+:.+|.+\/.+/);
       expect(template.containerPort).toBeGreaterThan(0);
       expect(template.suggestedName).toMatch(SLUG);
+      expect(template.longDescription.length).toBeGreaterThan(30);
+      expect(template.highlights.length).toBeGreaterThan(0);
+      for (const highlight of template.highlights) {
+        expect(highlight).toBeTruthy();
+      }
       for (const env of template.env) {
         expect(env.key).toMatch(ENV_KEY);
       }
