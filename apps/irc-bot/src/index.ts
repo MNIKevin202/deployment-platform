@@ -92,24 +92,16 @@ async function claimIdentity(conn: IrcConnection, config: BotConfig, state: BotS
 
 async function runConnection(config: BotConfig, state: BotState, runtime: BotRuntime): Promise<void> {
   const conn = await IrcConnection.connect(config.host, config.port);
-  const actualNick = await claimIdentity(conn, config, state);
-  await conn.oper(config.operUsername, config.operPassword);
-  log("connected", { host: config.host, port: config.port, nick: actualNick });
 
+  // Track the identity as a mutable ref and attach the line handler before
+  // claiming it: Ergo auto-joins the connection into its configured
+  // auto-join channels (e.g. #support) immediately once registration
+  // completes, and if we don't already have a handler listening at that
+  // moment, that initial JOIN for ourselves is silently missed forever —
+  // the bot ends up genuinely present in the channel but never recorded as
+  // "joined", so it never shows up in status/logs for it.
+  let actualNick = config.nick;
   const joinedChannels = new Set<string>();
-  runtime.connected = true;
-  runtime.nick = actualNick;
-  runtime.joinedChannels = joinedChannels;
-  runtime.registerNick = async (password: string, email?: string): Promise<ServiceCommandResult> => {
-    const command = email ? `REGISTER ${password} ${email}` : `REGISTER ${password}`;
-    const lines = await conn.serviceCommand("NickServ", command);
-    const result = interpretServiceReply(lines);
-    if (result.ok) {
-      state.setNickRegistered(true);
-      state.setNickServPassword(password);
-    }
-    return result;
-  };
 
   conn.onLine((line) => {
     const pong = pongReply(line);
@@ -127,6 +119,11 @@ async function runConnection(config: BotConfig, state: BotState, runtime: BotRun
       if (nick === actualNick) {
         joinedChannels.add(channel);
         log("bot-joined", { channel });
+        // Being a server operator doesn't grant channel-level op (+o) —
+        // those are separate IRC privileges. SAMODE is the oper-only
+        // command that forces a channel mode without needing +o first, so
+        // the bot shows up with the same @ badge as any other channel op.
+        conn.send(`SAMODE ${channel} +o ${actualNick}`);
         return;
       }
       log("join", { channel, nick });
@@ -170,6 +167,24 @@ async function runConnection(config: BotConfig, state: BotState, runtime: BotRun
       }
     }
   });
+
+  actualNick = await claimIdentity(conn, config, state);
+  await conn.oper(config.operUsername, config.operPassword);
+  log("connected", { host: config.host, port: config.port, nick: actualNick });
+
+  runtime.connected = true;
+  runtime.nick = actualNick;
+  runtime.joinedChannels = joinedChannels;
+  runtime.registerNick = async (password: string, email?: string): Promise<ServiceCommandResult> => {
+    const command = email ? `REGISTER ${password} ${email}` : `REGISTER ${password}`;
+    const lines = await conn.serviceCommand("NickServ", command);
+    const result = interpretServiceReply(lines);
+    if (result.ok) {
+      state.setNickRegistered(true);
+      state.setNickServPassword(password);
+    }
+    return result;
+  };
 
   await joinAllChannels(conn, joinedChannels);
 
