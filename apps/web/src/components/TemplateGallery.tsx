@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { templatesInCategory, type AppTemplate, type TemplateCategory } from "../lib/appTemplates";
-import { findInstalledTemplateApp, type InstalledTemplateMatch } from "../lib/templateInstallStatus";
+import {
+  findInstalledTemplateApp,
+  requiredDatabaseStatus,
+  type InstalledTemplateMatch,
+  type RequiredDatabaseStatus
+} from "../lib/templateInstallStatus";
 
 interface TemplateGalleryProps {
   open: boolean;
@@ -67,6 +72,7 @@ export default function TemplateGallery({
   }
 
   const selectedMatch = selected ? findInstalledTemplateApp(selected, storedApps) : null;
+  const selectedDbStatus = selected ? requiredDatabaseStatus(selected, storedApps) : null;
 
   return (
     <div className="modal-backdrop">
@@ -85,9 +91,11 @@ export default function TemplateGallery({
           <TemplateDetail
             template={selected}
             installedMatch={selectedMatch}
+            dbStatus={selectedDbStatus}
             onBack={() => setSelected(null)}
             onInstall={() => onSelect(selected)}
             onViewApp={onViewApp}
+            onSelectTemplate={setSelected}
           />
         ) : (
           <>
@@ -142,12 +150,22 @@ export default function TemplateGallery({
 interface TemplateDetailProps {
   template: AppTemplate;
   installedMatch: InstalledTemplateMatch | null;
+  dbStatus: RequiredDatabaseStatus | null;
   onBack: () => void;
   onInstall: () => void;
   onViewApp: (appId: number) => void;
+  onSelectTemplate: (template: AppTemplate) => void;
 }
 
-function TemplateDetail({ template, installedMatch, onBack, onInstall, onViewApp }: TemplateDetailProps) {
+function TemplateDetail({
+  template,
+  installedMatch,
+  dbStatus,
+  onBack,
+  onInstall,
+  onViewApp,
+  onSelectTemplate
+}: TemplateDetailProps) {
   return (
     <>
       <div className="template-detail-body">
@@ -158,6 +176,22 @@ function TemplateDetail({ template, installedMatch, onBack, onInstall, onViewApp
             </span>
             <button type="button" className="secondary-button compact" onClick={() => onViewApp(installedMatch.appId)}>
               View App
+            </button>
+          </div>
+        )}
+
+        {dbStatus && !dbStatus.installed && (
+          <div className="template-warning-banner">
+            <span>
+              ⚠ This needs a <strong>{dbStatus.template.name}</strong> app running first — none was found. Install
+              it, then match this template's database password to what it generates.
+            </span>
+            <button
+              type="button"
+              className="secondary-button compact"
+              onClick={() => onSelectTemplate(dbStatus.template)}
+            >
+              Set up {dbStatus.template.name}
             </button>
           </div>
         )}
