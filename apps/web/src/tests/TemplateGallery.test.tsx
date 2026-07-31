@@ -89,4 +89,41 @@ describe("TemplateGallery", () => {
     // Install stays available even when already installed (a second instance is valid).
     expect(screen.getByRole("button", { name: /Install PostgreSQL/ })).toBeInTheDocument();
   });
+
+  test("warns when a DB-dependent template's database isn't installed, and can jump to it", async () => {
+    render(
+      <TemplateGallery
+        open
+        onClose={vi.fn()}
+        onSelect={vi.fn()}
+        storedApps={[]}
+        onViewApp={vi.fn()}
+      />
+    );
+
+    await userEvent.click(screen.getByText("Joomla").closest("button")!);
+    expect(screen.getByText(/none was found/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set up MariaDB" })).toBeInTheDocument();
+    // Install remains available — the warning doesn't block it.
+    expect(screen.getByRole("button", { name: /Install Joomla/ })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Set up MariaDB" }));
+    expect(screen.getByRole("heading", { name: "MariaDB" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Install MariaDB/ })).toBeInTheDocument();
+  });
+
+  test("no warning once the required database exists", async () => {
+    render(
+      <TemplateGallery
+        open
+        onClose={vi.fn()}
+        onSelect={vi.fn()}
+        storedApps={[{ id: 4, name: "mariadb", image: "mariadb:11" }]}
+        onViewApp={vi.fn()}
+      />
+    );
+
+    await userEvent.click(screen.getByText("Joomla").closest("button")!);
+    expect(screen.queryByRole("button", { name: "Set up MariaDB" })).not.toBeInTheDocument();
+  });
 });

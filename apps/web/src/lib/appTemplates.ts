@@ -40,6 +40,12 @@ export interface AppTemplate {
    * services reached only through a published port (e.g. a game server).
    */
   internalOnly?: boolean;
+  /**
+   * The id of another template in this catalog that must be installed and
+   * running first (e.g. Joomla requires "mariadb"). Purely informational —
+   * used to warn before install, never to block it.
+   */
+  requiresTemplateId?: string;
 }
 
 export interface TemplatePublishedPort {
@@ -659,6 +665,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
     image: "wordpress:latest",
     containerPort: 80,
     suggestedName: "wordpress",
+    requiresTemplateId: "mariadb",
     env: [
       { key: "WORDPRESS_DB_HOST", value: "app-mariadb" },
       { key: "WORDPRESS_DB_USER", value: "root" },
@@ -683,6 +690,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
     image: "joomla:latest",
     containerPort: 80,
     suggestedName: "joomla",
+    requiresTemplateId: "mariadb",
     env: [
       { key: "JOOMLA_DB_HOST", value: "app-mariadb" },
       { key: "JOOMLA_DB_USER", value: "root" },
@@ -751,6 +759,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
     image: "fireflyiii/core:latest",
     containerPort: 8080,
     suggestedName: "firefly-iii",
+    requiresTemplateId: "mariadb",
     env: [
       { key: "APP_KEY", generate: "password", generateLength: 32, secret: true },
       { key: "DB_CONNECTION", value: "mysql" },
@@ -778,6 +787,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
     image: "ghcr.io/requarks/wiki:2",
     containerPort: 3000,
     suggestedName: "wikijs",
+    requiresTemplateId: "postgres",
     env: [
       { key: "DB_TYPE", value: "postgres" },
       { key: "DB_HOST", value: "app-postgres" },
@@ -803,6 +813,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
     image: "lscr.io/linuxserver/bookstack:latest",
     containerPort: 80,
     suggestedName: "bookstack",
+    requiresTemplateId: "mariadb",
     env: [
       { key: "PUID", value: "1000" },
       { key: "PGID", value: "1000" },
@@ -832,6 +843,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
     image: "yourls:latest",
     containerPort: 80,
     suggestedName: "yourls",
+    requiresTemplateId: "mariadb",
     env: [
       { key: "YOURLS_DB_HOST", value: "app-mariadb" },
       { key: "YOURLS_DB_USER", value: "root" },
@@ -858,6 +870,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
     image: "ghcr.io/umami-software/umami:postgresql-latest",
     containerPort: 3000,
     suggestedName: "umami",
+    requiresTemplateId: "postgres",
     env: [
       {
         key: "DATABASE_URL",

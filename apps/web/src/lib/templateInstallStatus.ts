@@ -1,4 +1,5 @@
 import { imageRepoName } from "./appKind";
+import { APP_TEMPLATES, type AppTemplate } from "./appTemplates";
 
 export interface InstalledTemplateMatch {
   appId: number;
@@ -18,4 +19,36 @@ export function findInstalledTemplateApp(
   const repo = imageRepoName(template.image);
   const match = storedApps.find((app) => imageRepoName(app.image) === repo);
   return match ? { appId: match.id, appName: match.name } : null;
+}
+
+export interface RequiredDatabaseStatus {
+  /** The required companion template (e.g. MariaDB for Joomla). */
+  template: AppTemplate;
+  /** Whether an app already running that image was found. */
+  installed: boolean;
+}
+
+/**
+ * A template's companion-database requirement, and whether it's already
+ * satisfied. Returns null when the template has no such requirement. Purely
+ * informational — never used to block Install, since the user may already
+ * have a compatible database running under a different name.
+ */
+export function requiredDatabaseStatus(
+  template: Pick<AppTemplate, "requiresTemplateId">,
+  storedApps: ReadonlyArray<{ id: number; name: string; image: string }>
+): RequiredDatabaseStatus | null {
+  if (!template.requiresTemplateId) {
+    return null;
+  }
+
+  const dbTemplate = APP_TEMPLATES.find((t) => t.id === template.requiresTemplateId);
+  if (!dbTemplate) {
+    return null;
+  }
+
+  return {
+    template: dbTemplate,
+    installed: findInstalledTemplateApp(dbTemplate, storedApps) !== null
+  };
 }

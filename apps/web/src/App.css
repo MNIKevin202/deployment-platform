@@ -2265,7 +2265,8 @@ code {
   border: 1px solid var(--color-success);
 }
 
-.template-installed-banner {
+.template-installed-banner,
+.template-warning-banner {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2277,6 +2278,11 @@ code {
   background: var(--color-success-bg);
   color: var(--color-text);
   font-size: 0.88rem;
+}
+
+.template-warning-banner {
+  border-color: var(--color-warning);
+  background: var(--color-warning-bg);
 }
 
 .template-icon {
