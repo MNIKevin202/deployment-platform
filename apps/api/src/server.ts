@@ -77,6 +77,10 @@ import {
 } from "./routes/platform-settings.js";
 import type { RecordEventFn } from "./services/deployment-event-service.js";
 import { createAutoDeployScheduler } from "./services/auto-deploy-service.js";
+import {
+  createImageUpdateChecker,
+  createImageUpdateCheckDockerOps
+} from "./services/image-update-check-service.js";
 import type { RevertDependencies } from "./services/revert-service.js";
 import { verifyGitAvailable } from "./services/github-clone-service.js";
 import { createRealHttpProbeClient } from "./services/performance-diagnostics-service.js";
@@ -338,6 +342,22 @@ const backupScheduler = createBackupScheduler({
   logger: app.log
 });
 
+// Periodically checks every plain-image app (no app_sources row — GitHub-built
+// apps have their own auto-deploy pipeline) for a newer registry image than
+// what's currently running, so the panel can show a "redeploy to update"
+// indicator without the user needing to check manually.
+const imageUpdateChecker = createImageUpdateChecker({
+  listCandidateApps: () =>
+    appDatabase.listApps().map((storedApp) => ({
+      id: storedApp.id,
+      containerId: storedApp.containerId,
+      image: storedApp.image
+    })),
+  hasAppSource: (appId) => appDatabase.getAppSource(appId) !== null,
+  dockerOps: createImageUpdateCheckDockerOps(docker),
+  logger: app.log
+});
+
 await registerPlatformSettingsRoutes(app, {
   appDatabase,
   backupsDir: BACKUPS_DIR,
@@ -533,7 +553,9 @@ app.get("/apps", async () => {
       health: summarizeAppHealth(storedApp.id),
       latestEventSeverity: latestEventSeverity(storedApp.id),
       runtime: resolveAppRuntime(storedApp.containerName, runtimeByName),
-      publishedPorts: appDatabase.listAppPublishedPorts(storedApp.id)
+      publishedPorts: appDatabase.listAppPublishedPorts(storedApp.id),
+      imageUpdateAvailable: imageUpdateChecker.getStatus(storedApp.id)?.updateAvailable ?? false,
+      imageUpdateCheckedAt: imageUpdateChecker.getStatus(storedApp.id)?.checkedAt ?? null
     }))
   };
 });
@@ -578,7 +600,8 @@ app.get<{ Params: AppIdParams }>("/apps/:id", async (request, reply) => {
         storedApp.lastDeployedAt,
         storedApp.environmentTouchedAt
       ),
-      appDatabase.listAppPublishedPorts(storedApp.id)
+      appDatabase.listAppPublishedPorts(storedApp.id),
+      imageUpdateChecker.getStatus(storedApp.id)
     );
   } catch (error) {
     return sendDockerError(
@@ -1370,6 +1393,7 @@ const start = async (): Promise<void> => {
   healthCheckScheduler.start();
   autoDeployScheduler.start();
   backupScheduler.start();
+  imageUpdateChecker.start();
 };
 
 let shuttingDown = false;
@@ -1388,6 +1412,7 @@ async function shutdown(signal: string): Promise<void> {
   healthCheckScheduler.stop();
   autoDeployScheduler.stop();
   backupScheduler.stop();
+  imageUpdateChecker.stop();
 
   try {
     await app.close();

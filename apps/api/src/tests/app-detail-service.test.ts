@@ -139,6 +139,21 @@ describe("buildAppDetail", () => {
     assert.equal(detail.containerId, "live-container-id-1234567890");
     assert.equal(detail.containerExists, true);
   });
+
+  test("defaults imageUpdateAvailable to false when no status is passed", () => {
+    const detail = buildAppDetail(makeApp(), makeInspection(), true, "applied");
+    assert.equal(detail.imageUpdateAvailable, false);
+    assert.equal(detail.imageUpdateCheckedAt, null);
+  });
+
+  test("surfaces a passed-in image update status", () => {
+    const detail = buildAppDetail(makeApp(), makeInspection(), true, "applied", [], {
+      updateAvailable: true,
+      checkedAt: "2026-01-03T00:00:00.000Z"
+    });
+    assert.equal(detail.imageUpdateAvailable, true);
+    assert.equal(detail.imageUpdateCheckedAt, "2026-01-03T00:00:00.000Z");
+  });
 });
 
 describe("GET /apps/:id 404 condition", () => {

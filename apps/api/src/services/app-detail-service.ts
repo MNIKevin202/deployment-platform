@@ -1,5 +1,6 @@
 import type { StoredApp, StoredAppPublishedPort } from "../database.js";
 import type { EnvironmentStatus } from "./environment-service.js";
+import type { ImageUpdateStatus } from "./image-update-check-service.js";
 
 export interface AppDetailPublishedPort {
   hostPort: number;
@@ -42,6 +43,8 @@ export interface AppDetail {
   dockerStatusText: string | null;
   environmentStatus: EnvironmentStatus;
   publishedPorts: AppDetailPublishedPort[];
+  imageUpdateAvailable: boolean;
+  imageUpdateCheckedAt: string | null;
 }
 
 /**
@@ -73,7 +76,8 @@ export function buildAppDetail(
   inspection: ContainerInspection | null,
   routingReady: boolean,
   environmentStatus: EnvironmentStatus,
-  publishedPorts: StoredAppPublishedPort[] = []
+  publishedPorts: StoredAppPublishedPort[] = [],
+  imageUpdateStatus: ImageUpdateStatus | null = null
 ): AppDetail {
   return {
     id: storedApp.id,
@@ -105,6 +109,8 @@ export function buildAppDetail(
       hostPort: port.hostPort,
       containerPort: port.containerPort,
       protocol: port.protocol
-    }))
+    })),
+    imageUpdateAvailable: imageUpdateStatus?.updateAvailable ?? false,
+    imageUpdateCheckedAt: imageUpdateStatus?.checkedAt ?? null
   };
 }
