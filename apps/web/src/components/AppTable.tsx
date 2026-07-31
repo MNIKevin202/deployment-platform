@@ -48,6 +48,7 @@ export default function AppTable({
             <th>Status</th>
             <th>Image</th>
             <th>Domain</th>
+            <th>Update</th>
             <th aria-label="Actions" />
           </tr>
         </thead>
@@ -77,6 +78,13 @@ export default function AppTable({
                   <code className="inline-code">{container.image}</code>
                 </td>
                 <td>{domainCell(storedApp, canOpen)}</td>
+                <td>
+                  {storedApp?.imageUpdateAvailable ? (
+                    <span className="status-badge compact warning">Update Available</span>
+                  ) : (
+                    <span className="text-faint">—</span>
+                  )}
+                </td>
                 <td>
                   <div className="apps-table-actions">
                     {canOpen && (
@@ -147,6 +155,9 @@ export default function AppTable({
                 <code className="inline-code">{storedApp.image}</code>
               </td>
               <td>{domainCell(storedApp, false)}</td>
+              <td>
+                <span className="text-faint">—</span>
+              </td>
               <td>
                 <div className="apps-table-actions">
                   <button className="secondary-button compact" type="button" onClick={() => onViewApp(storedApp)}>

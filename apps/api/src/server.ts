@@ -560,6 +560,26 @@ app.get("/apps", async () => {
   };
 });
 
+app.post(
+  "/apps/image-updates/check-now",
+  { config: { rateLimit: { max: 6, timeWindow: "1 minute" } } },
+  async (_request, reply) => {
+    try {
+      await imageUpdateChecker.runOnce();
+      const updatesAvailable = appDatabase
+        .listApps()
+        .filter((storedApp) => imageUpdateChecker.getStatus(storedApp.id)?.updateAvailable).length;
+      return { success: true, updatesAvailable };
+    } catch (error) {
+      app.log.error(error, "Manual image update check failed");
+      return reply.code(500).send({
+        success: false,
+        message: error instanceof Error ? error.message : "Update check failed."
+      });
+    }
+  }
+);
+
 const appIdParamSchema = z.object({
   id: z.coerce.number().int().positive()
 });
