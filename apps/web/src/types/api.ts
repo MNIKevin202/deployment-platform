@@ -435,6 +435,23 @@ export interface IrcSettingsResponse {
   message?: string;
 }
 
+export interface IrcRegisteredChannel {
+  name: string;
+  founder: string | null;
+  registeredAt: string | null;
+}
+
+export interface IrcChannelsResponse {
+  success: boolean;
+  channels: IrcRegisteredChannel[];
+  message?: string;
+}
+
+export interface IrcChannelActionResponse {
+  success: boolean;
+  message: string;
+}
+
 export interface AppLogsResponse {
   success: boolean;
   appId: number;

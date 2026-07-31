@@ -53,11 +53,15 @@ describe("IrcSettingsPanel", () => {
         if (url.includes("/irc/operators")) {
           return jsonResponse({ success: true, operators });
         }
+        if (url.includes("/irc/settings")) {
+          return jsonResponse({ success: true, settings: defaultSettings() });
+        }
         return jsonResponse({ success: true, content: "" });
       })
     );
 
     render(<IrcSettingsPanel appId={1} containerRunning />);
+    await userEvent.click(screen.getByRole("tab", { name: "Operators" }));
 
     await waitFor(() => {
       expect(screen.getByText("admin")).toBeInTheDocument();
@@ -84,11 +88,15 @@ describe("IrcSettingsPanel", () => {
         if (url.includes("/irc/operators")) {
           return jsonResponse({ success: true, operators: [] });
         }
+        if (url.includes("/irc/settings")) {
+          return jsonResponse({ success: true, settings: defaultSettings() });
+        }
         return jsonResponse({ success: true, content: "" });
       })
     );
 
     render(<IrcSettingsPanel appId={1} containerRunning />);
+    await userEvent.click(screen.getByRole("tab", { name: "Operators" }));
 
     await waitFor(() => {
       expect(screen.getByText("No operators configured yet.")).toBeInTheDocument();
@@ -120,11 +128,15 @@ describe("IrcSettingsPanel", () => {
             operators: [{ username: "admin", role: "admin", knownRole: true }]
           });
         }
+        if (url.includes("/irc/settings")) {
+          return jsonResponse({ success: true, settings: defaultSettings() });
+        }
         return jsonResponse({ success: true, content: "" });
       })
     );
 
     render(<IrcSettingsPanel appId={1} containerRunning />);
+    await userEvent.click(screen.getByRole("tab", { name: "Operators" }));
 
     await waitFor(() => {
       expect(screen.getByText("admin")).toBeInTheDocument();
@@ -151,11 +163,15 @@ describe("IrcSettingsPanel", () => {
         if (url.includes("/irc/motd")) {
           return jsonResponse({ success: true, content: "Welcome!" });
         }
+        if (url.includes("/irc/settings")) {
+          return jsonResponse({ success: true, settings: defaultSettings() });
+        }
         return jsonResponse({ success: true, operators: [] });
       })
     );
 
     render(<IrcSettingsPanel appId={1} containerRunning />);
+    await userEvent.click(screen.getByRole("tab", { name: "MOTD" }));
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("Welcome!")).toBeInTheDocument();

@@ -8,6 +8,10 @@ import type {
   IrcOperatorsResponse,
   IrcSettingsResponse
 } from "../types/api";
+import Tabs from "./Tabs";
+import ChannelsPanel from "./ChannelsPanel";
+
+type IrcSubTab = "general" | "operators" | "motd" | "channels";
 
 interface IrcSettingsPanelProps {
   appId: number;
@@ -40,6 +44,7 @@ function linesToChannels(text: string): string[] {
 }
 
 export default function IrcSettingsPanel({ appId, containerRunning }: IrcSettingsPanelProps) {
+  const [subTab, setSubTab] = useState<IrcSubTab>("general");
   const [operators, setOperators] = useState<IrcOperator[] | null>(null);
   const [operatorsLoading, setOperatorsLoading] = useState(true);
   const [operatorsError, setOperatorsError] = useState("");
@@ -258,26 +263,39 @@ export default function IrcSettingsPanel({ appId, containerRunning }: IrcSetting
 
   return (
     <div className="app-detail-tab-panel">
-      <div className="env-scope-heading">
-        <h3>General</h3>
-        <button
-          className="secondary-button compact"
-          type="button"
-          onClick={() => void saveSettings()}
-          disabled={settingsSaving || !settings}
-        >
-          {settingsSaving ? "Saving..." : "Save Settings"}
-        </button>
-      </div>
-      <p className="section-description">
-        Server-wide behavior. Applied via a config rehash — no restart, and connected users stay
-        connected.
-      </p>
+      <Tabs
+        items={[
+          { key: "general", label: "General" },
+          { key: "operators", label: "Operators" },
+          { key: "motd", label: "MOTD" },
+          { key: "channels", label: "Channels" }
+        ]}
+        active={subTab}
+        onChange={(key) => setSubTab(key as IrcSubTab)}
+      />
 
-      {settingsError && <div className="error-banner">{settingsError}</div>}
-      {settingsSaved && <div className="notice-banner">Settings saved.</div>}
+      {subTab === "general" && (
+        <div className="app-detail-tab-panel" style={{ padding: 0 }}>
+          <div className="env-scope-heading">
+            <h3>General</h3>
+            <button
+              className="secondary-button compact"
+              type="button"
+              onClick={() => void saveSettings()}
+              disabled={settingsSaving || !settings}
+            >
+              {settingsSaving ? "Saving..." : "Save Settings"}
+            </button>
+          </div>
+          <p className="section-description">
+            Server-wide behavior. Applied via a config rehash — no restart, and connected users stay
+            connected.
+          </p>
 
-      {settingsLoading ? (
+          {settingsError && <div className="error-banner">{settingsError}</div>}
+          {settingsSaved && <div className="notice-banner">Settings saved.</div>}
+
+          {settingsLoading ? (
         <div className="empty-state">Loading settings...</div>
       ) : settings ? (
         <div className="wizard-form-grid">
@@ -393,8 +411,12 @@ export default function IrcSettingsPanel({ appId, containerRunning }: IrcSetting
           </fieldset>
         </div>
       ) : null}
+        </div>
+      )}
 
-      <div className="env-scope-heading" style={{ marginTop: 28 }}>
+      {subTab === "operators" && (
+        <div className="app-detail-tab-panel" style={{ padding: 0 }}>
+      <div className="env-scope-heading">
         <h3>Operators</h3>
       </div>
       <p className="section-description">
@@ -475,8 +497,12 @@ export default function IrcSettingsPanel({ appId, containerRunning }: IrcSetting
       </form>
 
       {addError && <div className="error-banner">{addError}</div>}
+        </div>
+      )}
 
-      <div className="env-scope-heading" style={{ marginTop: 28 }}>
+      {subTab === "motd" && (
+        <div className="app-detail-tab-panel" style={{ padding: 0 }}>
+      <div className="env-scope-heading">
         <h3>Message of the Day</h3>
         <button className="secondary-button compact" type="button" onClick={() => void saveMotd()} disabled={motdSaving}>
           {motdSaving ? "Saving..." : "Save MOTD"}
@@ -503,6 +529,10 @@ export default function IrcSettingsPanel({ appId, containerRunning }: IrcSetting
           placeholder="Welcome to Quipora IRC!"
         />
       )}
+        </div>
+      )}
+
+      {subTab === "channels" && <ChannelsPanel appId={appId} containerRunning={containerRunning} />}
     </div>
   );
 }
