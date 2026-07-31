@@ -16,7 +16,7 @@ describe("TemplateGallery", () => {
     expect(screen.getByText("One-click templates")).toBeInTheDocument();
     expect(screen.getByText("PostgreSQL")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /PostgreSQL/ }));
+    await userEvent.click(screen.getByText("PostgreSQL").closest("button")!);
 
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect.mock.calls[0][0].id).toBe("postgres");
