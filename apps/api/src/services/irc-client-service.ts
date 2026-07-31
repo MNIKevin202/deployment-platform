@@ -145,7 +145,7 @@ export class IrcServiceSession {
 
   /** NICK/USER registration under a randomized service nick, then waits for RPL_WELCOME (001). */
   async register(): Promise<string> {
-    const nick = `svc-${randomBytes(4).toString("hex")}`;
+    const nick = `QuiporaBot${randomBytes(2).toString("hex")}`;
     this.send(`NICK ${nick}`);
     this.send(`USER ${nick} 0 * :Deployment Platform`);
 
