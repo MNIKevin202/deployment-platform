@@ -1,37 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import {
-  extractConfirmationCode,
-  parseChannelInfo,
-  parseChannelList
-} from "../services/irc-channel-service.js";
+import { extractConfirmationCode, parseChannelInfo } from "../services/irc-channel-service.js";
 
 // Every fixture below is the exact NOTICE text captured from a real Ergo
 // v2.19.0 instance (ChanServ LIST/INFO/UNREGISTER/TRANSFER), not guessed —
 // see the session that built this feature for the raw session transcripts.
-
-describe("parseChannelList", () => {
-  test("returns channel names from a populated LIST reply, dropping the frame lines", () => {
-    const lines = ["*** ChanServ LIST ***", "    #svctestchan", "*** End of ChanServ LIST ***"];
-    assert.deepEqual(parseChannelList(lines), ["#svctestchan"]);
-  });
-
-  test("returns an empty array for an empty LIST reply", () => {
-    const lines = ["*** ChanServ LIST ***", "*** End of ChanServ LIST ***"];
-    assert.deepEqual(parseChannelList(lines), []);
-  });
-
-  test("handles multiple channels", () => {
-    const lines = [
-      "*** ChanServ LIST ***",
-      "    #general",
-      "    #support",
-      "    #announcements",
-      "*** End of ChanServ LIST ***"
-    ];
-    assert.deepEqual(parseChannelList(lines), ["#general", "#support", "#announcements"]);
-  });
-});
 
 describe("parseChannelInfo", () => {
   test("parses a registered channel's founder and registration date", () => {

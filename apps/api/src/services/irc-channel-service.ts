@@ -2,6 +2,7 @@ import { withIrcServiceSession } from "./irc-client-service.js";
 
 export interface RegisteredChannel {
   name: string;
+  memberCount: number;
   founder: string | null;
   registeredAt: string | null;
 }
@@ -9,22 +10,6 @@ export interface RegisteredChannel {
 export interface ChanServActionResult {
   ok: boolean;
   message: string;
-}
-
-/** Strips ChanServ's "*** ... ***" framing lines from a LIST/HELP-style reply. */
-function isFrameLine(line: string): boolean {
-  return /^\*{3}.*\*{3}$/.test(line.trim());
-}
-
-/**
- * Parses `ChanServ LIST`'s reply into channel names. Verified against the
- * real server: a "*** ChanServ LIST ***" header, one indented channel name
- * per line, a "*** End of ChanServ LIST ***" footer.
- */
-export function parseChannelList(lines: string[]): string[] {
-  return lines
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !isFrameLine(line));
 }
 
 /**
@@ -35,7 +20,10 @@ export function parseChannelList(lines: string[]): string[] {
  *   "Registered at: <date>"
  * Returns null for an unregistered channel rather than a half-filled object.
  */
-export function parseChannelInfo(lines: string[], channelName: string): RegisteredChannel | null {
+export function parseChannelInfo(
+  lines: string[],
+  channelName: string
+): Pick<RegisteredChannel, "name" | "founder" | "registeredAt"> | null {
   const notRegistered = lines.some((line) => /\bis not registered\b/i.test(line));
   if (notRegistered) {
     return null;
@@ -78,7 +66,14 @@ export function extractConfirmationCode(lines: string[]): string | null {
   return null;
 }
 
-/** Runs LIST, then INFO on each channel found, all in one IRC session. */
+/**
+ * Runs the standard IRC LIST (every channel currently active on the server —
+ * anyone in it, registered or not), then ChanServ INFO on each to attach
+ * registration details where they exist. A channel with no registration
+ * still gets an entry, just with `founder`/`registeredAt` left null, so the
+ * Channels tab reflects what's actually happening on the server rather than
+ * only what ChanServ knows about.
+ */
 export async function listRegisteredChannels(
   host: string,
   port: number,
@@ -86,16 +81,18 @@ export async function listRegisteredChannels(
   operatorPassword: string
 ): Promise<RegisteredChannel[]> {
   return withIrcServiceSession(host, port, operatorUsername, operatorPassword, async (session) => {
-    const listReply = await session.chanServCommand("LIST");
-    const names = parseChannelList(listReply);
+    const active = await session.listChannels();
 
     const channels: RegisteredChannel[] = [];
-    for (const name of names) {
+    for (const { name, memberCount } of active) {
       const infoReply = await session.chanServCommand(`INFO ${name}`);
       const info = parseChannelInfo(infoReply, name);
-      if (info) {
-        channels.push(info);
-      }
+      channels.push({
+        name,
+        memberCount,
+        founder: info?.founder ?? null,
+        registeredAt: info?.registeredAt ?? null
+      });
     }
 
     return channels.sort((a, b) => a.name.localeCompare(b.name));
