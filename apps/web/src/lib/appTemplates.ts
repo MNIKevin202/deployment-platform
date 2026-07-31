@@ -46,6 +46,13 @@ export interface TemplatePublishedPort {
   protocol: "tcp" | "udp";
 }
 
+/** Templates in a category, sorted A–Z by name (case-insensitive). */
+export function templatesInCategory(category: TemplateCategory): AppTemplate[] {
+  return APP_TEMPLATES.filter((template) => template.category === category).sort(
+    (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+  );
+}
+
 /** A random URL-safe secret, e.g. for a generated database password. */
 export function generateSecret(length = 24): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";

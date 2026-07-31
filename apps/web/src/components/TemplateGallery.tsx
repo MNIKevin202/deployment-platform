@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { APP_TEMPLATES, type AppTemplate, type TemplateCategory } from "../lib/appTemplates";
+import { templatesInCategory, type AppTemplate, type TemplateCategory } from "../lib/appTemplates";
 
 interface TemplateGalleryProps {
   open: boolean;
@@ -83,7 +83,7 @@ export default function TemplateGallery({ open, onClose, onSelect }: TemplateGal
 
             <div className="template-gallery-body">
               {CATEGORIES.map((category) => {
-                const items = APP_TEMPLATES.filter((template) => template.category === category);
+                const items = templatesInCategory(category);
                 if (items.length === 0) {
                   return null;
                 }

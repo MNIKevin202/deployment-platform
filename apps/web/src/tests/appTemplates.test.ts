@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { APP_TEMPLATES, generateSecret } from "../lib/appTemplates";
+import { APP_TEMPLATES, generateSecret, templatesInCategory } from "../lib/appTemplates";
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -21,6 +21,17 @@ describe("APP_TEMPLATES catalog", () => {
       for (const env of template.env) {
         expect(env.key).toMatch(ENV_KEY);
       }
+    }
+  });
+
+  test("templatesInCategory returns entries sorted A–Z, case-insensitively", () => {
+    for (const category of ["Databases", "Apps", "Tools"] as const) {
+      const names = templatesInCategory(category).map((t) => t.name);
+      const sorted = [...names].sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: "base" })
+      );
+      expect(names).toEqual(sorted);
+      expect(names.length).toBeGreaterThan(0);
     }
   });
 
