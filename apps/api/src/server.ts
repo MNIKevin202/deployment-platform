@@ -45,6 +45,7 @@ import {
 import { decodeDockerLogs as sharedDecodeDockerLogs } from "./services/docker-logs-service.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerMetricsRoutes } from "./routes/metrics.js";
+import { registerIrcAdminRoutes } from "./routes/irc-admin.js";
 import { registerLogsRoutes } from "./routes/logs.js";
 import { registerEventRoutes } from "./routes/events.js";
 import { createGithubClient } from "./services/github-client.js";
@@ -202,6 +203,7 @@ const healthCheckScheduler = createHealthCheckScheduler({
 
 await registerHealthRoutes(app, { appDatabase, scheduler: healthCheckScheduler });
 await registerMetricsRoutes(app, { appDatabase, docker });
+await registerIrcAdminRoutes(app, { appDatabase, docker });
 await registerLogsRoutes(app, { appDatabase, docker });
 await registerEventRoutes(app, { appDatabase });
 

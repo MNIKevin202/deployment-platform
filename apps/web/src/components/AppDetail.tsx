@@ -30,6 +30,8 @@ import ConsolePanel from "./ConsolePanel";
 import ResourcesSection from "./ResourcesSection";
 import HistoryPanel from "./HistoryPanel";
 import SourcePanel from "./SourcePanel";
+import IrcSettingsPanel from "./IrcSettingsPanel";
+import { isIrcServerImage } from "../lib/appKind";
 
 // Pulls in recharts (a large dependency) only when the Metrics tab is
 // actually opened, instead of shipping it in every page's initial bundle.
@@ -54,7 +56,8 @@ type DetailTab =
   | "logs"
   | "console"
   | "history"
-  | "activity";
+  | "activity"
+  | "irc-settings";
 
 async function readApiError(
   response: Response,
@@ -889,7 +892,10 @@ export default function AppDetail({
           { key: "performance", label: "Performance" },
           { key: "logs", label: "Logs" },
           { key: "history", label: "History" },
-          { key: "activity", label: "Activity" }
+          { key: "activity", label: "Activity" },
+          ...(isIrcServerImage(detail.image)
+            ? [{ key: "irc-settings", label: "Settings" }]
+            : [])
         ]}
         active={activeTab}
         onChange={(key) => setActiveTab(key as DetailTab)}
@@ -1213,6 +1219,10 @@ export default function AppDetail({
       )}
 
       {activeTab === "activity" && <ActivityPanel appId={appId} />}
+
+      {activeTab === "irc-settings" && isIrcServerImage(detail.image) && (
+        <IrcSettingsPanel appId={appId} containerRunning={isRunning} />
+      )}
 
       <EnvVarDialog
         open={showEnvDialog}
