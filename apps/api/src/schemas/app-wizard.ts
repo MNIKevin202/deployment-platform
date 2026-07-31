@@ -11,6 +11,15 @@ import { containerPathSchema, volumeNameSchema } from "./storage.js";
 
 const MAX_WIZARD_ENV_VARS = 100;
 const MAX_WIZARD_VOLUMES = 25;
+const MAX_WIZARD_PUBLISHED_PORTS = 20;
+
+const portNumberSchema = z.number().int().min(1).max(65535);
+
+export const wizardPublishedPortSchema = z.object({
+  hostPort: portNumberSchema,
+  containerPort: portNumberSchema,
+  protocol: z.enum(["tcp", "udp"]).optional().default("tcp")
+});
 
 export const wizardEnvVarSchema = z.object({
   key: envKeySchema,
@@ -64,7 +73,16 @@ export const createAppWizardSchema = z.object({
         .map((m) => m.volumeName)
         .filter((name): name is string => Boolean(name));
       return new Set(namedVolumes).size === namedVolumes.length;
-    }, "Duplicate volume names are not allowed")
+    }, "Duplicate volume names are not allowed"),
+  publishedPorts: z
+    .array(wizardPublishedPortSchema)
+    .max(MAX_WIZARD_PUBLISHED_PORTS)
+    .optional()
+    .default([])
+    .refine((ports) => {
+      const hostKeys = ports.map((p) => `${p.hostPort}/${p.protocol}`);
+      return new Set(hostKeys).size === hostKeys.length;
+    }, "Duplicate host ports are not allowed")
 });
 
 export type CreateAppWizardInput = z.infer<typeof createAppWizardSchema>;

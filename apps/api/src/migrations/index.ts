@@ -18,6 +18,7 @@ import { migration016AppDeployments } from "./016_app_deployments.js";
 import { migration017BuildLogs } from "./017_build_logs.js";
 import { migration018PlatformSettings } from "./018_platform_settings.js";
 import { migration019AppResourceLimits } from "./019_app_resource_limits.js";
+import { migration020AppPublishedPorts } from "./020_app_published_ports.js";
 import type { Migration } from "./types.js";
 
 export type { Migration } from "./types.js";
@@ -41,7 +42,8 @@ const migrations: Migration[] = [
   migration016AppDeployments,
   migration017BuildLogs,
   migration018PlatformSettings,
-  migration019AppResourceLimits
+  migration019AppResourceLimits,
+  migration020AppPublishedPorts
 ];
 
 interface SchemaMigrationRow {

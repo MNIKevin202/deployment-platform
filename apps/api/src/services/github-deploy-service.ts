@@ -4,6 +4,7 @@ import type { AppDatabase } from "../database.js";
 import { buildContainerEnvArray } from "./environment-service.js";
 import { buildVolumeMounts } from "./storage-service.js";
 import { buildResourceHostConfig } from "./resource-limits.js";
+import { buildPublishedPortConfig } from "./port-bindings.js";
 import type { RedeployDockerOps } from "./redeploy-service.js";
 import type { GithubBuildDockerOps } from "./github-deploy-docker-ops.js";
 import { BuildImageError } from "./github-deploy-docker-ops.js";
@@ -562,6 +563,8 @@ export async function deployFromGithub(
       await dockerOps.ensureVolume(volume.volumeName, app.name);
     }
 
+    const portConfig = buildPublishedPortConfig(appDatabase.listAppPublishedPorts(app.id));
+
     const envArray = buildContainerEnvArray(appDatabase.listGlobalEnvVars(), appDatabase.listAppEnvVars(app.id));
 
     const created = await dockerOps.createContainer({
@@ -572,11 +575,12 @@ export async function deployFromGithub(
         "com.deployment-platform.managed": "true",
         "com.deployment-platform.app-name": app.name
       },
-      ExposedPorts: { [exposedPort]: {} },
+      ExposedPorts: { [exposedPort]: {}, ...portConfig.ExposedPorts },
       HostConfig: {
         NetworkMode: "deployment-apps",
         RestartPolicy: { Name: app.restartPolicy || "unless-stopped" },
         Mounts: buildVolumeMounts(volumes),
+        PortBindings: portConfig.PortBindings,
         ...buildResourceHostConfig(app)
         // Deliberately no Privileged, no CapAdd, no Binds against the
         // Docker socket or any host path — a repository's own

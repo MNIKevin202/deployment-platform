@@ -2285,6 +2285,14 @@ code {
   line-height: 1.35;
 }
 
+.published-ports-heading {
+  margin-top: 24px;
+}
+
+.published-port-line {
+  margin-bottom: 2px;
+}
+
 /* ---------- Template detail view ---------- */
 
 .template-detail-body {
