@@ -200,6 +200,57 @@ function App() {
     }
   }, []);
 
+  const updateAllApps = useCallback(
+    async (list: ContainerSummary[]) => {
+      const appsToUpdate = list
+        .map((container) => {
+          const appName = container.labels["com.deployment-platform.app-name"];
+          return appName ? storedAppsByName.get(appName) : undefined;
+        })
+        .filter((storedApp): storedApp is StoredApp => Boolean(storedApp?.imageUpdateAvailable));
+
+      if (appsToUpdate.length === 0) {
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Redeploy ${appsToUpdate.length} app${appsToUpdate.length === 1 ? "" : "s"} to pick up ${appsToUpdate.length === 1 ? "its" : "their"} newer image${appsToUpdate.length === 1 ? "" : "s"}?\n\n${appsToUpdate.map((storedApp) => storedApp.name).join(", ")}`
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      setError("");
+      setNotice("");
+      setActionLoading("update-all");
+
+      let succeeded = 0;
+      const failed: string[] = [];
+
+      for (const storedApp of appsToUpdate) {
+        try {
+          const response = await fetch(`/api/apps/${storedApp.id}/redeploy`, { method: "POST" });
+          if (!response.ok) {
+            throw new Error(await getApiError(response, "Redeploy failed"));
+          }
+          succeeded += 1;
+        } catch {
+          failed.push(storedApp.name);
+        }
+      }
+
+      await loadDashboard();
+      setActionLoading(null);
+
+      if (failed.length === 0) {
+        setNotice(`Redeployed ${succeeded} app${succeeded === 1 ? "" : "s"}.`);
+      } else {
+        setError(`Redeployed ${succeeded}, but failed for: ${failed.join(", ")}.`);
+      }
+    },
+    [storedAppsByName, loadDashboard]
+  );
+
   const checkForImageUpdates = useCallback(async () => {
     setCheckingImageUpdates(true);
     setError("");
@@ -529,6 +580,8 @@ function App() {
           onViewApp={viewApp}
           onCreateApp={openCreateApp}
           onBrowseTemplates={() => setShowTemplates(true)}
+          onUpdateAll={(list) => void updateAllApps(list)}
+          updateAllLoading={actionLoading === "update-all"}
         />
       ) : section === "databases" ? (
         <AppsPage
@@ -542,6 +595,8 @@ function App() {
           onDeleteMissingApp={(storedApp) => void deleteMissingApp(storedApp)}
           onViewApp={viewApp}
           onCreateApp={openCreateApp}
+          onUpdateAll={(list) => void updateAllApps(list)}
+          updateAllLoading={actionLoading === "update-all"}
           eyebrow="Data stores"
           title="Managed Databases"
           emptyTitle="No databases yet"
