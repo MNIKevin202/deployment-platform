@@ -2231,6 +2231,7 @@ code {
 }
 
 .template-card {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -2247,6 +2248,35 @@ code {
   border-color: var(--color-accent);
   background: var(--color-surface-raised);
   transform: translateY(-1px);
+}
+
+.template-installed-badge {
+  position: absolute;
+  top: -8px;
+  right: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-success);
+  background: var(--color-success-bg);
+  border: 1px solid var(--color-success);
+}
+
+.template-installed-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-success);
+  background: var(--color-success-bg);
+  color: var(--color-text);
+  font-size: 0.88rem;
 }
 
 .template-icon {

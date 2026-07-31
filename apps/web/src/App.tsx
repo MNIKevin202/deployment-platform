@@ -526,6 +526,14 @@ function App() {
         open={showTemplates}
         onClose={() => setShowTemplates(false)}
         onSelect={selectTemplate}
+        storedApps={storedApps}
+        onViewApp={(appId) => {
+          const storedApp = storedApps.find((app) => app.id === appId);
+          setShowTemplates(false);
+          if (storedApp) {
+            viewApp(storedApp);
+          }
+        }}
       />
 
       <CreateAppWizard
