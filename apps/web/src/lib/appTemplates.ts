@@ -8,10 +8,12 @@ export interface TemplateEnvVar {
   generate?: "password";
 }
 
+export type TemplateCategory = "Databases" | "Tools";
+
 export interface AppTemplate {
   id: string;
   name: string;
-  category: "Databases" | "Tools" | "CMS";
+  category: TemplateCategory;
   icon: string;
   description: string;
   image: string;
@@ -44,10 +46,11 @@ export function generateSecret(length = 24): string {
 /**
  * A curated catalog of common single-container services. Each entry only uses
  * capabilities the Create App wizard already supports (image, port, env vars,
- * and persistent volumes) — no custom entrypoints — so every template deploys
- * cleanly through the normal flow. Add a template by appending to this list.
+ * and persistent volumes) — no custom entrypoints or host mounts — so every
+ * template deploys cleanly through the normal flow. Add one by appending here.
  */
 export const APP_TEMPLATES: AppTemplate[] = [
+  // ---- Databases ----
   {
     id: "postgres",
     name: "PostgreSQL",
@@ -80,6 +83,21 @@ export const APP_TEMPLATES: AppTemplate[] = [
     volumes: ["/var/lib/mysql"]
   },
   {
+    id: "mariadb",
+    name: "MariaDB",
+    category: "Databases",
+    icon: "🦭",
+    description: "Community-developed MySQL fork.",
+    image: "mariadb:11",
+    containerPort: 3306,
+    suggestedName: "mariadb",
+    env: [
+      { key: "MARIADB_ROOT_PASSWORD", generate: "password", secret: true },
+      { key: "MARIADB_DATABASE", value: "app" }
+    ],
+    volumes: ["/var/lib/mysql"]
+  },
+  {
     id: "mongodb",
     name: "MongoDB",
     category: "Databases",
@@ -106,6 +124,19 @@ export const APP_TEMPLATES: AppTemplate[] = [
     env: [],
     volumes: ["/data"]
   },
+  {
+    id: "memcached",
+    name: "Memcached",
+    category: "Databases",
+    icon: "💾",
+    description: "High-performance distributed memory cache.",
+    image: "memcached:alpine",
+    containerPort: 11211,
+    suggestedName: "memcached",
+    env: []
+  },
+
+  // ---- Tools ----
   {
     id: "uptime-kuma",
     name: "Uptime Kuma",
@@ -140,6 +171,84 @@ export const APP_TEMPLATES: AppTemplate[] = [
     containerPort: 8080,
     suggestedName: "adminer",
     env: []
+  },
+  {
+    id: "pgadmin",
+    name: "pgAdmin",
+    category: "Tools",
+    icon: "🧰",
+    description: "Web UI for managing PostgreSQL.",
+    image: "dpage/pgadmin4:latest",
+    containerPort: 80,
+    suggestedName: "pgadmin",
+    env: [
+      { key: "PGADMIN_DEFAULT_EMAIL", value: "admin@example.com" },
+      { key: "PGADMIN_DEFAULT_PASSWORD", generate: "password", secret: true }
+    ],
+    volumes: ["/var/lib/pgadmin"]
+  },
+  {
+    id: "grafana",
+    name: "Grafana",
+    category: "Tools",
+    icon: "📊",
+    description: "Dashboards and observability.",
+    image: "grafana/grafana:latest",
+    containerPort: 3000,
+    suggestedName: "grafana",
+    env: [{ key: "GF_SECURITY_ADMIN_PASSWORD", generate: "password", secret: true }],
+    volumes: ["/var/lib/grafana"]
+  },
+  {
+    id: "metabase",
+    name: "Metabase",
+    category: "Tools",
+    icon: "🧮",
+    description: "Business intelligence and analytics.",
+    image: "metabase/metabase:latest",
+    containerPort: 3000,
+    suggestedName: "metabase",
+    env: [{ key: "MB_DB_FILE", value: "/data/metabase.db" }],
+    volumes: ["/data"]
+  },
+  {
+    id: "gitea",
+    name: "Gitea",
+    category: "Tools",
+    icon: "🍵",
+    description: "Lightweight self-hosted Git service.",
+    image: "gitea/gitea:1",
+    containerPort: 3000,
+    suggestedName: "gitea",
+    env: [],
+    volumes: ["/data"]
+  },
+  {
+    id: "rabbitmq",
+    name: "RabbitMQ",
+    category: "Tools",
+    icon: "🐰",
+    description: "Message broker with a management UI.",
+    image: "rabbitmq:3-management",
+    containerPort: 15672,
+    suggestedName: "rabbitmq",
+    env: [
+      { key: "RABBITMQ_DEFAULT_USER", value: "admin" },
+      { key: "RABBITMQ_DEFAULT_PASS", generate: "password", secret: true }
+    ],
+    volumes: ["/var/lib/rabbitmq"]
+  },
+  {
+    id: "nextcloud",
+    name: "Nextcloud",
+    category: "Tools",
+    icon: "☁️",
+    description: "Self-hosted files, calendar, and collaboration.",
+    image: "nextcloud:apache",
+    containerPort: 80,
+    suggestedName: "nextcloud",
+    env: [],
+    volumes: ["/var/www/html"]
   },
   {
     id: "vaultwarden",
