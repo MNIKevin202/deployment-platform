@@ -130,34 +130,53 @@ function TemplateDetail({ template, onBack, onInstall }: TemplateDetailProps) {
   return (
     <>
       <div className="template-detail-body">
-        <div className="template-detail-head">
+        <div className="template-detail-hero">
           <span className="template-icon large" aria-hidden="true">
             {template.icon}
           </span>
           <div>
             <span className="template-detail-category">{template.category}</span>
-            <p className="template-detail-blurb">{template.longDescription ?? template.description}</p>
+            <p className="template-detail-blurb">{template.longDescription}</p>
           </div>
         </div>
 
-        <dl className="template-detail-specs">
-          <div>
-            <dt>Image</dt>
-            <dd>
-              <code>{template.image}</code>
-            </dd>
-          </div>
-          <div>
-            <dt>Container port</dt>
-            <dd>{template.containerPort}</dd>
-          </div>
-          <div>
-            <dt>Suggested name</dt>
-            <dd>
-              <code>{template.suggestedName}</code>
-            </dd>
-          </div>
-        </dl>
+        {template.highlights.length > 0 && (
+          <ul className="template-highlights">
+            {template.highlights.map((highlight) => (
+              <li key={highlight}>{highlight}</li>
+            ))}
+          </ul>
+        )}
+
+        <div className="template-detail-section">
+          <h4>Configuration</h4>
+          <dl className="template-detail-specs">
+            <div>
+              <dt>Image</dt>
+              <dd>
+                <code>{template.image}</code>
+              </dd>
+            </div>
+            <div>
+              <dt>Container port</dt>
+              <dd>{template.containerPort}</dd>
+            </div>
+            <div>
+              <dt>Suggested name</dt>
+              <dd>
+                <code>{template.suggestedName}</code>
+              </dd>
+            </div>
+          </dl>
+        </div>
+
+        <div className="template-connect">
+          <span className="template-connect-label">Reachable from your other apps at</span>
+          <code>
+            app-{template.suggestedName}:{template.containerPort}
+          </code>
+          <span className="template-connect-note">The hostname follows the app name you choose.</span>
+        </div>
 
         {template.env.length > 0 && (
           <div className="template-detail-section">

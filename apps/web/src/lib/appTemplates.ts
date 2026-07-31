@@ -17,8 +17,10 @@ export interface AppTemplate {
   icon: string;
   /** One-line summary shown on the card. */
   description: string;
-  /** Optional longer blurb shown on the template detail view. */
-  longDescription?: string;
+  /** A short paragraph shown on the template detail view. */
+  longDescription: string;
+  /** A few feature bullets shown on the template detail view. */
+  highlights: string[];
   image: string;
   containerPort: number;
   /** Suggested app name (a valid slug). */
@@ -60,6 +62,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Databases",
     icon: "🐘",
     description: "The popular open-source relational database.",
+    longDescription:
+      "PostgreSQL is a powerful, open-source object-relational database with more than 30 years of active development and a strong reputation for reliability, data integrity, and standards compliance.",
+    highlights: [
+      "ACID-compliant transactions",
+      "JSON/JSONB, full-text search, and rich indexing",
+      "Extensible with custom types, functions, and extensions"
+    ],
     image: "postgres:16-alpine",
     containerPort: 5432,
     suggestedName: "postgres",
@@ -76,6 +85,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Databases",
     icon: "🐬",
     description: "Widely-used relational database.",
+    longDescription:
+      "MySQL is the world's most popular open-source relational database, trusted everywhere from small sites to large-scale platforms and backed by a huge ecosystem of tools and ORMs.",
+    highlights: [
+      "Battle-tested and widely supported",
+      "Fast reads for typical web workloads",
+      "Works with virtually every framework and ORM"
+    ],
     image: "mysql:8",
     containerPort: 3306,
     suggestedName: "mysql",
@@ -91,6 +107,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Databases",
     icon: "🦭",
     description: "Community-developed MySQL fork.",
+    longDescription:
+      "MariaDB is a community-developed, drop-in compatible fork of MySQL, created by the database's original authors and kept fully open-source under an independent foundation.",
+    highlights: [
+      "Drop-in replacement for MySQL",
+      "Extra storage engines (Aria, ColumnStore)",
+      "Open governance, no vendor lock-in"
+    ],
     image: "mariadb:11",
     containerPort: 3306,
     suggestedName: "mariadb",
@@ -106,6 +129,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Databases",
     icon: "🍃",
     description: "Document database.",
+    longDescription:
+      "MongoDB is a cross-platform, document-oriented NoSQL database. It stores data in flexible, JSON-like documents, so fields can vary between records and your schema can evolve over time.",
+    highlights: [
+      "Flexible JSON-like documents",
+      "Powerful ad-hoc queries and aggregation pipelines",
+      "Scales horizontally with sharding"
+    ],
     image: "mongo:7",
     containerPort: 27017,
     suggestedName: "mongodb",
@@ -121,6 +151,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Databases",
     icon: "🧊",
     description: "In-memory key-value store and cache.",
+    longDescription:
+      "Redis is an in-memory data store used as a database, cache, and message broker. Keeping data in RAM gives it microsecond response times, ideal for caching, sessions, and queues.",
+    highlights: [
+      "Sub-millisecond latency",
+      "Caching, sessions, queues, and pub/sub",
+      "Rich data types beyond plain key/value"
+    ],
     image: "redis:7-alpine",
     containerPort: 6379,
     suggestedName: "redis",
@@ -134,7 +171,12 @@ export const APP_TEMPLATES: AppTemplate[] = [
     icon: "🗝️",
     description: "Open-source Redis fork; drop-in compatible.",
     longDescription:
-      "Valkey is a community-driven fork of Redis that stays protocol-compatible, so existing Redis clients work unchanged. A solid choice for caching, queues, and pub/sub.",
+      "Valkey is a community-driven fork of Redis that stays protocol-compatible, so existing Redis clients work unchanged. A solid choice for caching, queues, and pub/sub without licensing concerns.",
+    highlights: [
+      "Drop-in Redis replacement",
+      "Same protocol and client libraries",
+      "Community-governed and fully open-source"
+    ],
     image: "valkey/valkey:8",
     containerPort: 6379,
     suggestedName: "valkey",
@@ -147,6 +189,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Databases",
     icon: "💾",
     description: "High-performance distributed memory cache.",
+    longDescription:
+      "Memcached is a high-performance, distributed memory caching system. It's deliberately simple — an in-memory key/value store for small chunks of data used to speed up dynamic applications.",
+    highlights: [
+      "Extremely fast key/value cache",
+      "Tiny memory footprint",
+      "Ideal for offloading repeated database reads"
+    ],
     image: "memcached:alpine",
     containerPort: 11211,
     suggestedName: "memcached",
@@ -160,6 +209,11 @@ export const APP_TEMPLATES: AppTemplate[] = [
     description: "Document database with an HTTP/JSON API.",
     longDescription:
       "Apache CouchDB stores documents as JSON and speaks HTTP natively, with multi-master replication built in. The admin credentials below are created on first boot.",
+    highlights: [
+      "Documents over a simple HTTP/JSON API",
+      "Multi-master replication built in",
+      "Runs from the datacenter to the browser (PouchDB)"
+    ],
     image: "couchdb:3",
     containerPort: 5984,
     suggestedName: "couchdb",
@@ -177,6 +231,11 @@ export const APP_TEMPLATES: AppTemplate[] = [
     description: "Time-series database for metrics and events.",
     longDescription:
       "InfluxDB 2 is purpose-built for time-series data — metrics, sensors, and events. It boots in setup mode and creates the org, bucket, and admin user below automatically.",
+    highlights: [
+      "Purpose-built for time-series data",
+      "SQL-like Flux query language",
+      "Great for metrics, IoT, and monitoring"
+    ],
     image: "influxdb:2",
     containerPort: 8086,
     suggestedName: "influxdb",
@@ -197,6 +256,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Tools",
     icon: "📈",
     description: "Self-hosted uptime monitoring.",
+    longDescription:
+      "Uptime Kuma is a self-hosted monitoring tool — a polished open-source alternative to services like Uptime Robot. Watch your sites and services and get notified the moment they go down.",
+    highlights: [
+      "Monitor HTTP(s), TCP, ping, DNS, and more",
+      "Alerts via Telegram, Discord, Slack, email, and webhooks",
+      "Clean, reactive status dashboard"
+    ],
     image: "louislam/uptime-kuma:1",
     containerPort: 3001,
     suggestedName: "uptime-kuma",
@@ -209,6 +275,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Tools",
     icon: "🔗",
     description: "Workflow automation (self-hosted Zapier alternative).",
+    longDescription:
+      "n8n is a workflow automation tool — a self-hosted alternative to Zapier and Make. Connect apps and APIs and automate tasks with a visual, node-based editor, with your data staying on your server.",
+    highlights: [
+      "Visual node-based workflow builder",
+      "400+ integrations plus custom code nodes",
+      "Self-hosted — your data stays yours"
+    ],
     image: "n8nio/n8n",
     containerPort: 5678,
     suggestedName: "n8n",
@@ -221,6 +294,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Tools",
     icon: "🗄️",
     description: "Lightweight database management in a single file.",
+    longDescription:
+      "Adminer is a full-featured database management tool packed into a single file — a lightweight alternative to phpMyAdmin that supports MySQL, PostgreSQL, SQLite, MongoDB, and more.",
+    highlights: [
+      "One-file, lightweight database GUI",
+      "Works with MySQL, PostgreSQL, SQLite, and more",
+      "Browse, query, and edit right from the browser"
+    ],
     image: "adminer:latest",
     containerPort: 8080,
     suggestedName: "adminer",
@@ -232,6 +312,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Tools",
     icon: "🧰",
     description: "Web UI for managing PostgreSQL.",
+    longDescription:
+      "pgAdmin is the most popular open-source administration and development platform for PostgreSQL. Manage databases, run queries, and monitor activity from a rich web interface.",
+    highlights: [
+      "Full-featured PostgreSQL web UI",
+      "Visual query tool and data editor",
+      "Server and database monitoring dashboards"
+    ],
     image: "dpage/pgadmin4:latest",
     containerPort: 80,
     suggestedName: "pgadmin",
@@ -247,6 +334,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Tools",
     icon: "📊",
     description: "Dashboards and observability.",
+    longDescription:
+      "Grafana is the open-source standard for dashboards and observability. Query, visualize, and alert on metrics and logs from dozens of data sources — all in one place.",
+    highlights: [
+      "Beautiful, flexible dashboards",
+      "Connects to Prometheus, PostgreSQL, and many more",
+      "Powerful alerting rules"
+    ],
     image: "grafana/grafana:latest",
     containerPort: 3000,
     suggestedName: "grafana",
@@ -259,6 +353,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Tools",
     icon: "🧮",
     description: "Business intelligence and analytics.",
+    longDescription:
+      "Metabase is an open-source business intelligence tool. Ask questions of your data and share dashboards without writing SQL — while power users can drop into SQL whenever they need to.",
+    highlights: [
+      "No-SQL question builder for everyone",
+      "Shareable dashboards and charts",
+      "Connects to most SQL databases"
+    ],
     image: "metabase/metabase:latest",
     containerPort: 3000,
     suggestedName: "metabase",
@@ -271,6 +372,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Tools",
     icon: "🍵",
     description: "Lightweight self-hosted Git service.",
+    longDescription:
+      "Gitea is a painless, self-hosted Git service — a lightweight alternative to GitHub and GitLab with repositories, issues, pull requests, and CI, all from a single binary.",
+    highlights: [
+      "Full Git hosting: repos, issues, and pull requests",
+      "Lightweight enough for small servers",
+      "Built-in Actions CI (GitHub-compatible)"
+    ],
     image: "gitea/gitea:1",
     containerPort: 3000,
     suggestedName: "gitea",
@@ -283,6 +391,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Tools",
     icon: "🐰",
     description: "Message broker with a management UI.",
+    longDescription:
+      "RabbitMQ is a widely-deployed open-source message broker. It reliably routes messages between producers and consumers and ships with a friendly web management UI.",
+    highlights: [
+      "Reliable message queuing over AMQP",
+      "Web management UI included",
+      "Flexible routing: fanout, topic, and direct"
+    ],
     image: "rabbitmq:3-management",
     containerPort: 15672,
     suggestedName: "rabbitmq",
@@ -298,6 +413,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Tools",
     icon: "☁️",
     description: "Self-hosted files, calendar, and collaboration.",
+    longDescription:
+      "Nextcloud is a self-hosted productivity platform — your own private cloud for files, calendars, contacts, and collaboration, extensible with a large ecosystem of apps.",
+    highlights: [
+      "Files, calendar, contacts, and more",
+      "Sync and share across all your devices",
+      "Extend with hundreds of add-on apps"
+    ],
     image: "nextcloud:apache",
     containerPort: 80,
     suggestedName: "nextcloud",
@@ -310,6 +432,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
     category: "Tools",
     icon: "🔐",
     description: "Lightweight Bitwarden-compatible password manager server.",
+    longDescription:
+      "Vaultwarden is a lightweight, Bitwarden-compatible password manager server written in Rust. Run your own vault and use it with all of the official Bitwarden client apps.",
+    highlights: [
+      "Works with the official Bitwarden apps",
+      "Tiny resource footprint",
+      "Full control over your own secrets"
+    ],
     image: "vaultwarden/server:latest",
     containerPort: 80,
     suggestedName: "vaultwarden",
@@ -323,7 +452,12 @@ export const APP_TEMPLATES: AppTemplate[] = [
     icon: "💻",
     description: "VS Code in the browser.",
     longDescription:
-      "Run a full VS Code editor in the browser, backed by your server. Great for editing from any device. Sign in with the generated password below.",
+      "code-server runs a full VS Code editor in the browser, backed by your server — great for editing from any device. Sign in with the generated password below.",
+    highlights: [
+      "Full VS Code in any browser",
+      "Code from a tablet or Chromebook",
+      "Keep your dev environment on the server"
+    ],
     image: "codercom/code-server:latest",
     containerPort: 8080,
     suggestedName: "code-server",
@@ -337,7 +471,12 @@ export const APP_TEMPLATES: AppTemplate[] = [
     icon: "🛠️",
     description: "A handy collection of developer utilities.",
     longDescription:
-      "IT-Tools bundles dozens of everyday developer utilities — encoders, converters, generators, formatters — in one fast, self-hosted page. No configuration required.",
+      "IT-Tools bundles dozens of everyday developer utilities — encoders, converters, generators, and formatters — into one fast, self-hosted page. No configuration required.",
+    highlights: [
+      "Dozens of dev utilities in one place",
+      "Encoders, converters, generators, and formatters",
+      "Zero configuration"
+    ],
     image: "corentinth/it-tools:latest",
     containerPort: 80,
     suggestedName: "it-tools",
@@ -350,7 +489,12 @@ export const APP_TEMPLATES: AppTemplate[] = [
     icon: "📰",
     description: "Self-hosted RSS feed aggregator.",
     longDescription:
-      "FreshRSS is a fast, self-hosted RSS/Atom reader. Follow sites and newsletters in one place, with a mobile-friendly UI and an API for third-party apps.",
+      "FreshRSS is a fast, self-hosted RSS and Atom reader. Follow sites and newsletters in one place, with a mobile-friendly UI and an API for third-party apps.",
+    highlights: [
+      "Fast, self-hosted RSS/Atom reader",
+      "Mobile-friendly with a full API",
+      "Keep up with sites without the noise"
+    ],
     image: "freshrss/freshrss:latest",
     containerPort: 80,
     suggestedName: "freshrss",
@@ -364,7 +508,12 @@ export const APP_TEMPLATES: AppTemplate[] = [
     icon: "🎬",
     description: "Free software media server.",
     longDescription:
-      "Jellyfin streams your movies, shows, and music to any device — no tracking, no fees. Point it at your media after install through the setup wizard.",
+      "Jellyfin streams your movies, shows, and music to any device — with no tracking and no fees. Point it at your media after install through the setup wizard.",
+    highlights: [
+      "Stream movies, shows, and music",
+      "Apps for phones, TVs, and browsers",
+      "Free and open — no tracking, no fees"
+    ],
     image: "jellyfin/jellyfin:latest",
     containerPort: 8096,
     suggestedName: "jellyfin",
@@ -378,7 +527,12 @@ export const APP_TEMPLATES: AppTemplate[] = [
     icon: "🧾",
     description: "Open-source no-code database (Airtable alternative).",
     longDescription:
-      "Baserow is a self-hosted, no-code database you use like a spreadsheet. Build tables, link records, and access everything over a REST API.",
+      "Baserow is a self-hosted, no-code database you use like a spreadsheet. Build tables, link records, and access everything over a REST API — a great open Airtable alternative.",
+    highlights: [
+      "No-code database you use like a spreadsheet",
+      "Link records and build relations",
+      "REST API for every table"
+    ],
     image: "baserow/baserow:1.30.1",
     containerPort: 80,
     suggestedName: "baserow",
@@ -392,7 +546,12 @@ export const APP_TEMPLATES: AppTemplate[] = [
     icon: "🔥",
     description: "Metrics collection and alerting.",
     longDescription:
-      "Prometheus scrapes and stores time-series metrics and powers alerting. It boots with a default config you can extend once it's running (pairs well with Grafana).",
+      "Prometheus scrapes and stores time-series metrics and powers alerting. It boots with a default config you can extend once it's running, and pairs perfectly with Grafana.",
+    highlights: [
+      "Powerful time-series metrics store",
+      "Flexible PromQL queries and alerting",
+      "Pairs perfectly with Grafana"
+    ],
     image: "prom/prometheus:latest",
     containerPort: 9090,
     suggestedName: "prometheus",
