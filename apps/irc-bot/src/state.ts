@@ -15,6 +15,18 @@ export interface BotStateData extends MutableBotFields {
   nickRegistered: boolean;
 }
 
+/**
+ * The NickServ account password, kept separate from BotStateData so it can
+ * never leak through get() (used to answer GET /config over the admin API).
+ * Persisted to the same file, on the same volume, purely so the bot can
+ * IDENTIFY and reclaim its own registered nick after a restart or
+ * reconnect — once a nick is registered, Ergo refuses to let anyone
+ * (including its rightful owner) use it again without proving ownership.
+ */
+interface PersistedFile extends BotStateData {
+  nickServPassword?: string | null;
+}
+
 export function stateFromConfig(config: BotConfig): BotStateData {
   return {
     welcomeMessageTemplate: config.welcomeMessageTemplate,
@@ -32,13 +44,13 @@ export function mergeState(base: BotStateData, persisted: Partial<BotStateData> 
   return persisted ? { ...base, ...persisted } : base;
 }
 
-function readPersistedState(filePath: string): Partial<BotStateData> | null {
+function readPersistedState(filePath: string): PersistedFile | null {
   if (!existsSync(filePath)) {
     return null;
   }
   try {
     const parsed = JSON.parse(readFileSync(filePath, "utf8"));
-    return parsed && typeof parsed === "object" ? (parsed as Partial<BotStateData>) : null;
+    return parsed && typeof parsed === "object" ? (parsed as PersistedFile) : null;
   } catch (error) {
     console.error("Failed to read persisted bot state; ignoring it:", error);
     return null;
@@ -47,17 +59,21 @@ function readPersistedState(filePath: string): Partial<BotStateData> | null {
 
 export class BotState {
   private data: BotStateData;
+  private nickServPassword: string | null;
 
   private constructor(
     data: BotStateData,
+    nickServPassword: string | null,
     private readonly filePath: string
   ) {
     this.data = data;
+    this.nickServPassword = nickServPassword;
   }
 
   static load(config: BotConfig, filePath: string): BotState {
-    const merged = mergeState(stateFromConfig(config), readPersistedState(filePath));
-    return new BotState(merged, filePath);
+    const persisted = readPersistedState(filePath);
+    const merged = mergeState(stateFromConfig(config), persisted);
+    return new BotState(merged, persisted?.nickServPassword ?? null, filePath);
   }
 
   get(): BotStateData {
@@ -75,10 +91,20 @@ export class BotState {
     this.persist();
   }
 
+  getNickServPassword(): string | null {
+    return this.nickServPassword;
+  }
+
+  setNickServPassword(password: string): void {
+    this.nickServPassword = password;
+    this.persist();
+  }
+
   private persist(): void {
     try {
       mkdirSync(dirname(this.filePath), { recursive: true });
-      writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
+      const payload: PersistedFile = { ...this.data, nickServPassword: this.nickServPassword };
+      writeFileSync(this.filePath, JSON.stringify(payload, null, 2));
     } catch (error) {
       console.error("Failed to persist bot state:", error);
     }

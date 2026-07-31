@@ -10,6 +10,7 @@ import * as tls from "node:tls";
 const CONNECT_TIMEOUT_MS = 5000;
 const REGISTER_TIMEOUT_MS = 5000;
 const OPER_TIMEOUT_MS = 5000;
+const NICK_CHANGE_TIMEOUT_MS = 5000;
 const SERVICE_REPLY_TIMEOUT_MS = 4000;
 /** How long to keep collecting a service's NOTICE lines after the last one arrives. */
 const SERVICE_QUIET_PERIOD_MS = 400;
@@ -185,6 +186,25 @@ export class IrcConnection {
     if (result.command !== "381") {
       throw new IrcOperAuthError(`Unable to gain operator privileges: ${result.params.at(-1) ?? result.raw}`);
     }
+  }
+
+  /**
+   * Sends NICK and waits for either the server echoing it back (success) or
+   * a rejection numeric (in use, unavailable, etc). Used to reclaim a
+   * registered nick after connecting under a temporary alternate one.
+   */
+  async changeNick(newNick: string): Promise<boolean> {
+    this.send(`NICK ${newNick}`);
+
+    const result = await Promise.race([
+      this.waitFor((line) => line.command === "NICK", NICK_CHANGE_TIMEOUT_MS),
+      this.waitFor(
+        (line) => ["431", "432", "433", "436", "437", "484"].includes(line.command),
+        NICK_CHANGE_TIMEOUT_MS
+      )
+    ]).catch(() => null);
+
+    return result?.command === "NICK";
   }
 
   /**

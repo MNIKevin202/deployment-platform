@@ -105,6 +105,20 @@ describe("BotState", () => {
     assert.equal(reloaded.get().nickRegistered, true);
   });
 
+  test("setNickServPassword() persists the password for later reconnects, but get() never exposes it", () => {
+    const dir = makeTmpDir();
+    const filePath = join(dir, "bot-state.json");
+    const config = loadConfig(REQUIRED_ENV as NodeJS.ProcessEnv);
+    const state = BotState.load(config, filePath);
+
+    state.setNickServPassword("hunter2");
+    assert.equal(state.getNickServPassword(), "hunter2");
+    assert.equal((state.get() as Record<string, unknown>).nickServPassword, undefined);
+
+    const reloaded = BotState.load(config, filePath);
+    assert.equal(reloaded.getNickServPassword(), "hunter2");
+  });
+
   test("get() returns a defensive copy of mutable collections", () => {
     const dir = makeTmpDir();
     const config = loadConfig(REQUIRED_ENV as NodeJS.ProcessEnv);
