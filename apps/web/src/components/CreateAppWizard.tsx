@@ -356,7 +356,10 @@ export default function CreateAppWizard({
       initialTemplate.env.map((envVar) => ({
         rowId: nextRowId++,
         key: envVar.key,
-        value: envVar.generate === "password" ? generateSecret() : envVar.value ?? "",
+        value:
+          envVar.generate === "password"
+            ? generateSecret(envVar.generateLength ?? 24)
+            : envVar.value ?? "",
         isSecret: Boolean(envVar.secret),
         enabled: true
       }))
