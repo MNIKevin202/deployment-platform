@@ -20,6 +20,8 @@ interface AppsPageProps {
   onViewApp: (storedApp: StoredApp) => void;
   onCreateApp: () => void;
   onBrowseTemplates?: () => void;
+  onUpdateAll?: (managedApps: ContainerSummary[]) => void;
+  updateAllLoading?: boolean;
   /** Heading + empty-state copy, so the same list serves both Apps and Databases. */
   eyebrow?: string;
   title?: string;
@@ -39,6 +41,8 @@ export default function AppsPage({
   onViewApp,
   onCreateApp,
   onBrowseTemplates,
+  onUpdateAll,
+  updateAllLoading = false,
   eyebrow = "Applications",
   title = "All Managed Apps",
   emptyTitle = "No managed apps yet",
@@ -46,6 +50,12 @@ export default function AppsPage({
 }: AppsPageProps) {
   const hasAnyApp = managedApps.length > 0 || missingApps.length > 0;
   const [view, setView] = useAppsView();
+
+  const updatesAvailableCount = managedApps.filter((container) => {
+    const appName = container.labels["com.deployment-platform.app-name"];
+    const storedApp = appName ? storedAppsByName.get(appName) : undefined;
+    return Boolean(storedApp?.imageUpdateAvailable);
+  }).length;
 
   return (
     <div className="page">
@@ -81,6 +91,17 @@ export default function AppsPage({
             {onBrowseTemplates && (
               <button className="secondary-button compact" type="button" onClick={onBrowseTemplates}>
                 Templates
+              </button>
+            )}
+
+            {onUpdateAll && updatesAvailableCount > 0 && (
+              <button
+                className="secondary-button compact"
+                type="button"
+                onClick={() => onUpdateAll(managedApps)}
+                disabled={updateAllLoading}
+              >
+                {updateAllLoading ? "Updating..." : `Update All (${updatesAvailableCount})`}
               </button>
             )}
 

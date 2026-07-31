@@ -345,7 +345,12 @@ const backupScheduler = createBackupScheduler({
 // Periodically checks every plain-image app (no app_sources row — GitHub-built
 // apps have their own auto-deploy pipeline) for a newer registry image than
 // what's currently running, so the panel can show a "redeploy to update"
-// indicator without the user needing to check manually.
+// indicator without the user needing to check manually. A few minutes rather
+// than hourly, since a `docker pull` against an already-current image is
+// cheap (no new layers to fetch) and the point of the indicator is to be
+// close to real-time.
+const IMAGE_UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+
 const imageUpdateChecker = createImageUpdateChecker({
   listCandidateApps: () =>
     appDatabase.listApps().map((storedApp) => ({
@@ -355,7 +360,8 @@ const imageUpdateChecker = createImageUpdateChecker({
     })),
   hasAppSource: (appId) => appDatabase.getAppSource(appId) !== null,
   dockerOps: createImageUpdateCheckDockerOps(docker),
-  logger: app.log
+  logger: app.log,
+  tickIntervalMs: IMAGE_UPDATE_CHECK_INTERVAL_MS
 });
 
 await registerPlatformSettingsRoutes(app, {
