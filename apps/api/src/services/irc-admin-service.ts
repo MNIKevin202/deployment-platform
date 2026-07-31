@@ -1,7 +1,7 @@
 import { PassThrough } from "node:stream";
 import type Docker from "dockerode";
 import * as bcrypt from "bcryptjs";
-import { isScalar, parseDocument, YAMLMap } from "yaml";
+import { isCollection, isScalar, parseDocument, YAMLMap } from "yaml";
 
 /** Only ergochat/ergo-based apps get the IRC Settings tab. */
 export function isIrcServerImage(image: string): boolean {
@@ -91,6 +91,109 @@ export function upsertOperator(
 export function removeOperator(configText: string, username: string): string {
   const doc = parseDocument(configText);
   doc.deleteIn(["opers", username]);
+  return doc.toString();
+}
+
+export interface IrcGeneralSettings {
+  networkName: string;
+  autoJoinChannels: string[];
+  defaultChannelModes: string;
+  maxChannelsPerClient: number;
+  channelRegistrationEnabled: boolean;
+  channelRegistrationOperatorOnly: boolean;
+  maxChannelsPerAccount: number;
+  accountRegistrationEnabled: boolean;
+  allowRegistrationBeforeConnect: boolean;
+  emailVerificationEnabled: boolean;
+}
+
+function asString(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function asNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function asBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+/** Reads the handful of server-wide settings the Settings tab exposes, each defaulting sensibly if the key isn't set. */
+export function parseGeneralSettings(configText: string): IrcGeneralSettings {
+  const doc = parseDocument(configText);
+
+  // Unlike scalars, getIn() never unwraps a collection node into a plain JS
+  // array/object — "collections are always returned intact" per its own
+  // docs — so a raw YAMLSeq has to be resolved via toJSON() explicitly, or
+  // Array.isArray() on it is always false and this silently reads as empty.
+  const autoJoinNode = doc.getIn(["channels", "auto-join"], true);
+  const autoJoin = isCollection(autoJoinNode) ? autoJoinNode.toJSON() : autoJoinNode;
+
+  return {
+    networkName: asString(doc.getIn(["network", "name"]), ""),
+    autoJoinChannels: Array.isArray(autoJoin) ? autoJoin.filter((v): v is string => typeof v === "string") : [],
+    defaultChannelModes: asString(doc.getIn(["channels", "default-modes"]), "+ntC"),
+    maxChannelsPerClient: asNumber(doc.getIn(["channels", "max-channels-per-client"]), 100),
+    channelRegistrationEnabled: asBoolean(doc.getIn(["channels", "registration", "enabled"]), true),
+    channelRegistrationOperatorOnly: asBoolean(
+      doc.getIn(["channels", "registration", "operator-only"]),
+      false
+    ),
+    maxChannelsPerAccount: asNumber(doc.getIn(["channels", "registration", "max-channels-per-account"]), 15),
+    accountRegistrationEnabled: asBoolean(doc.getIn(["accounts", "registration", "enabled"]), true),
+    allowRegistrationBeforeConnect: asBoolean(
+      doc.getIn(["accounts", "registration", "allow-before-connect"]),
+      true
+    ),
+    emailVerificationEnabled: asBoolean(
+      doc.getIn(["accounts", "registration", "email-verification", "enabled"]),
+      false
+    )
+  };
+}
+
+/** Applies a partial set of general settings, preserving the rest of the file (including comments). */
+export function updateGeneralSettings(
+  configText: string,
+  updates: Partial<IrcGeneralSettings>
+): string {
+  const doc = parseDocument(configText);
+
+  if (updates.networkName !== undefined) {
+    doc.setIn(["network", "name"], updates.networkName);
+  }
+  if (updates.autoJoinChannels !== undefined) {
+    doc.setIn(["channels", "auto-join"], updates.autoJoinChannels);
+  }
+  if (updates.defaultChannelModes !== undefined) {
+    doc.setIn(["channels", "default-modes"], updates.defaultChannelModes);
+  }
+  if (updates.maxChannelsPerClient !== undefined) {
+    doc.setIn(["channels", "max-channels-per-client"], updates.maxChannelsPerClient);
+  }
+  if (updates.channelRegistrationEnabled !== undefined) {
+    doc.setIn(["channels", "registration", "enabled"], updates.channelRegistrationEnabled);
+  }
+  if (updates.channelRegistrationOperatorOnly !== undefined) {
+    doc.setIn(["channels", "registration", "operator-only"], updates.channelRegistrationOperatorOnly);
+  }
+  if (updates.maxChannelsPerAccount !== undefined) {
+    doc.setIn(["channels", "registration", "max-channels-per-account"], updates.maxChannelsPerAccount);
+  }
+  if (updates.accountRegistrationEnabled !== undefined) {
+    doc.setIn(["accounts", "registration", "enabled"], updates.accountRegistrationEnabled);
+  }
+  if (updates.allowRegistrationBeforeConnect !== undefined) {
+    doc.setIn(["accounts", "registration", "allow-before-connect"], updates.allowRegistrationBeforeConnect);
+  }
+  if (updates.emailVerificationEnabled !== undefined) {
+    doc.setIn(
+      ["accounts", "registration", "email-verification", "enabled"],
+      updates.emailVerificationEnabled
+    );
+  }
+
   return doc.toString();
 }
 

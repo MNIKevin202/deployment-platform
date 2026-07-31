@@ -416,6 +416,25 @@ export interface IrcMotdResponse {
   message?: string;
 }
 
+export interface IrcGeneralSettings {
+  networkName: string;
+  autoJoinChannels: string[];
+  defaultChannelModes: string;
+  maxChannelsPerClient: number;
+  channelRegistrationEnabled: boolean;
+  channelRegistrationOperatorOnly: boolean;
+  maxChannelsPerAccount: number;
+  accountRegistrationEnabled: boolean;
+  allowRegistrationBeforeConnect: boolean;
+  emailVerificationEnabled: boolean;
+}
+
+export interface IrcSettingsResponse {
+  success: boolean;
+  settings: IrcGeneralSettings;
+  message?: string;
+}
+
 export interface AppLogsResponse {
   success: boolean;
   appId: number;
