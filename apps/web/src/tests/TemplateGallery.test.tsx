@@ -9,16 +9,30 @@ describe("TemplateGallery", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  test("lists templates and selects one", async () => {
+  test("opens a template's detail view, then installs it", async () => {
     const onSelect = vi.fn();
     render(<TemplateGallery open onClose={vi.fn()} onSelect={onSelect} />);
 
     expect(screen.getByText("One-click templates")).toBeInTheDocument();
-    expect(screen.getByText("PostgreSQL")).toBeInTheDocument();
 
+    // Clicking a card opens its detail view rather than installing immediately.
     await userEvent.click(screen.getByText("PostgreSQL").closest("button")!);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByText("postgres:16-alpine")).toBeInTheDocument();
 
+    await userEvent.click(screen.getByRole("button", { name: /Install PostgreSQL/ }));
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect.mock.calls[0][0].id).toBe("postgres");
+  });
+
+  test("back returns to the grid without selecting", async () => {
+    const onSelect = vi.fn();
+    render(<TemplateGallery open onClose={vi.fn()} onSelect={onSelect} />);
+
+    await userEvent.click(screen.getByText("Redis").closest("button")!);
+    await userEvent.click(screen.getByRole("button", { name: /Back/ }));
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByText("One-click templates")).toBeInTheDocument();
   });
 });
