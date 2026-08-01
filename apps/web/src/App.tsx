@@ -16,6 +16,7 @@ import AppsPage from "./pages/AppsPage";
 import RepositoriesPage from "./pages/RepositoriesPage";
 import RepositoryDetail from "./components/RepositoryDetail";
 import EnvironmentPage from "./pages/EnvironmentPage";
+import CronPage from "./pages/CronPage";
 import SystemPage from "./pages/SystemPage";
 import SettingsPage from "./pages/SettingsPage";
 import { isDatabaseImage } from "./lib/appKind";
@@ -35,6 +36,7 @@ const SECTION_TITLES: Record<Section, string> = {
   apps: "Apps",
   databases: "Databases",
   repositories: "Repositories",
+  cron: "Cron Jobs",
   environment: "Environment",
   system: "System",
   settings: "Settings"
@@ -45,6 +47,7 @@ const SECTION_SUBTITLES: Record<Section, string> = {
   apps: "Deploy and manage the websites, bots, and services running on your server.",
   databases: "Managed data stores — Postgres, MySQL, Redis, and the like.",
   repositories: "Connect GitHub and browse repositories available for source-linked apps.",
+  cron: "Scheduled commands that run inside your apps' containers.",
   environment: "Variables inherited by every managed app, unless overridden.",
   system: "Protected platform services and host information.",
   settings: "Account, notifications, backups, and disk maintenance."
@@ -544,6 +547,8 @@ function App() {
 
       {section === "environment" ? (
         <EnvironmentPage refreshKey={environmentRefreshKey} />
+      ) : section === "cron" ? (
+        <CronPage apps={storedApps} />
       ) : section === "repositories" ? (
         selectedRepo ? (
           <RepositoryDetail

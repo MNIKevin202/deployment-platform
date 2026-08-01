@@ -301,6 +301,45 @@ export interface CreateAppWizardResponse {
   companions?: CreatedAppSummary[];
 }
 
+export interface CronJob {
+  id: number;
+  appId: number;
+  appName: string;
+  containerName: string | null;
+  name: string;
+  cronExpression: string;
+  command: string;
+  enabled: boolean;
+  timeoutSeconds: number;
+  lastRunAt: string | null;
+  lastStatus: "success" | "failed" | "timeout" | "skipped" | null;
+  lastExitCode: number | null;
+  lastOutput: string | null;
+  lastDurationMs: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CronJobsResponse {
+  success: boolean;
+  jobs: CronJob[];
+}
+
+export interface CronPreviewResponse {
+  success: boolean;
+  valid: boolean;
+  description?: string;
+  error?: string;
+}
+
+export interface CronJobRunResult {
+  status: "success" | "failed" | "timeout" | "skipped";
+  exitCode: number | null;
+  output: string;
+  durationMs: number;
+  ranAt: string;
+}
+
 export type DeployStage =
   | "resolving-repository"
   | "resolving-branch"

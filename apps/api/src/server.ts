@@ -59,6 +59,9 @@ import { registerMetricsRoutes } from "./routes/metrics.js";
 import { registerIrcAdminRoutes } from "./routes/irc-admin.js";
 import { registerIrcBotAdminRoutes } from "./routes/irc-bot-admin.js";
 import { registerBlueprintRoutes } from "./routes/blueprint.js";
+import { registerCronRoutes } from "./routes/cron.js";
+import { createCronDockerOps } from "./services/cron-executor-service.js";
+import { createCronScheduler } from "./services/cron-scheduler.js";
 import { registerLogsRoutes } from "./routes/logs.js";
 import { registerEventRoutes } from "./routes/events.js";
 import { createGithubClient } from "./services/github-client.js";
@@ -239,6 +242,18 @@ await registerMetricsRoutes(app, { appDatabase, docker });
 await registerIrcAdminRoutes(app, { appDatabase, docker });
 await registerIrcBotAdminRoutes(app, { appDatabase, docker });
 registerBlueprintRoutes(app, { appDatabase, docker });
+
+const cronDockerOps = createCronDockerOps(docker);
+registerCronRoutes(app, { appDatabase, dockerOps: cronDockerOps });
+
+// Evaluates every enabled cron job each minute and runs the ones that are
+// due, inside their app's container. Started alongside the other schedulers
+// below.
+const cronScheduler = createCronScheduler({
+  repository: appDatabase,
+  dockerOps: cronDockerOps,
+  logger: app.log
+});
 await registerLogsRoutes(app, { appDatabase, docker });
 await registerEventRoutes(app, { appDatabase });
 
@@ -1760,6 +1775,7 @@ const start = async (): Promise<void> => {
   autoDeployScheduler.start();
   backupScheduler.start();
   imageUpdateChecker.start();
+  cronScheduler.start();
 };
 
 let shuttingDown = false;
@@ -1779,6 +1795,7 @@ async function shutdown(signal: string): Promise<void> {
   autoDeployScheduler.stop();
   backupScheduler.stop();
   imageUpdateChecker.stop();
+  cronScheduler.stop();
 
   try {
     await app.close();
