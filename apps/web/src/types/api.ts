@@ -301,6 +301,33 @@ export interface CreateAppWizardResponse {
   companions?: CreatedAppSummary[];
 }
 
+export type InstallStage =
+  | "queued"
+  | "pulling"
+  | "storage"
+  | "creating"
+  | "starting"
+  | "routing"
+  | "done";
+
+export interface InstallServiceProgress {
+  name: string;
+  stage: InstallStage;
+  percent: number;
+  detail: string;
+}
+
+export interface InstallProgress {
+  installId: string;
+  status: "running" | "succeeded" | "failed";
+  percent: number;
+  currentService: string | null;
+  services: InstallServiceProgress[];
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
 export interface OllamaModelSummary {
   name: string;
   size: number;
