@@ -53,7 +53,12 @@ describe("Blueprint template", () => {
 
   test("both services get their own persistent volume", () => {
     expect(blueprint!.volumes).toEqual(["/app/backend/data"]);
-    expect(blueprint!.companions![0].volumes).toEqual(["/root/.ollama"]);
+    // Ollama's default is /root/.ollama, which the platform reserves — so
+    // the model directory is relocated with OLLAMA_MODELS and mounted there.
+    expect(blueprint!.companions![0].volumes).toEqual(["/models"]);
+    expect(
+      blueprint!.companions![0].env?.find((env) => env.key === "OLLAMA_MODELS")?.value
+    ).toBe("/models");
   });
 
   test("connects to the model server internally, never localhost or a public host", () => {
