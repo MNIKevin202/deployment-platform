@@ -40,7 +40,16 @@ export default function BlueprintPanel({ appId, containerRunning }: BlueprintPan
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const [model, setModel] = useState(BLUEPRINT_MODEL_CHOICES[2]?.id ?? "llama3.2:3b");
+  // Selected by the "(recommended)" marker rather than a fixed index, so
+  // adding a model to the catalog can't silently change the default.
+  const [model, setModel] = useState(
+    () =>
+      BLUEPRINT_MODEL_CHOICES.find((choice) =>
+        choice.label.toLowerCase().includes("recommended")
+      )?.id ??
+      BLUEPRINT_MODEL_CHOICES[0]?.id ??
+      "llama3.2:3b"
+  );
   const [customModel, setCustomModel] = useState("");
   const [useCustomModel, setUseCustomModel] = useState(false);
   const [pullError, setPullError] = useState("");
