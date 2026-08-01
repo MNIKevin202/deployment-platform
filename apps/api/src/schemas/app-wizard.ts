@@ -85,7 +85,65 @@ export const createAppWizardSchema = z.object({
     }, "Duplicate host ports are not allowed")
 });
 
+const MAX_WIZARD_COMPANIONS = 5;
+
+/**
+ * One extra service deployed alongside the main app by a multi-service
+ * template (see appTemplates.ts's TemplateCompanion). Deliberately the same
+ * validated shape as the main app minus the fields that only make sense
+ * once — a companion never takes a custom domain or an idempotency key of
+ * its own, and it carries no published ports, so a template can't quietly
+ * open a host port for a backing service.
+ */
+export const wizardCompanionSchema = z.object({
+  name: appNameSchema,
+  image: imageSchema,
+  containerPort: containerPortSchema,
+  restartPolicy: restartPolicySchema.optional().default("unless-stopped"),
+  internalOnly: z.boolean().optional().default(true),
+  environmentVariables: z
+    .array(wizardEnvVarSchema)
+    .max(MAX_WIZARD_ENV_VARS)
+    .optional()
+    .default([])
+    .refine(
+      (vars) => new Set(vars.map((v) => v.key)).size === vars.length,
+      "Duplicate environment variable keys are not allowed"
+    ),
+  storageMounts: z
+    .array(wizardVolumeSchema)
+    .max(MAX_WIZARD_VOLUMES)
+    .optional()
+    .default([])
+    .refine(
+      (mounts) => new Set(mounts.map((m) => m.containerPath)).size === mounts.length,
+      "Duplicate container paths are not allowed"
+    )
+});
+
+/**
+ * The wizard payload plus any companion services. Kept as a separate schema
+ * layered on top of createAppWizardSchema so the single-app contract above
+ * is unchanged for every existing caller — a request without `companions`
+ * behaves exactly as it always has.
+ */
+export const createAppWizardWithCompanionsSchema = createAppWizardSchema.extend({
+  companions: z
+    .array(wizardCompanionSchema)
+    .max(MAX_WIZARD_COMPANIONS)
+    .optional()
+    .default([])
+    .refine(
+      (companions) => new Set(companions.map((c) => c.name)).size === companions.length,
+      "Duplicate companion app names are not allowed"
+    )
+});
+
 export type CreateAppWizardInput = z.infer<typeof createAppWizardSchema>;
+export type WizardCompanionInput = z.infer<typeof wizardCompanionSchema>;
+export type CreateAppWizardWithCompanionsInput = z.infer<
+  typeof createAppWizardWithCompanionsSchema
+>;
 
 /**
  * Request body for the deterministic build-brief generator. Only

@@ -97,6 +97,7 @@ function App() {
   const [showCreateApp, setShowCreateApp] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [templateSeed, setTemplateSeed] = useState<AppTemplate | null>(null);
+  const [templateModel, setTemplateModel] = useState<string | null>(null);
 
   const systemContainers = useMemo(
     () => containers.filter((container) => container.isSystemContainer),
@@ -447,11 +448,12 @@ function App() {
     setShowCreateApp(true);
   };
 
-  const selectTemplate = (template: AppTemplate) => {
+  const selectTemplate = (template: AppTemplate, options?: { model?: string | null }) => {
     setShowTemplates(false);
     setError("");
     setNotice("");
     setTemplateSeed(template);
+    setTemplateModel(options?.model ?? null);
     setShowCreateApp(true);
   };
 
@@ -619,6 +621,7 @@ function App() {
         onClose={() => setShowTemplates(false)}
         onSelect={selectTemplate}
         storedApps={storedApps}
+        hostInfo={dockerInfo}
         onViewApp={(appId) => {
           const storedApp = storedApps.find((app) => app.id === appId);
           setShowTemplates(false);
@@ -631,9 +634,11 @@ function App() {
       <CreateAppWizard
         open={showCreateApp}
         initialTemplate={templateSeed}
+        initialModel={templateModel}
         onClose={() => {
           setShowCreateApp(false);
           setTemplateSeed(null);
+          setTemplateModel(null);
         }}
         onCreated={(createdApp) => void handleAppCreated(createdApp)}
       />

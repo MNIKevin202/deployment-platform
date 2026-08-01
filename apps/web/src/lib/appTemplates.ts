@@ -10,13 +10,66 @@ export interface TemplateEnvVar {
   generateLength?: number;
 }
 
-export type TemplateCategory = "Databases" | "Apps" | "Tools";
+export type TemplateCategory = "AI" | "Databases" | "Apps" | "Tools";
+
+/**
+ * A second service a template deploys alongside its main app — e.g.
+ * Blueprint's Ollama model server. Each companion becomes a NORMAL managed
+ * app of its own (its own container, volumes, database record, and Delete
+ * button), so nothing here is a parallel deployment system: routing,
+ * backups, image-update checks, health, and cleanup all work on it exactly
+ * as they do for any other app.
+ *
+ * Companions are created BEFORE the main app so the main app's first boot
+ * can already reach them. See resolveTemplatePlaceholders for how the main
+ * app's env vars refer to a companion's container name.
+ */
+export interface TemplateCompanion {
+  /** Stable key referenced by `{{companion:<key>}}` placeholders. */
+  key: string;
+  /**
+   * Appended to the app name the operator chose, so a second install under
+   * a different name gets its own companion instead of colliding
+   * (blueprint -> blueprint-ollama, blueprint-2 -> blueprint-2-ollama).
+   */
+  nameSuffix: string;
+  /** Shown in the template detail and the wizard's review step. */
+  label: string;
+  description: string;
+  image: string;
+  containerPort: number;
+  env?: TemplateEnvVar[];
+  volumes?: string[];
+  /**
+   * Companions default to internal-only — a backing service reached over
+   * the private network should not get a public domain unless a template
+   * explicitly opts in.
+   */
+  internalOnly?: boolean;
+}
+
+/** Minimum/recommended host resources, shown before install. */
+export interface TemplateResourceGuidance {
+  minCpu: number;
+  minMemoryMb: number;
+  minDiskGb: number;
+  recommendedCpu: number;
+  recommendedMemoryMb: number;
+  recommendedDiskGb: number;
+}
 
 export interface AppTemplate {
   id: string;
   name: string;
   category: TemplateCategory;
   icon: string;
+  /**
+   * A first-party icon served from /public, used instead of the emoji when
+   * present (the emoji stays as the fallback for older/basic renderers).
+   */
+  iconImage?: string;
+  /** A short ribbon on the card, e.g. "DevMinted Original". */
+  badge?: string;
   /** One-line summary shown on the card. */
   description: string;
   /** A short paragraph shown on the template detail view. */
@@ -46,6 +99,60 @@ export interface AppTemplate {
    * used to warn before install, never to block it.
    */
   requiresTemplateId?: string;
+  /**
+   * Extra services deployed with this template as managed apps of their
+   * own. Unlike `requiresTemplateId` (which only *warns* that the operator
+   * should install something separately), these are created automatically
+   * as part of the same install.
+   */
+  companions?: TemplateCompanion[];
+  /** Host sizing shown before install. Never blocks installation. */
+  resources?: TemplateResourceGuidance;
+  /** A prominent caveat shown before install (e.g. CPU-only performance). */
+  warning?: string;
+  /** Optional post-install model choice — see MODEL_CHOICES below. */
+  modelChoices?: TemplateModelChoice[];
+}
+
+/**
+ * A curated, CPU-friendly model offered at install time. Every identifier
+ * here was verified to exist in Ollama's library registry rather than
+ * assumed — an invalid one would fail only later, during the pull.
+ */
+export interface TemplateModelChoice {
+  /** Ollama model identifier, e.g. "llama3.2:3b". */
+  id: string;
+  label: string;
+  /** Approximate download size, for setting expectations. */
+  sizeLabel: string;
+  /** Extra caveat, e.g. needing more RAM. */
+  note?: string;
+}
+
+/**
+ * Replaces `{{companion:<key>}}` in a template env value with the container
+ * name the companion will actually get, which depends on the app name the
+ * operator chose. Unknown keys are left untouched rather than replaced with
+ * an empty string, so a typo shows up as a visible placeholder in the
+ * wizard's review step instead of a silently broken URL.
+ */
+export function resolveTemplatePlaceholders(
+  value: string,
+  appName: string,
+  companions: ReadonlyArray<Pick<TemplateCompanion, "key" | "nameSuffix">>
+): string {
+  return value.replace(/\{\{companion:([a-z0-9-]+)\}\}/gi, (match, key: string) => {
+    const companion = companions.find((item) => item.key === key);
+    return companion ? `app-${appName}${companion.nameSuffix}` : match;
+  });
+}
+
+/** The app name a companion gets for a given main app name. */
+export function companionAppName(
+  appName: string,
+  companion: Pick<TemplateCompanion, "nameSuffix">
+): string {
+  return `${appName}${companion.nameSuffix}`;
 }
 
 export interface TemplatePublishedPort {
@@ -85,7 +192,103 @@ export function generateSecret(length = 24): string {
  * and persistent volumes) — no custom entrypoints or host mounts — so every
  * template deploys cleanly through the normal flow. Add one by appending here.
  */
+/**
+ * CPU-friendly models offered when installing Blueprint. Every identifier
+ * below was checked against Ollama's own library registry
+ * (registry.ollama.ai) rather than assumed — a wrong one would surface only
+ * later as a failed pull. Sizes are the quantized download sizes Ollama
+ * reports for the default quantization of each tag.
+ */
+export const BLUEPRINT_MODEL_CHOICES: TemplateModelChoice[] = [
+  {
+    id: "llama3.2:1b",
+    label: "Llama 3.2 1B — fastest",
+    sizeLabel: "~1.3 GB",
+    note: "Best choice on a 4 GB server. Least capable, but responds quickest."
+  },
+  {
+    id: "qwen3:1.7b",
+    label: "Qwen 3 1.7B — fast",
+    sizeLabel: "~1.4 GB"
+  },
+  {
+    id: "llama3.2:3b",
+    label: "Llama 3.2 3B — balanced (recommended)",
+    sizeLabel: "~2.0 GB",
+    note: "A good default on 8 GB of RAM."
+  },
+  {
+    id: "gemma3:4b",
+    label: "Gemma 3 4B — balanced",
+    sizeLabel: "~3.3 GB"
+  },
+  {
+    id: "llama3.1:8b",
+    label: "Llama 3.1 8B — most capable",
+    sizeLabel: "~4.9 GB",
+    note: "Needs 8 GB+ RAM and is noticeably slower on CPU."
+  }
+];
+
 export const APP_TEMPLATES: AppTemplate[] = [
+  // ---- AI ----
+  {
+    id: "blueprint",
+    name: "Blueprint",
+    category: "AI",
+    icon: "🧠",
+    iconImage: "/blueprint-icon.png",
+    badge: "DevMinted Original",
+    description: "Private AI workspace powered by models running directly on your VPS.",
+    longDescription:
+      "Blueprint is a private AI chat workspace that runs entirely on your own server — no API keys, no third-party provider, and no conversation ever leaving your VPS. Installing it deploys two services: the Blueprint chat interface (Open WebUI) on its own HTTPS domain, and a private model server (Ollama) that is reachable only from Blueprint over the platform's internal network. Both keep their data on persistent volumes, so conversations and downloaded models survive restarts and redeploys. The first account you create in the web interface becomes its administrator.",
+    highlights: [
+      "Runs AI models locally on your VPS — nothing is sent to a third party",
+      "Deploys the chat interface and a private model server together",
+      "The model server has no public domain and no published port",
+      "Conversations and downloaded models persist on their own volumes"
+    ],
+    warning:
+      "Blueprint runs AI models on your VPS CPU. Responses may generate gradually, especially on smaller servers.",
+    resources: {
+      minCpu: 4,
+      minMemoryMb: 4 * 1024,
+      minDiskGb: 10,
+      recommendedCpu: 6,
+      recommendedMemoryMb: 8 * 1024,
+      recommendedDiskGb: 20
+    },
+    modelChoices: BLUEPRINT_MODEL_CHOICES,
+    image: "ghcr.io/open-webui/open-webui:0.11.0",
+    containerPort: 8080,
+    suggestedName: "blueprint",
+    env: [
+      // Points at the companion below by its real container name — the
+      // placeholder is resolved once the operator picks an app name.
+      { key: "OLLAMA_BASE_URL", value: "http://{{companion:ollama}}:11434" },
+      // Open WebUI 0.11 refuses to start with authentication enabled and no
+      // secret key set, so this is required, not optional.
+      { key: "WEBUI_SECRET_KEY", generate: "password", generateLength: 48, secret: true },
+      // V1 is local-models-only; leaving the OpenAI integration on makes the
+      // UI probe an endpoint that was never configured.
+      { key: "ENABLE_OPENAI_API", value: "false" }
+    ],
+    volumes: ["/app/backend/data"],
+    companions: [
+      {
+        key: "ollama",
+        nameSuffix: "-ollama",
+        label: "Model server (Ollama)",
+        description:
+          "Runs the AI models themselves. Internal only — no public domain and no published port, so it is reachable only by Blueprint over the private network.",
+        image: "ollama/ollama:0.32.5",
+        containerPort: 11434,
+        internalOnly: true,
+        volumes: ["/root/.ollama"]
+      }
+    ]
+  },
+
   // ---- Databases ----
   {
     id: "postgres",

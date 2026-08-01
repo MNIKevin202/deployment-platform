@@ -7,9 +7,10 @@ import { createAppDatabase } from "./database.js";
 import { buildAppDomain, resolveAppDomainChoice, shouldBackfillAppDomain } from "./domain.js";
 import { createAppSchema, updateAppRoutingSchema } from "./schemas/app.js";
 import {
-  createAppWizardSchema,
+  createAppWizardWithCompanionsSchema,
   buildBriefRequestSchema
 } from "./schemas/app-wizard.js";
+import { deployTemplateStack } from "./services/template-deployment-service.js";
 import { createRoutingService } from "./services/routing-service.js";
 import { updateAppRouting } from "./services/app-routing-service.js";
 import {
@@ -47,6 +48,7 @@ import { registerHealthRoutes } from "./routes/health.js";
 import { registerMetricsRoutes } from "./routes/metrics.js";
 import { registerIrcAdminRoutes } from "./routes/irc-admin.js";
 import { registerIrcBotAdminRoutes } from "./routes/irc-bot-admin.js";
+import { registerBlueprintRoutes } from "./routes/blueprint.js";
 import { registerLogsRoutes } from "./routes/logs.js";
 import { registerEventRoutes } from "./routes/events.js";
 import { createGithubClient } from "./services/github-client.js";
@@ -210,6 +212,7 @@ await registerHealthRoutes(app, { appDatabase, scheduler: healthCheckScheduler }
 await registerMetricsRoutes(app, { appDatabase, docker });
 await registerIrcAdminRoutes(app, { appDatabase, docker });
 await registerIrcBotAdminRoutes(app, { appDatabase, docker });
+registerBlueprintRoutes(app, { appDatabase, docker });
 await registerLogsRoutes(app, { appDatabase, docker });
 await registerEventRoutes(app, { appDatabase });
 
@@ -1045,7 +1048,7 @@ app.post(
     }
   },
   async (request, reply) => {
-    const parsedBody = createAppWizardSchema.safeParse(request.body);
+    const parsedBody = createAppWizardWithCompanionsSchema.safeParse(request.body);
 
     if (!parsedBody.success) {
       return reply.code(400).send({
@@ -1066,7 +1069,7 @@ app.post(
       });
     }
 
-    const result = await createAppWithConfig(creationServiceDeps, {
+    const mainInput = {
       name: parsedBody.data.name,
       image: parsedBody.data.image,
       containerPort: parsedBody.data.containerPort,
@@ -1079,7 +1082,46 @@ app.post(
       internalOnly: parsedBody.data.internalOnly,
       ...(parsedBody.data.customDomain ? { customDomain: parsedBody.data.customDomain } : {}),
       ...(idempotency.present ? { idempotencyKey: idempotency.key } : {})
-    });
+    };
+
+    // A multi-service template (companions present) goes through the
+    // template stack deployer, which creates the backing services first and
+    // rolls the whole install back if any part fails. Everything else takes
+    // the unchanged single-app path.
+    if (parsedBody.data.companions.length > 0) {
+      const stack = await deployTemplateStack(
+        {
+          createApp: (input) => createAppWithConfig(creationServiceDeps, input),
+          removeApp: async (appId) => {
+            const removal = await deleteManagedAppByAppId(deletionServiceDeps, appId);
+            return removal.success;
+          }
+        },
+        { main: mainInput, companions: parsedBody.data.companions }
+      );
+
+      if (!stack.success || !stack.app) {
+        app.log.error(
+          { message: stack.message, rollback: stack.rollback },
+          "Template stack creation failed"
+        );
+
+        return reply.code(stack.statusCode ?? 502).send({
+          success: false,
+          message: stack.message,
+          rollback: stack.rollback
+        });
+      }
+
+      return reply.code(201).send({
+        success: true,
+        message: stack.message,
+        app: stack.app,
+        companions: stack.companions ?? []
+      });
+    }
+
+    const result = await createAppWithConfig(creationServiceDeps, mainInput);
 
     if (!result.success || !result.app) {
       app.log.error({ message: result.message }, "Wizard app creation failed");

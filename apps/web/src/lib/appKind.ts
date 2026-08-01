@@ -99,6 +99,16 @@ export function isIrcServerImage(image: string): boolean {
   return imageRepoName(image) === "ergo";
 }
 
+/**
+ * Whether an image is Blueprint's chat interface (Open WebUI), for showing
+ * the Blueprint tab. The model server Blueprint deploys alongside it is a
+ * separate app running the "ollama" image and gets no tab of its own — it is
+ * managed entirely from Blueprint's.
+ */
+export function isBlueprintImage(image: string): boolean {
+  return imageRepoName(image) === "open-webui";
+}
+
 /** Whether an image is our Quipora Bot template, for showing the Bot Settings tab. */
 export function isIrcBotImage(image: string): boolean {
   return imageRepoName(image) === "quipora-bot";
