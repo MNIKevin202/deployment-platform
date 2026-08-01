@@ -304,6 +304,15 @@ await registerSourceRoutes(app, {
  */
 const githubBuildDockerOps = createGithubBuildDockerOps(docker);
 
+// How long a single image build may run before it's aborted. Floored at 5
+// minutes so a misconfigured value can't kill legitimate builds; a real
+// multi-stage build with no cache to reuse takes well over the old 6-minute
+// hard default on a small VPS.
+const BUILD_TIMEOUT_MS = Math.max(
+  5 * 60 * 1000,
+  Number(process.env.BUILD_TIMEOUT_MS) || 20 * 60 * 1000
+);
+
 const deployDeps: GithubDeployDependencies = {
   appDatabase,
   dockerOps: { ...dockerOps, ...githubBuildDockerOps },
@@ -311,6 +320,7 @@ const deployDeps: GithubDeployDependencies = {
   resolveCredential: resolveGithubCredential,
   reconcileRouting: (db) => routingService.reconcile(db),
   recordEvent,
+  buildTimeoutMs: BUILD_TIMEOUT_MS,
   healthCheckDeps: {
     httpClient: createHttpHealthCheckClient(),
     isContainerRunning: async (containerName: string) => {

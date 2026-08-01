@@ -539,6 +539,7 @@ describe("deployFromGithub — manual strategy override reaches the real build (
     };
 
     const noCacheFlags: Array<boolean | undefined> = [];
+    const timeouts: number[] = [];
     const dockerOps: GithubDeployDependencies["dockerOps"] = {
       ...unusedDockerOps(),
       async imageExists() {
@@ -546,6 +547,7 @@ describe("deployFromGithub — manual strategy override reaches the real build (
       },
       async buildImage(input) {
         noCacheFlags.push(input.noCache);
+        timeouts.push(input.timeoutMs);
         // First (cached) attempt hits the classic corrupt-snapshot error.
         if (noCacheFlags.length === 1) {
           throw new BuildImageError(
@@ -584,6 +586,14 @@ describe("deployFromGithub — manual strategy override reaches the real build (
     assert.equal(noCacheFlags.length, 2);
     assert.ok(!noCacheFlags[0], "first attempt uses the cache");
     assert.equal(noCacheFlags[1], true, "the retry disables the cache");
+
+    // The no-cache retry — which rebuilds every layer — gets MORE time than
+    // the cached attempt, so the recovery isn't itself killed by a timeout
+    // tuned for fast cached builds (the exact way staxxio timed out).
+    assert.ok(
+      timeouts[1] > timeouts[0],
+      "the no-cache retry gets a longer build timeout than the cached attempt"
+    );
 
     // The retry got past the build and stopped at the container step, i.e.
     // the corrupt-cache error did NOT surface as the deploy failure.

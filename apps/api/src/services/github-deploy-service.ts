@@ -25,7 +25,23 @@ const PROTECTED_CONTAINER_NAMES = new Set([
 ]);
 
 const DEFAULT_CLONE_TIMEOUT_MS = 2 * 60 * 1000;
-const DEFAULT_BUILD_TIMEOUT_MS = 6 * 60 * 1000;
+/**
+ * 6 minutes was fine for a CACHED rebuild (which reuses most layers), but
+ * far too tight for a full build with nothing to reuse — a first deploy, or
+ * a no-cache retry. A real multi-stage app (e.g. a Next.js/Prisma build with
+ * two npm installs) reached only step 15 of 33 in 6 minutes on a 2 vCPU
+ * host and was killed mid-build. 20 minutes gives an honest full build room
+ * to finish on a small server; override with BUILD_TIMEOUT_MS for anything
+ * larger.
+ */
+const DEFAULT_BUILD_TIMEOUT_MS = 20 * 60 * 1000;
+/**
+ * A no-cache build rebuilds every layer, so it is always the slowest path.
+ * It gets extra headroom over the normal timeout so the automatic
+ * corrupt-cache recovery isn't itself killed by a timeout tuned for cached
+ * builds.
+ */
+const NO_CACHE_BUILD_TIMEOUT_FLOOR_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_LOG_BYTES = 256 * 1024;
 const MAX_CONCURRENT_DEPLOYMENTS = 2;
 
@@ -543,7 +559,13 @@ export async function deployFromGithub(
           contextPath: buildPlan.buildContextPath,
           dockerfileRelativePath: relative(buildPlan.buildContextPath, buildPlan.dockerfilePath),
           tag: imageTag,
-          timeoutMs: buildTimeoutMs,
+          // A no-cache build rebuilds every layer, so it gets the longer of
+          // the configured timeout and the no-cache floor — otherwise the
+          // automatic corrupt-cache recovery gets killed by a timeout tuned
+          // for fast cached rebuilds (exactly what happened to staxxio).
+          timeoutMs: noCache
+            ? Math.max(buildTimeoutMs, NO_CACHE_BUILD_TIMEOUT_FLOOR_MS)
+            : buildTimeoutMs,
           maxLogBytes,
           noCache,
           // Feeds Docker's "Step X/Y" lines to the progress overlay, which
