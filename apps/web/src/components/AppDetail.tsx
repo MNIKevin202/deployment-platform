@@ -1044,7 +1044,7 @@ export default function AppDetail({
             </div>
             <p className="section-description">
               {isConfigPending
-                ? "Saved, but not active in the running container yet. Restarting will not apply these changes — use the Redeploy button above to recreate the container with the current variables."
+                ? "Saved, but not active in the running container yet. Restarting will not apply these changes — use Redeploy above (for a GitHub-linked app it rebuilds from source; otherwise it recreates the container), which applies the current variables."
                 : "The running container reflects the variables below."}
             </p>
           </div>

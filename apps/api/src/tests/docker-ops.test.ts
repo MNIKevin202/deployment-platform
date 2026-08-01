@@ -2,6 +2,39 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type Docker from "dockerode";
 import { createDockerOps } from "../services/redeploy-service.js";
+import { isRecoverableBuildCacheError } from "../services/github-deploy-docker-ops.js";
+
+describe("isRecoverableBuildCacheError", () => {
+  test("matches the corrupt-snapshot failures that a no-cache rebuild fixes", () => {
+    for (const message of [
+      "NotFound: parent snapshot sha256:37d1b91b does not exist: not found",
+      "failed to prepare … : parent snapshot sha256:abc does not exist",
+      "failed to prepare extraction snapshot \"extract-123\": parent does not exist",
+      "snapshot sha256:deadbeef does not exist: not found"
+    ]) {
+      assert.equal(isRecoverableBuildCacheError(message), true, message);
+    }
+  });
+
+  test("does NOT match a genuine build error, so a real failure is never retried", () => {
+    for (const message of [
+      "The command '/bin/sh -c npm run build' returned a non-zero code: 1",
+      "failed to solve: process \"/bin/sh -c tsc\" did not complete successfully: exit code: 2",
+      "COPY failed: file not found in build context",
+      "pull access denied for private/image, repository does not exist",
+      "manifest for node:99-alpine not found"
+    ]) {
+      assert.equal(isRecoverableBuildCacheError(message), false, message);
+    }
+  });
+
+  test("is case-insensitive", () => {
+    assert.equal(
+      isRecoverableBuildCacheError("NotFound: PARENT SNAPSHOT sha256:x DOES NOT EXIST"),
+      true
+    );
+  });
+});
 
 interface FakeVolumeInspect {
   Labels?: Record<string, string> | null;

@@ -16,12 +16,51 @@ export interface BuildImageInput {
    * leaves build behaviour completely unchanged.
    */
   onOutput?: (chunk: string) => void;
+  /**
+   * When true, the build ignores Docker's layer cache entirely. Used both
+   * for the automatic recovery from a corrupt cache (a missing parent
+   * snapshot poisons every cached build until a no-cache build rebuilds
+   * the chain) and for the operator's explicit "Deploy without cache".
+   * Omitted/false keeps the normal, cache-using build.
+   */
+  noCache?: boolean;
 }
 
 export interface BuildImageResult {
   /** Sanitization happens in the caller (process-runner's sanitizer); this is raw build-stream text. */
   log: string;
   truncated: boolean;
+}
+
+/**
+ * Whether a build failure is a known, safe-to-retry cache corruption rather
+ * than a genuine problem with the code being built.
+ *
+ * The canonical case (seen live on Docker 29 + the containerd snapshotter):
+ *
+ *   NotFound: parent snapshot sha256:… does not exist: not found
+ *
+ * A cached build resolves against a layer whose parent snapshot was pruned
+ * out from under it, so it fails instantly and deterministically — and,
+ * because the poisoned record survives, EVERY later cached build fails the
+ * same way. A single no-cache build rebuilds the chain from scratch and
+ * clears it. This is deliberately narrow: it matches only snapshot/cache
+ * -integrity phrasing, never an ordinary `RUN … exit code 1`, so a real
+ * build error is never silently retried and hidden.
+ */
+export function isRecoverableBuildCacheError(message: string): boolean {
+  const text = message.toLowerCase();
+
+  return (
+    // parent snapshot sha256:… does not exist
+    /parent snapshot .* does not exist/.test(text) ||
+    // failed to prepare … : parent snapshot … does not exist
+    (text.includes("snapshot") && text.includes("does not exist")) ||
+    // failed to get snapshotter / snapshot … : not found
+    (text.includes("snapshot") && text.includes("not found")) ||
+    // failed to prepare extraction snapshot …
+    text.includes("failed to prepare extraction snapshot")
+  );
 }
 
 export class BuildImageError extends Error {
@@ -62,7 +101,14 @@ export function createGithubBuildDockerOps(docker: Docker): GithubBuildDockerOps
 
       const stream = await docker.buildImage(
         { context: input.contextPath, src: entries },
-        { t: input.tag, dockerfile: input.dockerfileRelativePath }
+        {
+          t: input.tag,
+          dockerfile: input.dockerfileRelativePath,
+          // dockerode forwards this as the /build API's `nocache` query
+          // param. Only sent when requested, so a normal build is byte-for-
+          // byte unchanged.
+          ...(input.noCache ? { nocache: true } : {})
+        }
       );
 
       const logLines: string[] = [];
