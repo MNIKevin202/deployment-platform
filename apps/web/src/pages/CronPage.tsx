@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ApiError,
   CronJob,
+  CronJobRun,
+  CronJobRunsResponse,
   CronJobsResponse,
   CronPreviewResponse,
   StoredApp
@@ -56,7 +58,7 @@ function formatDuration(ms: number | null): string {
   return `${(ms / 1000).toFixed(1)} s`;
 }
 
-function statusTone(status: CronJob["lastStatus"]): string {
+function statusTone(status: CronJob["lastStatus"] | CronJobRun["status"]): string {
   switch (status) {
     case "success":
       return "positive";
@@ -87,7 +89,14 @@ export default function CronPage({ apps }: CronPageProps) {
 
   const [deleteTarget, setDeleteTarget] = useState<CronJob | null>(null);
   const [runningId, setRunningId] = useState<number | null>(null);
-  const [outputJob, setOutputJob] = useState<CronJob | null>(null);
+
+  // Run-history modal: the job whose history is open, its loaded runs, and
+  // which run's output is currently shown.
+  const [historyJob, setHistoryJob] = useState<CronJob | null>(null);
+  const [runs, setRuns] = useState<CronJobRun[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
+  const [runsError, setRunsError] = useState("");
+  const [selectedRun, setSelectedRun] = useState<CronJobRun | null>(null);
 
   const previewTimer = useRef<number | null>(null);
 
@@ -278,6 +287,29 @@ export default function CronPage({ apps }: CronPageProps) {
     }
   };
 
+  const openHistory = async (job: CronJob) => {
+    setHistoryJob(job);
+    setRuns([]);
+    setSelectedRun(null);
+    setRunsError("");
+    setRunsLoading(true);
+    try {
+      const response = await fetch(`/api/cron-jobs/${job.id}/runs`);
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Unable to load run history"));
+      }
+      const result = (await response.json()) as CronJobRunsResponse;
+      setRuns(result.runs);
+      // Show the newest run's output by default — the endpoint returns
+      // newest first.
+      setSelectedRun(result.runs[0] ?? null);
+    } catch (caught) {
+      setRunsError(caught instanceof Error ? caught.message : "Unable to load run history");
+    } finally {
+      setRunsLoading(false);
+    }
+  };
+
   return (
     <div className="page">
       <section className="page-section">
@@ -338,8 +370,8 @@ export default function CronPage({ apps }: CronPageProps) {
                         <button
                           type="button"
                           className="cron-status-button"
-                          onClick={() => setOutputJob(job)}
-                          title="View output"
+                          onClick={() => void openHistory(job)}
+                          title="View run history"
                         >
                           <span className={`status-badge ${statusTone(job.lastStatus)} compact`}>
                             {job.lastStatus}
@@ -514,22 +546,60 @@ export default function CronPage({ apps }: CronPageProps) {
         </div>
       )}
 
-      {outputJob && (
-        <div className="modal-backdrop" onClick={() => setOutputJob(null)}>
-          <section className="form-modal" onClick={(event) => event.stopPropagation()}>
+      {historyJob && (
+        <div className="modal-backdrop" onClick={() => setHistoryJob(null)}>
+          <section className="form-modal cron-history-modal" onClick={(event) => event.stopPropagation()}>
             <header>
               <div>
-                <p className="eyebrow">Last run · {formatDuration(outputJob.lastDurationMs)}</p>
-                <h2>{outputJob.name}</h2>
+                <p className="eyebrow">Run history</p>
+                <h2>{historyJob.name}</h2>
               </div>
-              <button className="close-button" type="button" onClick={() => setOutputJob(null)}>
+              <button className="close-button" type="button" onClick={() => setHistoryJob(null)}>
                 Close
               </button>
             </header>
+
             <div className="wizard-body">
-              <div className="brief-box">
-                <pre>{outputJob.lastOutput || "(no output)"}</pre>
-              </div>
+              {runsError && <div className="error-banner">{runsError}</div>}
+
+              {runsLoading ? (
+                <div className="empty-state">Loading run history…</div>
+              ) : runs.length === 0 ? (
+                <div className="empty-state">This job hasn't run yet.</div>
+              ) : (
+                <div className="cron-history">
+                  <ul className="cron-run-list">
+                    {runs.map((run) => (
+                      <li key={run.id}>
+                        <button
+                          type="button"
+                          className={`cron-run-item ${selectedRun?.id === run.id ? "active" : ""}`}
+                          onClick={() => setSelectedRun(run)}
+                        >
+                          <span className={`status-badge ${statusTone(run.status)} compact`}>
+                            {run.status}
+                            {run.exitCode !== null ? ` (${run.exitCode})` : ""}
+                          </span>
+                          <span className="cron-run-time">
+                            {new Date(run.ranAt).toLocaleString()}
+                          </span>
+                          <span className="text-faint">{formatDuration(run.durationMs)}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+
+                  <div className="cron-run-output">
+                    {selectedRun ? (
+                      <div className="brief-box">
+                        <pre>{selectedRun.output || "(no output)"}</pre>
+                      </div>
+                    ) : (
+                      <div className="empty-state">Select a run to see its output.</div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </section>
         </div>

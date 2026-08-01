@@ -106,6 +106,69 @@ describe("cron jobs (database layer)", () => {
     assert.equal(after?.lastOutput, "done");
     assert.equal(after?.lastDurationMs, 1234);
     assert.equal(after?.lastRunAt, "2026-08-01T03:00:00.000Z");
+
+    // The same call also appends to the run history.
+    const runs = appDatabase.listCronJobRuns(job.id);
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0].status, "success");
+    assert.equal(runs[0].exitCode, 0);
+    assert.equal(runs[0].output, "done");
+    assert.equal(runs[0].durationMs, 1234);
+    assert.equal(runs[0].ranAt, "2026-08-01T03:00:00.000Z");
+    cleanup();
+  });
+
+  test("run history is newest-first and only for the given job", () => {
+    const app = makeApp("web-history");
+    const jobA = appDatabase.createCronJob({
+      appId: app.id, name: "a", cronExpression: "0 3 * * *", command: "a", enabled: true, timeoutSeconds: 60
+    });
+    const jobB = appDatabase.createCronJob({
+      appId: app.id, name: "b", cronExpression: "0 4 * * *", command: "b", enabled: true, timeoutSeconds: 60
+    });
+
+    appDatabase.recordCronJobRun(jobA.id, {
+      status: "failed", exitCode: 1, output: "first", durationMs: 10, ranAt: "2026-08-01T03:00:00.000Z"
+    });
+    appDatabase.recordCronJobRun(jobA.id, {
+      status: "success", exitCode: 0, output: "second", durationMs: 20, ranAt: "2026-08-01T03:01:00.000Z"
+    });
+    appDatabase.recordCronJobRun(jobB.id, {
+      status: "success", exitCode: 0, output: "other job", durationMs: 5, ranAt: "2026-08-01T04:00:00.000Z"
+    });
+
+    const runsA = appDatabase.listCronJobRuns(jobA.id);
+    assert.equal(runsA.length, 2);
+    assert.equal(runsA[0].output, "second", "newest run is first");
+    assert.equal(runsA[1].output, "first");
+
+    const runsB = appDatabase.listCronJobRuns(jobB.id);
+    assert.equal(runsB.length, 1);
+    assert.equal(runsB[0].output, "other job");
+    cleanup();
+  });
+
+  test("run history is capped and prunes the oldest runs", () => {
+    const app = makeApp("web-cap");
+    const job = appDatabase.createCronJob({
+      appId: app.id, name: "j", cronExpression: "* * * * *", command: "a", enabled: true, timeoutSeconds: 60
+    });
+
+    // More than the 100-run cap; the oldest should be pruned as we go.
+    for (let i = 0; i < 105; i += 1) {
+      appDatabase.recordCronJobRun(job.id, {
+        status: "success",
+        exitCode: 0,
+        output: `run-${i}`,
+        durationMs: 1,
+        ranAt: `2026-08-01T00:00:${String(i % 60).padStart(2, "0")}.000Z`
+      });
+    }
+
+    const runs = appDatabase.listCronJobRuns(job.id, 200);
+    assert.equal(runs.length, 100, "history is capped at 100");
+    assert.equal(runs[0].output, "run-104", "newest is kept");
+    assert.equal(runs[runs.length - 1].output, "run-5", "oldest kept is run-5 (runs 0–4 pruned)");
     cleanup();
   });
 
@@ -114,9 +177,14 @@ describe("cron jobs (database layer)", () => {
     const job = appDatabase.createCronJob({
       appId: app.id, name: "j", cronExpression: "0 3 * * *", command: "a", enabled: true, timeoutSeconds: 60
     });
+    appDatabase.recordCronJobRun(job.id, {
+      status: "success", exitCode: 0, output: "done", durationMs: 1, ranAt: "2026-08-01T03:00:00.000Z"
+    });
 
     appDatabase.deleteApp(app.id);
     assert.equal(appDatabase.getCronJob(job.id), null, "the job is gone with its app");
+    // The whole chain cascades: app → job → run history.
+    assert.equal(appDatabase.listCronJobRuns(job.id).length, 0, "the run history is gone too");
     cleanup();
   });
 });

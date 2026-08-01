@@ -46,6 +46,48 @@ export interface CronJobRunResult {
   ranAt: string;
 }
 
+/** One recorded run in a job's history. */
+export interface StoredCronJobRun {
+  id: number;
+  cronJobId: number;
+  status: string;
+  exitCode: number | null;
+  output: string | null;
+  durationMs: number;
+  ranAt: string;
+  createdAt: string;
+}
+
+/**
+ * How many runs to keep per job. Old runs are pruned on each new record so
+ * a job that fires every minute can't grow the history table without bound.
+ */
+const MAX_RUNS_PER_JOB = 100;
+
+interface CronJobRunRow {
+  id: number;
+  cron_job_id: number;
+  status: string;
+  exit_code: number | null;
+  output: string | null;
+  duration_ms: number;
+  ran_at: string;
+  created_at: string;
+}
+
+function mapRunRow(row: CronJobRunRow): StoredCronJobRun {
+  return {
+    id: row.id,
+    cronJobId: row.cron_job_id,
+    status: row.status,
+    exitCode: row.exit_code,
+    output: row.output,
+    durationMs: row.duration_ms,
+    ranAt: row.ran_at,
+    createdAt: row.created_at
+  };
+}
+
 interface CronJobRow {
   id: number;
   app_id: number;
@@ -166,7 +208,12 @@ export function createCronJobRepository(db: DatabaseSync) {
     return Number(result.changes ?? 0) > 0;
   }
 
-  /** Records the outcome of a run (scheduled or manual). */
+  /**
+   * Records the outcome of a run (scheduled or manual). Updates the inline
+   * most-recent columns on cron_jobs (for the list view) and appends a row
+   * to the run history, then prunes that job's history to the newest
+   * MAX_RUNS_PER_JOB.
+   */
   function recordCronJobRun(id: number, run: CronJobRunResult): void {
     db.prepare(
       `UPDATE cron_jobs
@@ -174,6 +221,39 @@ export function createCronJobRepository(db: DatabaseSync) {
              last_duration_ms = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`
     ).run(run.ranAt, run.status, run.exitCode, run.output, run.durationMs, id);
+
+    db.prepare(
+      `INSERT INTO cron_job_runs (cron_job_id, status, exit_code, output, duration_ms, ran_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(id, run.status, run.exitCode, run.output, run.durationMs, run.ranAt);
+
+    // Keep only the newest rows for this job. `id DESC` matches the write
+    // order, so this trims the oldest first without relying on ran_at
+    // (which a manual "Run now" and a scheduled fire could share).
+    db.prepare(
+      `DELETE FROM cron_job_runs
+        WHERE cron_job_id = ?
+          AND id NOT IN (
+            SELECT id FROM cron_job_runs
+             WHERE cron_job_id = ?
+             ORDER BY id DESC
+             LIMIT ?
+          )`
+    ).run(id, id, MAX_RUNS_PER_JOB);
+  }
+
+  /** A job's run history, newest first. Capped by `limit`. */
+  function listCronJobRuns(cronJobId: number, limit = 50): StoredCronJobRun[] {
+    const capped = Math.max(1, Math.min(limit, MAX_RUNS_PER_JOB));
+    return db
+      .prepare(
+        `SELECT * FROM cron_job_runs
+          WHERE cron_job_id = ?
+          ORDER BY id DESC
+          LIMIT ?`
+      )
+      .all(cronJobId, capped)
+      .map((row) => mapRunRow(row as unknown as CronJobRunRow));
   }
 
   return {
@@ -183,7 +263,8 @@ export function createCronJobRepository(db: DatabaseSync) {
     createCronJob,
     updateCronJob,
     deleteCronJob,
-    recordCronJobRun
+    recordCronJobRun,
+    listCronJobRuns
   };
 }
 
