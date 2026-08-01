@@ -647,6 +647,66 @@ code {
   background: var(--color-warning-bg);
 }
 
+.status-badge.danger {
+  color: var(--color-danger);
+  background: var(--color-danger-bg);
+}
+
+/* ---------- Cron jobs ---------- */
+
+.cron-command {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.cron-row-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
+.cron-status-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+
+.cron-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+
+.cron-preset {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-soft);
+  background: var(--color-surface-raised);
+  color: var(--color-text-muted);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.cron-preset:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+.cron-preview-ok {
+  color: var(--color-success);
+}
+
+.cron-preview-bad {
+  color: var(--color-danger);
+}
+
 .routing-badge {
   margin-left: 8px;
 }

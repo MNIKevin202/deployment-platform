@@ -14,6 +14,7 @@ import { createAppSourceRepository } from "./app-source-database.js";
 import { createPerformanceDiagnosticsRepository } from "./performance-diagnostics-database.js";
 import { createIdempotencyRepository } from "./idempotency-database.js";
 import { createInstallationRepository } from "./installation-database.js";
+import { createCronJobRepository } from "./cron-job-database.js";
 
 export type { StoredGithubAppInstallation, UpsertGithubAppInstallationInput } from "./installation-database.js";
 
@@ -434,6 +435,7 @@ export function createAppDatabase(databasePath: string) {
   const performanceDiagnosticsRepository = createPerformanceDiagnosticsRepository(db);
   const idempotencyRepository = createIdempotencyRepository(db);
   const installationRepository = createInstallationRepository(db);
+  const cronJobRepository = createCronJobRepository(db);
 
   return {
     db,
@@ -466,7 +468,8 @@ export function createAppDatabase(databasePath: string) {
     ...appSourceRepository,
     ...performanceDiagnosticsRepository,
     ...idempotencyRepository,
-    ...installationRepository
+    ...installationRepository,
+    ...cronJobRepository
   };
 }
 
