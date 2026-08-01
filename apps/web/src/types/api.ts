@@ -340,6 +340,22 @@ export interface CronJobRunResult {
   ranAt: string;
 }
 
+export interface CronJobRun {
+  id: number;
+  cronJobId: number;
+  status: "success" | "failed" | "timeout" | "skipped";
+  exitCode: number | null;
+  output: string | null;
+  durationMs: number;
+  ranAt: string;
+  createdAt: string;
+}
+
+export interface CronJobRunsResponse {
+  success: boolean;
+  runs: CronJobRun[];
+}
+
 export type DeployStage =
   | "resolving-repository"
   | "resolving-branch"

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CronPage from "../pages/CronPage";
-import type { CronJob, StoredApp } from "../types/api";
+import type { CronJob, CronJobRun, StoredApp } from "../types/api";
 
 function app(id: number, name: string): StoredApp {
   return {
@@ -56,9 +56,24 @@ interface Calls {
   deletes: string[];
 }
 
+function run(overrides: Partial<CronJobRun> = {}): CronJobRun {
+  return {
+    id: 1,
+    cronJobId: 1,
+    status: "success",
+    exitCode: 0,
+    output: "cleaned 42 rows",
+    durationMs: 1200,
+    ranAt: "2026-08-01T03:00:00Z",
+    createdAt: "2026-08-01T03:00:00Z",
+    ...overrides
+  };
+}
+
 function stubFetch(options: {
   jobs?: CronJob[];
   preview?: { valid: boolean; description?: string; error?: string };
+  runs?: CronJobRun[];
 }): Calls {
   const calls: Calls = { posts: [], puts: [], deletes: [] };
   let jobs = options.jobs ?? [];
@@ -73,6 +88,9 @@ function stubFetch(options: {
       if (url === "/api/cron-jobs/preview") {
         const preview = options.preview ?? { valid: true, description: "Every day at 3:00 AM" };
         return json({ success: true, ...preview });
+      }
+      if (url.match(/\/api\/cron-jobs\/\d+\/runs$/) && method === "GET") {
+        return json({ success: true, runs: options.runs ?? [] });
       }
       if (url === "/api/cron-jobs" && method === "GET") {
         return json({ success: true, jobs });
@@ -227,7 +245,7 @@ describe("CronPage", () => {
     await waitFor(() => expect(calls.deletes.length).toBeGreaterThan(0));
   });
 
-  test("clicking a last-run status opens its captured output", async () => {
+  test("clicking a last-run status opens the run history with the newest output", async () => {
     stubFetch({
       jobs: [
         job({
@@ -237,7 +255,8 @@ describe("CronPage", () => {
           lastOutput: "cleaned 42 rows",
           lastDurationMs: 1200
         })
-      ]
+      ],
+      runs: [run({ output: "cleaned 42 rows" })]
     });
     const user = userEvent.setup();
     render(<CronPage apps={[app(10, "web")]} />);
@@ -245,6 +264,50 @@ describe("CronPage", () => {
     await screen.findByText("Nightly cleanup");
     await user.click(screen.getByRole("button", { name: /success/ }));
 
+    expect(await screen.findByRole("heading", { name: "Nightly cleanup" })).toBeInTheDocument();
     expect(await screen.findByText("cleaned 42 rows")).toBeInTheDocument();
+  });
+
+  test("run history lists multiple runs and switches output on click", async () => {
+    stubFetch({
+      jobs: [
+        job({
+          lastRunAt: "2026-08-01T03:05:00Z",
+          lastStatus: "failed",
+          lastExitCode: 1,
+          lastOutput: "boom",
+          lastDurationMs: 900
+        })
+      ],
+      runs: [
+        run({ id: 2, status: "failed", exitCode: 1, output: "boom", ranAt: "2026-08-01T03:05:00Z" }),
+        run({ id: 1, status: "success", exitCode: 0, output: "all good", ranAt: "2026-08-01T03:00:00Z" })
+      ]
+    });
+    const user = userEvent.setup();
+    render(<CronPage apps={[app(10, "web")]} />);
+
+    await screen.findByText("Nightly cleanup");
+    // Open history from the last-run status (failed).
+    await user.click(screen.getByRole("button", { name: /failed/ }));
+
+    // Newest run's output shows by default.
+    expect(await screen.findByText("boom")).toBeInTheDocument();
+
+    // Selecting the older, successful run switches the shown output.
+    const successRun = await screen.findByRole("button", { name: /success/ });
+    await user.click(successRun);
+    expect(await screen.findByText("all good")).toBeInTheDocument();
+  });
+
+  test("run history shows an empty state when a job hasn't run", async () => {
+    stubFetch({ jobs: [job({ lastRunAt: "2026-08-01T03:00:00Z", lastStatus: "skipped" })], runs: [] });
+    const user = userEvent.setup();
+    render(<CronPage apps={[app(10, "web")]} />);
+
+    await screen.findByText("Nightly cleanup");
+    await user.click(screen.getByRole("button", { name: /skipped/ }));
+
+    expect(await screen.findByText("This job hasn't run yet.")).toBeInTheDocument();
   });
 });

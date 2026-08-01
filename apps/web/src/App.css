@@ -707,6 +707,71 @@ code {
   color: var(--color-danger);
 }
 
+/* ---------- Cron run history ---------- */
+
+.cron-history {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.cron-run-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 52vh;
+  overflow-y: auto;
+}
+
+.cron-run-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.85rem;
+}
+
+.cron-run-item:hover {
+  background: var(--color-surface-2, rgba(255, 255, 255, 0.04));
+}
+
+.cron-run-item.active {
+  border-color: var(--color-accent-soft, rgba(120, 130, 255, 0.4));
+  background: var(--color-surface-2, rgba(255, 255, 255, 0.06));
+}
+
+.cron-run-time {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cron-run-output {
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .cron-history {
+    grid-template-columns: 1fr;
+  }
+
+  .cron-run-list {
+    max-height: 30vh;
+  }
+}
+
 .routing-badge {
   margin-left: 8px;
 }

@@ -25,6 +25,22 @@ export function registerCronRoutes(
     return { success: true, jobs: appDatabase.listCronJobs() };
   });
 
+  // A job's run history, newest first — every scheduled fire and manual
+  // "Run now", with its captured output.
+  app.get("/cron-jobs/:id/runs", async (request, reply) => {
+    const params = idParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ success: false, message: "Invalid cron job id" });
+    }
+
+    const job = appDatabase.getCronJob(params.data.id);
+    if (!job) {
+      return reply.code(404).send({ success: false, message: "Cron job not found" });
+    }
+
+    return reply.send({ success: true, runs: appDatabase.listCronJobRuns(job.id) });
+  });
+
   // A live plain-English preview + validation for the create/edit form.
   app.post("/cron-jobs/preview", async (request, reply) => {
     const body = previewCronSchema.safeParse(request.body);
