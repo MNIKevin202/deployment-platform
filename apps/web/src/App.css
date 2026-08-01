@@ -2376,6 +2376,151 @@ code {
   border: 0;
 }
 
+/* ---------- Site-wide deployment progress overlay ---------- */
+
+/*
+ * Fixed to the viewport, not the page content, so it survives navigation
+ * between sections. Sits below modals (which are z-index 1000+) so it can
+ * never cover a dialog the operator is interacting with.
+ */
+.deploy-overlay {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(340px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  pointer-events: none;
+}
+
+.deploy-overlay-card {
+  pointer-events: auto;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-soft);
+  background: var(--color-surface-raised);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  font-size: 0.85rem;
+}
+
+.deploy-overlay-card.failed {
+  border-color: var(--color-danger);
+}
+
+.deploy-overlay-card.complete {
+  border-color: var(--color-success);
+}
+
+.deploy-overlay-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.deploy-overlay-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.deploy-overlay-source {
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deploy-overlay-dismiss {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.deploy-overlay-dismiss:hover {
+  color: var(--color-text);
+}
+
+.deploy-overlay-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-soft);
+  overflow: hidden;
+}
+
+.deploy-overlay-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-accent);
+  /* Smooths how the value is drawn; never animates unmeasured progress. */
+  transition: width 400ms ease-out;
+}
+
+.deploy-overlay-fill.complete {
+  background: var(--color-success);
+}
+
+.deploy-overlay-fill.failed {
+  background: var(--color-danger);
+}
+
+.deploy-overlay-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 0.78rem;
+}
+
+.deploy-overlay-percent {
+  font-weight: 600;
+}
+
+.deploy-overlay-error {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-bg);
+  color: var(--color-text);
+  font-size: 0.78rem;
+  /* Build errors can be long and unbroken — never let one widen the card. */
+  overflow-wrap: anywhere;
+  max-height: 8.5rem;
+  overflow-y: auto;
+}
+
+.deploy-overlay-note {
+  margin: 6px 0 0;
+  font-size: 0.75rem;
+}
+
+.deploy-overlay-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+@media (max-width: 640px) {
+  .deploy-overlay {
+    right: 10px;
+    left: 10px;
+    bottom: 10px;
+    width: auto;
+  }
+}
+
 /* ---------- Install progress ---------- */
 
 .install-progress-modal {

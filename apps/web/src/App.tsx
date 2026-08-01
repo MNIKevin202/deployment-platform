@@ -9,6 +9,7 @@ import LogViewer from "./components/LogViewer";
 import AppDetail from "./components/AppDetail";
 import CreateAppWizard from "./components/CreateAppWizard";
 import TemplateGallery from "./components/TemplateGallery";
+import DeploymentProgressOverlay from "./components/DeploymentProgressOverlay";
 import type { AppTemplate } from "./lib/appTemplates";
 import OverviewPage from "./pages/OverviewPage";
 import AppsPage from "./pages/AppsPage";
@@ -650,6 +651,20 @@ function App() {
           onClose={() => setSelectedContainer(null)}
         />
       )}
+
+      {/*
+        Mounted here, at the shell level, rather than inside any page — a
+        deployment must stay visible while the operator moves between
+        Overview, Apps, Settings, and so on.
+      */}
+      <DeploymentProgressOverlay
+        onViewApp={(appId) => {
+          const storedApp = storedApps.find((item) => item.id === appId);
+          if (storedApp) {
+            viewApp(storedApp);
+          }
+        }}
+      />
     </AppShell>
   );
 }
