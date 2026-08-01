@@ -415,4 +415,29 @@ describe("app sources (database layer)", () => {
     assert.doesNotThrow(() => appDatabase.releaseDeploymentLock(app.id));
     cleanup();
   });
+
+  test("the startup sweep clears EVERY lock, however recent — an orphan from a platform restart included", () => {
+    const appOne = makeApp("app-twenty-two");
+    const appTwo = makeApp("app-twenty-three");
+
+    // Both locks are brand new — exactly the case an age-gated sweep would
+    // wrongly leave in place. A deploy of the platform itself restarts the
+    // API mid-build, orphaning a seconds-old lock; the process that boots
+    // afterward cannot own any deploy, so every lock is stale.
+    assert.equal(appDatabase.acquireDeploymentLock(appOne.id), true);
+    assert.equal(appDatabase.acquireDeploymentLock(appTwo.id), true);
+
+    const cleared = appDatabase.releaseStaleDeploymentLocks();
+
+    assert.equal(cleared, 2, "both fresh orphans are reclaimed");
+    assert.equal(appDatabase.isDeploymentLocked(appOne.id), false);
+    assert.equal(appDatabase.isDeploymentLocked(appTwo.id), false);
+    assert.equal(
+      appDatabase.acquireDeploymentLock(appOne.id),
+      true,
+      "the app can deploy again once the orphaned lock is swept"
+    );
+
+    cleanup();
+  });
 });

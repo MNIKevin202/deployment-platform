@@ -609,18 +609,20 @@ export function createAppSourceRepository(db: DatabaseSync) {
   }
 
   /**
-   * Drops every abandoned lock. Called once at startup, where the fact
-   * that the process is only now booting is itself proof that no
-   * deployment it owned is still running.
+   * Drops EVERY deployment lock. Called once at startup — the fact that
+   * this process is only now booting is itself proof that no deployment any
+   * lock refers to is still running, so every lock is orphaned regardless
+   * of age.
+   *
+   * This must NOT use the age threshold that `acquireDeploymentLock` uses.
+   * A deploy of the platform itself restarts the API container mid-build,
+   * orphaning a lock that is only seconds or minutes old; an age-gated
+   * sweep left that lock in place and the app stuck in "Building image"
+   * forever, refusing every retry as "already in progress". (Observed
+   * live: staxxio, orphaned by a platform redeploy, wedged ~20 minutes.)
    */
   function releaseStaleDeploymentLocks(): number {
-    const result = db
-      .prepare(
-        `DELETE FROM github_deployment_locks
-          WHERE started_at <= datetime('now', ?)`
-      )
-      .run(`-${DEPLOYMENT_LOCK_STALE_SECONDS} seconds`);
-
+    const result = db.prepare(`DELETE FROM github_deployment_locks`).run();
     return Number(result.changes ?? 0);
   }
 
