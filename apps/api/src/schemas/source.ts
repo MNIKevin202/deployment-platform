@@ -218,7 +218,13 @@ export const githubDeployRequestSchema = z
     expectedCommitSha: z
       .string()
       .regex(/^[0-9a-f]{7,40}$/i, "Expected commit SHA must look like a Git SHA")
-      .optional()
+      .optional(),
+    /**
+     * Build with Docker's layer cache disabled. The operator's escape hatch
+     * for a corrupt cache — the same recovery the pipeline applies on its
+     * own when it detects a missing-parent-snapshot error.
+     */
+    noCache: z.boolean().optional()
   })
   .strict();
 

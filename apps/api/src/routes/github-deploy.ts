@@ -71,7 +71,8 @@ export async function registerGithubDeployRoutes(
       }
 
       const result = await deployFromGithub(deployDeps, parsedParams.data.id, {
-        expectedCommitSha: parsedBody.data.expectedCommitSha
+        expectedCommitSha: parsedBody.data.expectedCommitSha,
+        forceNoCache: parsedBody.data.noCache
       });
 
       if (!result.success) {

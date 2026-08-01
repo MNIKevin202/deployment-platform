@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import { createAppDatabase, type AppDatabase } from "../database.js";
 import { deployFromGithub, type GithubDeployDependencies } from "../services/github-deploy-service.js";
+import { BuildImageError } from "../services/github-deploy-docker-ops.js";
 import type { SourceProviderClient } from "../services/source-provider.js";
 import type { RecordEventFn } from "../services/deployment-event-service.js";
 
@@ -509,5 +510,147 @@ describe("deployFromGithub — manual strategy override reaches the real build (
     const source = appDatabase.getAppSource(app.id);
     assert.equal(source?.buildStrategy, "nodejs");
     assert.equal(source?.selectedStrategy, "dockerfile");
+  });
+
+  test("a corrupt-cache build error triggers exactly one no-cache retry", async () => {
+    const app = makeApp("staxxio-cache-recovery");
+    appDatabase.upsertAppSource(app.id, {
+      provider: "github",
+      repositoryOwner: "MNIKevin202",
+      repositoryName: "Staxxio",
+      repositoryFullName: "MNIKevin202/Staxxio",
+      repositoryCloneUrl: "https://github.com/MNIKevin202/Staxxio.git",
+      repositoryId: null,
+      repositoryVisibility: null,
+      branch: "main",
+      subdirectory: ".",
+      deploymentMode: "dockerfile",
+      dockerfilePath: "tools/roadmap-studio/Dockerfile",
+      buildContext: ".",
+      selectedStrategy: "dockerfile",
+      containerPort: 4319,
+      autoDeploy: false
+    });
+
+    const githubClient: SourceProviderClient = {
+      ...unusedGithubClient(),
+      resolveBranchCommit: async () => "d".repeat(40),
+      listCommits: async () => ({ items: [], hasMore: false })
+    };
+
+    const noCacheFlags: Array<boolean | undefined> = [];
+    const dockerOps: GithubDeployDependencies["dockerOps"] = {
+      ...unusedDockerOps(),
+      async imageExists() {
+        return false;
+      },
+      async buildImage(input) {
+        noCacheFlags.push(input.noCache);
+        // First (cached) attempt hits the classic corrupt-snapshot error.
+        if (noCacheFlags.length === 1) {
+          throw new BuildImageError(
+            "NotFound: parent snapshot sha256:37d1b91b does not exist: not found",
+            "build log"
+          );
+        }
+        // The no-cache retry succeeds; stop the pipeline right after so the
+        // test observes the retry without touching a real container.
+        return { log: "ok", truncated: false };
+      },
+      async createContainer() {
+        throw new Error("expected-stop-after-build");
+      }
+    };
+
+    const recordedEvents: Array<{ eventType: string; severity: string; message: string }> = [];
+    const deps: GithubDeployDependencies = {
+      appDatabase,
+      dockerOps,
+      githubClient,
+      resolveCredential: async () => ({ success: true, token: "ghs_fake", source: "installation" }),
+      reconcileRouting: async () => ({ lastReconcileSucceeded: true, lastError: null }),
+      recordEvent: (input) =>
+        recordedEvents.push({
+          eventType: input.eventType,
+          severity: input.severity ?? "info",
+          message: input.message
+        }),
+      cloneUrlOverride: `file://${bareRepo}`
+    };
+
+    const result = await deployFromGithub(deps, app.id);
+
+    // Retried exactly once: first WITH cache (undefined/false), then WITHOUT.
+    assert.equal(noCacheFlags.length, 2);
+    assert.ok(!noCacheFlags[0], "first attempt uses the cache");
+    assert.equal(noCacheFlags[1], true, "the retry disables the cache");
+
+    // The retry got past the build and stopped at the container step, i.e.
+    // the corrupt-cache error did NOT surface as the deploy failure.
+    assert.match(result.message, /expected-stop-after-build/);
+    assert.ok(
+      recordedEvents.some((e) => e.severity === "warning" && /corrupt/i.test(e.message)),
+      "the operator is told the cache was corrupt and a no-cache retry ran"
+    );
+  });
+
+  test("a genuine build failure is NOT retried with no-cache", async () => {
+    const app = makeApp("staxxio-real-failure");
+    appDatabase.upsertAppSource(app.id, {
+      provider: "github",
+      repositoryOwner: "MNIKevin202",
+      repositoryName: "Staxxio",
+      repositoryFullName: "MNIKevin202/Staxxio",
+      repositoryCloneUrl: "https://github.com/MNIKevin202/Staxxio.git",
+      repositoryId: null,
+      repositoryVisibility: null,
+      branch: "main",
+      subdirectory: ".",
+      deploymentMode: "dockerfile",
+      dockerfilePath: "tools/roadmap-studio/Dockerfile",
+      buildContext: ".",
+      selectedStrategy: "dockerfile",
+      containerPort: 4319,
+      autoDeploy: false
+    });
+
+    const githubClient: SourceProviderClient = {
+      ...unusedGithubClient(),
+      resolveBranchCommit: async () => "e".repeat(40),
+      listCommits: async () => ({ items: [], hasMore: false })
+    };
+
+    let buildCalls = 0;
+    const dockerOps: GithubDeployDependencies["dockerOps"] = {
+      ...unusedDockerOps(),
+      async imageExists() {
+        return false;
+      },
+      async buildImage() {
+        buildCalls += 1;
+        // A real code failure — the exact staxxio symptom — must be
+        // reported, never silently retried and hidden.
+        throw new BuildImageError(
+          "The command '/bin/sh -c npm run build' returned a non-zero code: 1",
+          "build log"
+        );
+      }
+    };
+
+    const deps: GithubDeployDependencies = {
+      appDatabase,
+      dockerOps,
+      githubClient,
+      resolveCredential: async () => ({ success: true, token: "ghs_fake", source: "installation" }),
+      reconcileRouting: async () => ({ lastReconcileSucceeded: true, lastError: null }),
+      recordEvent: () => {},
+      cloneUrlOverride: `file://${bareRepo}`
+    };
+
+    const result = await deployFromGithub(deps, app.id);
+
+    assert.equal(buildCalls, 1, "a real failure is built once, never retried");
+    assert.equal(result.success, false);
+    assert.match(result.message, /npm run build/);
   });
 });

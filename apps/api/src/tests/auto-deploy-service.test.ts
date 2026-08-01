@@ -37,6 +37,7 @@ describe("createAutoDeployScheduler", () => {
       resolveBranchHead: async () => "new",
       triggerDeploy: async (appId) => {
         deployed.push(appId);
+        return true;
       },
       logger: silentLogger
     });
@@ -52,6 +53,7 @@ describe("createAutoDeployScheduler", () => {
       resolveBranchHead: async () => "same",
       triggerDeploy: async (appId) => {
         deployed.push(appId);
+        return true;
       },
       logger: silentLogger
     });
@@ -67,6 +69,7 @@ describe("createAutoDeployScheduler", () => {
       resolveBranchHead: async () => "new",
       triggerDeploy: async (appId) => {
         deployed.push(appId);
+        return true;
       },
       logger: silentLogger
     });
@@ -83,7 +86,7 @@ describe("createAutoDeployScheduler", () => {
         resolveCalls += 1;
         return "new";
       },
-      triggerDeploy: async () => {},
+      triggerDeploy: async () => true,
       logger: silentLogger
     });
 
@@ -98,6 +101,7 @@ describe("createAutoDeployScheduler", () => {
       resolveBranchHead: async () => "first",
       triggerDeploy: async (appId) => {
         deployed.push(appId);
+        return true;
       },
       logger: silentLogger
     });
@@ -123,11 +127,86 @@ describe("createAutoDeployScheduler", () => {
       },
       triggerDeploy: async (appId) => {
         deployed.push(appId);
+        return true;
       },
       logger: silentLogger
     });
 
     await scheduler.runOnce();
     assert.deepEqual(deployed, [2]);
+  });
+
+  test("circuit breaker: stops retrying a commit after N consecutive failures", async () => {
+    let attempts = 0;
+    const scheduler = createAutoDeployScheduler({
+      appDatabase: fakeDb({ candidates: [candidate({ appId: 5, latestDeployedCommitSha: "old" })] }),
+      resolveBranchHead: async () => "broken-commit",
+      // Deploy always fails — deployed-commit never advances, so the naive
+      // scheduler would re-attempt every tick forever.
+      triggerDeploy: async () => {
+        attempts += 1;
+        return false;
+      },
+      maxConsecutiveFailures: 3,
+      logger: silentLogger
+    });
+
+    for (let tick = 0; tick < 6; tick += 1) {
+      await scheduler.runOnce();
+    }
+
+    assert.equal(attempts, 3, "it tries three times, then the breaker opens");
+  });
+
+  test("circuit breaker: a NEW commit resets the breaker and gets fresh attempts", async () => {
+    let head = "commit-a";
+    let attempts = 0;
+    const scheduler = createAutoDeployScheduler({
+      appDatabase: fakeDb({ candidates: [candidate({ appId: 6, latestDeployedCommitSha: "old" })] }),
+      resolveBranchHead: async () => head,
+      triggerDeploy: async () => {
+        attempts += 1;
+        return false;
+      },
+      maxConsecutiveFailures: 2,
+      logger: silentLogger
+    });
+
+    await scheduler.runOnce();
+    await scheduler.runOnce();
+    await scheduler.runOnce(); // breaker open for commit-a
+    assert.equal(attempts, 2);
+
+    head = "commit-b"; // a new push
+    await scheduler.runOnce();
+    await scheduler.runOnce();
+    await scheduler.runOnce(); // breaker open for commit-b
+    assert.equal(attempts, 4, "the new commit got its own two attempts");
+  });
+
+  test("circuit breaker: a success clears the breaker so later commits deploy", async () => {
+    let succeed = false;
+    let attempts = 0;
+    const scheduler = createAutoDeployScheduler({
+      appDatabase: fakeDb({ candidates: [candidate({ appId: 8, latestDeployedCommitSha: "old" })] }),
+      resolveBranchHead: async () => "same-commit",
+      triggerDeploy: async () => {
+        attempts += 1;
+        return succeed;
+      },
+      maxConsecutiveFailures: 2,
+      logger: silentLogger
+    });
+
+    await scheduler.runOnce(); // fail 1
+    succeed = true;
+    await scheduler.runOnce(); // success — clears the breaker
+    assert.equal(attempts, 2);
+
+    // A subsequent failing run starts a fresh count rather than being
+    // immediately blocked by the old one.
+    succeed = false;
+    await scheduler.runOnce();
+    assert.equal(attempts, 3, "the breaker was cleared by the earlier success");
   });
 });

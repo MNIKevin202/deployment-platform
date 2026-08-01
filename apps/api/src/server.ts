@@ -424,7 +424,8 @@ const autoDeployScheduler = createAutoDeployScheduler({
     );
   },
   triggerDeploy: async (appId) => {
-    await deployFromGithub(deployDeps, appId, {});
+    const result = await deployFromGithub(deployDeps, appId, {});
+    return result.success;
   },
   logger: app.log
 });
@@ -693,6 +694,37 @@ app.post<{ Params: AppIdParams }>(
       return reply.code(404).send({
         success: false,
         message: "App not found"
+      });
+    }
+
+    // An app linked to a GitHub repository has no meaningful "stored image"
+    // to recreate from — its real image is built from source and swapped in
+    // by deployFromGithub. Recreating from app.image would pull the
+    // create-time placeholder (nginx:alpine) and destroy the running build.
+    // So Redeploy on a repo-linked app rebuilds from source, exactly like
+    // the Source tab's "Deploy from GitHub".
+    const source = appDatabase.getAppSource(storedApp.id);
+
+    if (source) {
+      const deployResult = await deployFromGithub(deployDeps, storedApp.id, {});
+
+      if (!deployResult.success) {
+        app.log.error(
+          { appId: storedApp.id, message: deployResult.message },
+          "App redeploy (from GitHub source) failed"
+        );
+
+        return reply.code(502).send({
+          success: false,
+          message: deployResult.message,
+          rolledBack: deployResult.rolledBack
+        });
+      }
+
+      return reply.send({
+        success: true,
+        message: deployResult.message,
+        containerId: deployResult.containerId
       });
     }
 

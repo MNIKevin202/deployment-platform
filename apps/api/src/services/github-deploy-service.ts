@@ -7,7 +7,7 @@ import { buildResourceHostConfig } from "./resource-limits.js";
 import { buildPublishedPortConfig } from "./port-bindings.js";
 import type { RedeployDockerOps } from "./redeploy-service.js";
 import type { GithubBuildDockerOps } from "./github-deploy-docker-ops.js";
-import { BuildImageError } from "./github-deploy-docker-ops.js";
+import { BuildImageError, isRecoverableBuildCacheError } from "./github-deploy-docker-ops.js";
 import type { RecordEventFn } from "./deployment-event-service.js";
 import { SourceClientError, type SourceProviderClient } from "./source-provider.js";
 import type { ResolvedGithubToken } from "./github-token-service.js";
@@ -280,7 +280,16 @@ function describeGithubClientError(error: unknown): string {
 export async function deployFromGithub(
   deps: GithubDeployDependencies,
   appId: number,
-  options: { expectedCommitSha?: string } = {}
+  options: {
+    expectedCommitSha?: string;
+    /**
+     * Force a cache-free build. Set by the operator's "Deploy without
+     * cache" action. The pipeline also falls back to a no-cache build on
+     * its own when a recoverable cache-corruption error is detected, so
+     * this is only for a deliberate up-front choice.
+     */
+    forceNoCache?: boolean;
+  } = {}
 ): Promise<GithubDeployResult> {
   const { appDatabase, dockerOps, githubClient, resolveCredential, recordEvent } = deps;
   const now = deps.now ?? (() => new Date());
@@ -508,7 +517,10 @@ export async function deployFromGithub(
 
     const shortSha = commitSha.slice(0, 12);
     const imageTag = `deployment-app-${appId}:${shortSha}`;
-    const alreadyBuilt = await dockerOps.imageExists(imageTag);
+    // A no-cache deploy must always rebuild — reusing the existing image
+    // would defeat the operator's explicit "build fresh" choice, and it's
+    // also the escape hatch when a prior cached image is itself suspect.
+    const alreadyBuilt = !options.forceNoCache && (await dockerOps.imageExists(imageTag));
 
     if (alreadyBuilt) {
       progress("building-image", `reusing existing image for commit ${shortSha} (already built)`);
@@ -521,18 +533,60 @@ export async function deployFromGithub(
         at: now().toISOString()
       });
     } else {
-      try {
-        const buildResult = await dockerOps.buildImage({
+      /**
+       * Runs the build once. Split out so the recoverable-cache-error path
+       * can call it a second time with the cache disabled without
+       * duplicating the option list.
+       */
+      const runBuild = (noCache: boolean) =>
+        dockerOps.buildImage({
           contextPath: buildPlan.buildContextPath,
           dockerfileRelativePath: relative(buildPlan.buildContextPath, buildPlan.dockerfilePath),
           tag: imageTag,
           timeoutMs: buildTimeoutMs,
           maxLogBytes,
+          noCache,
           // Feeds Docker's "Step X/Y" lines to the progress overlay, which
           // is what makes the bar move during the long build stage rather
           // than sitting at "Building image" for minutes.
           onOutput: (chunk) => progressReporter.observeBuildOutput(chunk)
         });
+
+      try {
+        let buildResult: Awaited<ReturnType<typeof runBuild>>;
+
+        try {
+          buildResult = await runBuild(options.forceNoCache ?? false);
+        } catch (firstError) {
+          // Docker's layer cache can reference a parent snapshot that was
+          // pruned out from under it — the classic "parent snapshot … does
+          // not exist" failure. It's deterministic: every cached build then
+          // fails identically until one no-cache build rebuilds the chain.
+          // Retry once, cache disabled, before giving up. Never retried when
+          // the cache was already off (that build's failure is real) or for
+          // any non-cache error (a genuine code failure is never masked).
+          if (
+            firstError instanceof BuildImageError &&
+            !options.forceNoCache &&
+            isRecoverableBuildCacheError(firstError.message)
+          ) {
+            progress(
+              "building-image",
+              "build cache was corrupt (missing parent snapshot); rebuilding without cache"
+            );
+            recordEvent({
+              appId,
+              eventType: "github-deploy-progress",
+              severity: "warning",
+              message:
+                "Detected a corrupt Docker build cache (missing parent snapshot). Retrying the build without cache.",
+              metadata: { stage: "building-image" }
+            });
+            buildResult = await runBuild(true);
+          } else {
+            throw firstError;
+          }
+        }
 
         // Persist the build output so the Logs tab can show it. Stored before
         // the container swap, so even a later rollback keeps the build record.
@@ -749,6 +803,12 @@ export async function deployFromGithub(
       containerId: finalInspection.id,
       status: finalInspection.status
     });
+
+    // Record the image this deploy actually swapped in, replacing the
+    // create-time placeholder. Without this, the Overview keeps showing the
+    // placeholder and a plain Redeploy would recreate the container from it
+    // — silently replacing this working build with nginx:alpine.
+    appDatabase.updateAppImage(app.id, imageTag);
 
     appDatabase.updateDeployedCommit(appId, {
       commitSha,

@@ -132,6 +132,7 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
   const [deployInProgress, setDeployInProgress] = useState(false);
   const [showDeployConfirm, setShowDeployConfirm] = useState(false);
   const [deploying, setDeploying] = useState(false);
+  const [deployNoCache, setDeployNoCache] = useState(false);
   const [deployError, setDeployError] = useState("");
   const [savingAutoDeploy, setSavingAutoDeploy] = useState(false);
 
@@ -229,7 +230,10 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
       const response = await fetch(`/api/apps/${appId}/deploy/github`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({})
+        // noCache is the operator's escape hatch for a corrupt Docker build
+        // cache (the "parent snapshot does not exist" failure). Only sent
+        // when ticked, so a normal deploy is unchanged.
+        body: JSON.stringify(deployNoCache ? { noCache: true } : {})
       });
 
       const result = (await response.json().catch(() => ({}))) as Partial<GithubDeployResponse>;
@@ -612,12 +616,26 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
               )}
               . The current container is preserved and automatically restored if the build or
               health verification fails.
+              <label className="checkbox-field" style={{ marginTop: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={deployNoCache}
+                  onChange={(event) => setDeployNoCache(event.target.checked)}
+                />
+                <span>
+                  Build without cache — slower, but clears a corrupt build cache (use this if a
+                  deploy fails with "parent snapshot … does not exist").
+                </span>
+              </label>
             </p>
           }
-          confirmLabel="Deploy"
+          confirmLabel={deployNoCache ? "Deploy without cache" : "Deploy"}
           confirming={deploying}
           onConfirm={() => void confirmDeploy()}
-          onCancel={() => setShowDeployConfirm(false)}
+          onCancel={() => {
+            setShowDeployConfirm(false);
+            setDeployNoCache(false);
+          }}
         />
       )}
 
