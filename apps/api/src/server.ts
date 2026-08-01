@@ -11,6 +11,11 @@ import {
   buildBriefRequestSchema
 } from "./schemas/app-wizard.js";
 import { deployTemplateStack } from "./services/template-deployment-service.js";
+import {
+  createInstallJob,
+  NULL_REPORTER,
+  subscribeToInstall
+} from "./services/install-progress-service.js";
 import { createRoutingService } from "./services/routing-service.js";
 import { updateAppRouting } from "./services/app-routing-service.js";
 import {
@@ -947,6 +952,21 @@ const creationServiceDeps = {
   recordEvent
 };
 
+/**
+ * Validates a client-supplied install id before it is used as a map key or
+ * echoed back in a stream. Deliberately narrow — a UUID from
+ * crypto.randomUUID() is all the browser ever sends.
+ */
+function parseInstallId(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  return /^[A-Za-z0-9-]{8,64}$/.test(trimmed) ? trimmed : null;
+}
+
 const deletionServiceDeps = {
   appDatabase,
   dockerOps: createDeletionDockerOps(docker),
@@ -1069,6 +1089,12 @@ app.post(
       });
     }
 
+    // An optional client-supplied id for live progress. The browser opens
+    // the SSE stream for this id BEFORE posting, so nothing is missed; when
+    // absent, creation runs exactly as before with no tracking at all.
+    const installId = parseInstallId(request.headers["x-install-id"]);
+    const reporter = installId ? createInstallJob(installId) : NULL_REPORTER;
+
     const mainInput = {
       name: parsedBody.data.name,
       image: parsedBody.data.image,
@@ -1091,11 +1117,12 @@ app.post(
     if (parsedBody.data.companions.length > 0) {
       const stack = await deployTemplateStack(
         {
-          createApp: (input) => createAppWithConfig(creationServiceDeps, input),
+          createApp: (input) => createAppWithConfig(creationServiceDeps, input, reporter),
           removeApp: async (appId) => {
             const removal = await deleteManagedAppByAppId(deletionServiceDeps, appId);
             return removal.success;
-          }
+          },
+          beginProgress: (names) => reporter.begin(names)
         },
         { main: mainInput, companions: parsedBody.data.companions }
       );
@@ -1106,12 +1133,16 @@ app.post(
           "Template stack creation failed"
         );
 
+        reporter.fail(stack.message);
+
         return reply.code(stack.statusCode ?? 502).send({
           success: false,
           message: stack.message,
           rollback: stack.rollback
         });
       }
+
+      reporter.succeed();
 
       return reply.code(201).send({
         success: true,
@@ -1121,16 +1152,22 @@ app.post(
       });
     }
 
-    const result = await createAppWithConfig(creationServiceDeps, mainInput);
+    reporter.begin([mainInput.name]);
+
+    const result = await createAppWithConfig(creationServiceDeps, mainInput, reporter);
 
     if (!result.success || !result.app) {
       app.log.error({ message: result.message }, "Wizard app creation failed");
+
+      reporter.fail(result.message);
 
       return reply.code(result.statusCode ?? 502).send({
         success: false,
         message: result.message
       });
     }
+
+    reporter.succeed();
 
     return reply.code(201).send({
       success: true,
@@ -1139,6 +1176,100 @@ app.post(
     });
   }
 );
+
+/**
+ * Live progress for an in-flight install, as Server-Sent Events. The client
+ * generates the id, opens this stream, and only then posts to
+ * /apps/wizard with the same id in X-Install-Id — so the stream is already
+ * listening before any work starts and no early update is lost.
+ *
+ * Follows the same hijack/heartbeat/cleanup shape as the container log
+ * stream in routes/logs.ts.
+ */
+app.get("/apps/wizard/install/:installId/progress", async (request, reply) => {
+  const installId = parseInstallId(
+    (request.params as { installId?: string }).installId
+  );
+
+  if (!installId) {
+    return reply.code(400).send({ success: false, message: "Invalid install id" });
+  }
+
+  reply.hijack();
+  const raw = reply.raw;
+
+  raw.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no"
+  });
+  raw.write("retry: 3000\n\n");
+
+  function send(event: string, data: unknown): void {
+    if (!raw.writableEnded) {
+      raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+  }
+
+  const heartbeat = setInterval(() => {
+    if (!raw.writableEnded) {
+      raw.write(": ping\n\n");
+    }
+  }, 25000);
+
+  let unsubscribe: (() => void) | null = null;
+  let closed = false;
+
+  function cleanup(): void {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    clearInterval(heartbeat);
+    unsubscribe?.();
+    if (!raw.writableEnded) {
+      raw.end();
+    }
+  }
+
+  request.raw.on("close", cleanup);
+
+  // The POST that creates the job may not have arrived yet — this stream is
+  // opened first on purpose. Poll briefly for the job to appear rather than
+  // reporting a spurious "not found" for an install that is about to start.
+  const waitStarted = Date.now();
+  const WAIT_TIMEOUT_MS = 15_000;
+
+  const attach = () => {
+    if (closed) {
+      return;
+    }
+
+    unsubscribe = subscribeToInstall(installId, (progress) => {
+      send("progress", progress);
+
+      if (progress.status !== "running") {
+        // Give the event a tick to flush before closing the stream.
+        setTimeout(cleanup, 50);
+      }
+    });
+
+    if (unsubscribe) {
+      return;
+    }
+
+    if (Date.now() - waitStarted > WAIT_TIMEOUT_MS) {
+      send("error", { message: "No install with that id is running." });
+      cleanup();
+      return;
+    }
+
+    setTimeout(attach, 200);
+  };
+
+  attach();
+});
 
 /**
  * Deterministic, side-effect-free build-brief generation. No app is

@@ -2376,6 +2376,90 @@ code {
   border: 0;
 }
 
+/* ---------- Install progress ---------- */
+
+.install-progress-modal {
+  max-width: 560px;
+}
+
+.install-progress-body {
+  padding: 4px 22px 18px;
+}
+
+.install-progress-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-soft);
+  overflow: hidden;
+}
+
+.install-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-accent);
+  /*
+   * Eases the jump between discrete stages. The VALUE is always the real
+   * measurement — this only smooths how that value is drawn, it never
+   * animates progress that hasn't happened.
+   */
+  transition: width 300ms ease-out;
+}
+
+.install-progress-fill.complete {
+  background: var(--color-success);
+}
+
+.install-progress-fill.failed {
+  background: var(--color-danger);
+}
+
+.install-progress-percent {
+  margin: 10px 0 4px;
+  font-size: 0.9rem;
+}
+
+.install-progress-services {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.install-progress-services li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+
+.install-progress-service-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.install-progress-service-bar {
+  display: block;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-surface-raised);
+  overflow: hidden;
+}
+
+.install-progress-service-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 300ms ease-out;
+}
+
+.install-progress-service-fill.failed {
+  background: var(--color-danger);
+}
+
 .template-card-body {
   display: flex;
   flex-direction: column;

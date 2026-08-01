@@ -18,6 +18,7 @@ import {
   APP_CREATION_IDEMPOTENCY_SCOPE,
   fingerprintCreateAppRequest
 } from "./idempotency.js";
+import { NULL_REPORTER, type InstallReporter } from "./install-progress-service.js";
 
 export interface AppCreationEnvVarInput {
   key: string;
@@ -245,7 +246,8 @@ async function failDockerCreation(
  */
 async function performCreateAppWithConfig(
   deps: CreateAppServiceDependencies,
-  input: CreateAppWithConfigInput
+  input: CreateAppWithConfigInput,
+  reporter: InstallReporter = NULL_REPORTER
 ): Promise<CreateAppServiceResult> {
   const {
     appDatabase,
@@ -459,8 +461,12 @@ async function performCreateAppWithConfig(
   let containerId: string | null = null;
 
   try {
-    await dockerOps.pullImage(input.image);
+    reporter.setStage(input.name, "pulling");
+    await dockerOps.pullImage(input.image, (event) =>
+      reporter.setPullProgress(input.name, event)
+    );
 
+    reporter.setStage(input.name, "storage");
     for (const volume of resolvedVolumes) {
       await dockerOps.ensureVolume(volume.volumeName, input.name);
     }
@@ -478,6 +484,7 @@ async function performCreateAppWithConfig(
       appDatabase.listAppPublishedPorts(createdApp.id)
     );
 
+    reporter.setStage(input.name, "creating");
     const created = await dockerOps.createContainer({
       name: containerName,
       Image: input.image,
@@ -528,6 +535,7 @@ async function performCreateAppWithConfig(
   }
 
   try {
+    reporter.setStage(input.name, "starting");
     await dockerOps.startContainer(containerId);
 
     const inspected = await dockerOps.inspectContainer(containerId);
@@ -559,6 +567,7 @@ async function performCreateAppWithConfig(
   let routingWarning: string | null = null;
 
   try {
+    reporter.setStage(input.name, "routing");
     const routingStatus = await reconcileRouting(appDatabase);
 
     if (routingStatus.lastReconcileSucceeded === false) {
@@ -649,12 +658,16 @@ async function performCreateAppWithConfig(
  */
 export async function createAppWithConfig(
   deps: CreateAppServiceDependencies,
-  input: CreateAppWithConfigInput
+  input: CreateAppWithConfigInput,
+  // Passed separately rather than on `input` so it can never reach
+  // fingerprintCreateAppRequest below — a progress listener is not part of
+  // what makes two requests the same request.
+  reporter: InstallReporter = NULL_REPORTER
 ): Promise<CreateAppServiceResult> {
   const { idempotencyKey, ...createInput } = input;
 
   if (!idempotencyKey) {
-    return performCreateAppWithConfig(deps, createInput);
+    return performCreateAppWithConfig(deps, createInput, reporter);
   }
 
   const { appDatabase } = deps;
@@ -687,7 +700,7 @@ export async function createAppWithConfig(
     return outcome.body as CreateAppServiceResult;
   }
 
-  const result = await performCreateAppWithConfig(deps, createInput);
+  const result = await performCreateAppWithConfig(deps, createInput, reporter);
 
   if (result.success) {
     appDatabase.complete(

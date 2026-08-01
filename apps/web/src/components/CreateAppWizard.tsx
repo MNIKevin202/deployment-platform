@@ -20,7 +20,8 @@ import type {
   SourceRepository,
   SuggestPortResponse,
   WizardEnvVarInput,
-  WizardVolumeInput
+  WizardVolumeInput,
+  InstallProgress
 } from "../types/api";
 import {
   isValidAppName,
@@ -34,6 +35,7 @@ import {
   validateStorageMounts
 } from "../lib/wizardValidation";
 import BulkEnvVarDialog from "./BulkEnvVarDialog";
+import InstallProgressModal from "./InstallProgressModal";
 import {
   companionAppName,
   generateSecret,
@@ -186,14 +188,18 @@ const NETWORK_RETRY_DELAY_MS = 1500;
  */
 async function postAppCreateWithRetry(
   payload: CreateAppWizardPayload,
-  idempotencyKey: string
+  idempotencyKey: string,
+  installId: string
 ): Promise<Response> {
   const attempt = () =>
     fetch("/api/apps/wizard", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Idempotency-Key": idempotencyKey
+        "Idempotency-Key": idempotencyKey,
+        // Ties this request to the progress stream the caller has already
+        // opened for the same id, so no early update can be missed.
+        "X-Install-Id": installId
       },
       body: JSON.stringify(payload)
     });
@@ -301,6 +307,9 @@ export default function CreateAppWizard({
 
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
+  const [installProgress, setInstallProgress] = useState<InstallProgress | null>(null);
+  const [showInstallProgress, setShowInstallProgress] = useState(false);
+  const progressSourceRef = useRef<EventSource | null>(null);
   const [createdApp, setCreatedApp] = useState<CreatedAppSummary | null>(null);
   const [postCreateNotice, setPostCreateNotice] = useState("");
 
@@ -354,8 +363,21 @@ export default function CreateAppWizard({
     setCreateError("");
     setCreatedApp(null);
     setPostCreateNotice("");
+    setInstallProgress(null);
+    setShowInstallProgress(false);
+    progressSourceRef.current?.close();
+    progressSourceRef.current = null;
     submitLockRef.current = false;
   }, []);
+
+  // A wizard unmounted mid-install must not leave its stream open.
+  useEffect(
+    () => () => {
+      progressSourceRef.current?.close();
+      progressSourceRef.current = null;
+    },
+    []
+  );
 
   useEffect(() => {
     if (open) {
@@ -866,6 +888,8 @@ export default function CreateAppWizard({
       setCreating(true);
       setCreateError("");
       setPostCreateNotice("");
+      setInstallProgress(null);
+      setShowInstallProgress(true);
 
       const payload: CreateAppWizardPayload = {
         name: trimmedName,
@@ -932,8 +956,14 @@ export default function CreateAppWizard({
       // one (the next time this function runs, e.g. a later click after a
       // real failure).
       const idempotencyKey = crypto.randomUUID();
+      const installId = crypto.randomUUID();
 
-      const response = await postAppCreateWithRetry(payload, idempotencyKey);
+      // Subscribe BEFORE posting: the server creates the progress job when
+      // the POST arrives, so opening the stream first is what guarantees
+      // the very first stage change is seen rather than raced.
+      openProgressStream(installId);
+
+      const response = await postAppCreateWithRetry(payload, idempotencyKey, installId);
 
       const result = (await response
         .json()
@@ -957,7 +987,42 @@ export default function CreateAppWizard({
     } finally {
       setCreating(false);
       submitLockRef.current = false;
+      closeProgressStream();
     }
+  };
+
+  /**
+   * Opens the install progress stream. Kept deliberately non-fatal: if SSE
+   * can't be established, the install itself is unaffected — the dialog
+   * just shows no percentage, and the create request's own response
+   * remains the source of truth for success or failure.
+   */
+  const openProgressStream = (installId: string) => {
+    closeProgressStream();
+
+    try {
+      const source = new EventSource(`/api/apps/wizard/install/${installId}/progress`);
+      progressSourceRef.current = source;
+
+      source.addEventListener("progress", (event) => {
+        try {
+          setInstallProgress(JSON.parse((event as MessageEvent).data) as InstallProgress);
+        } catch {
+          // A malformed frame is skipped rather than breaking the dialog.
+        }
+      });
+
+      // The browser's EventSource retries on its own; nothing to do here
+      // beyond not treating a transient drop as an install failure.
+      source.addEventListener("error", () => {});
+    } catch {
+      progressSourceRef.current = null;
+    }
+  };
+
+  const closeProgressStream = () => {
+    progressSourceRef.current?.close();
+    progressSourceRef.current = null;
   };
 
   /**
@@ -2367,6 +2432,14 @@ export default function CreateAppWizard({
         error=""
         onSubmit={applyBulkEnv}
         onCancel={() => setShowBulkEnv(false)}
+      />
+
+      <InstallProgressModal
+        open={showInstallProgress}
+        appName={trimmedName}
+        progress={installProgress}
+        error={createError}
+        onClose={() => setShowInstallProgress(false)}
       />
     </div>
   );

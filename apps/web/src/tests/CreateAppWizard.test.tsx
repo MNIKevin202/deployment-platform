@@ -324,8 +324,13 @@ describe("CreateAppWizard — single-submit and idempotent create", () => {
     await fillBasicsAndAdvanceToReview(user);
     await user.click(screen.getByRole("button", { name: "Create App" }));
 
+    // The message now appears twice on purpose: in the install progress
+    // dialog, and on the Review step behind it — so dismissing the dialog
+    // never leaves a Create button with no explanation next to it.
     await waitFor(() => {
-      expect(screen.getByText('An app named "routing-test" already exists')).toBeInTheDocument();
+      expect(
+        screen.getAllByText('An app named "routing-test" already exists').length
+      ).toBeGreaterThan(0);
     });
 
     const button = screen.getByRole("button", { name: "Create App" });

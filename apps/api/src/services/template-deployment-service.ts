@@ -70,6 +70,13 @@ export interface DeployTemplateStackDependencies {
    * allowed to mask the original error.
    */
   removeApp: (appId: number) => Promise<boolean>;
+  /**
+   * Declares every service this install will create, in creation order, so
+   * a progress bar knows its denominator before any work begins rather than
+   * growing it as services appear. Optional — callers that don't report
+   * progress simply omit it.
+   */
+  beginProgress?: (serviceNames: string[]) => void;
 }
 
 /**
@@ -96,8 +103,15 @@ export async function deployTemplateStack(
   deps: DeployTemplateStackDependencies,
   input: DeployTemplateStackInput
 ): Promise<DeployTemplateStackResult> {
-  const { createApp, removeApp } = deps;
+  const { createApp, removeApp, beginProgress } = deps;
   const created: CreatedAppSummary[] = [];
+
+  // Companions first, then the main app — the same order they're created in
+  // below, so the bar advances left to right through the list it showed.
+  beginProgress?.([
+    ...input.companions.map((companion) => companion.name),
+    input.main.name
+  ]);
 
   const rollback = async (): Promise<TemplateStackRollbackReport> => {
     const leftover: string[] = [];

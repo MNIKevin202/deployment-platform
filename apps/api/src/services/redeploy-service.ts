@@ -7,6 +7,7 @@ import { buildResourceHostConfig } from "./resource-limits.js";
 import { buildPublishedPortConfig } from "./port-bindings.js";
 import { getErrorStatusCode } from "../docker-errors.js";
 import type { RecordEventFn } from "./deployment-event-service.js";
+import type { PullProgressEvent } from "./install-progress-service.js";
 
 const PROTECTED_CONTAINER_NAMES = new Set([
   "deployment-platform-api",
@@ -34,7 +35,13 @@ export interface ContainerInspectResult {
  * dependency on the real Docker API surface.
  */
 export interface RedeployDockerOps {
-  pullImage(image: string): Promise<void>;
+  /**
+   * `onProgress` receives Docker's own per-layer download events, which is
+   * what makes an install progress bar a real measurement rather than an
+   * animation. Optional throughout: every existing caller and test fake
+   * that ignores it behaves exactly as before.
+   */
+  pullImage(image: string, onProgress?: (event: PullProgressEvent) => void): Promise<void>;
   createContainer(options: ContainerCreateOptions): Promise<{ id: string }>;
   startContainer(id: string): Promise<void>;
   inspectContainer(id: string): Promise<ContainerInspectResult>;
@@ -59,18 +66,30 @@ export interface RedeployDockerOps {
 
 export function createDockerOps(docker: Docker): RedeployDockerOps {
   return {
-    async pullImage(image) {
+    async pullImage(image, onProgress) {
       const stream = await docker.pull(image);
 
       await new Promise<void>((resolve, reject) => {
-        docker.modem.followProgress(stream, (error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
+        docker.modem.followProgress(
+          stream,
+          (error) => {
+            if (error) {
+              reject(error);
+              return;
+            }
 
-          resolve();
-        });
+            resolve();
+          },
+          // Progress reporting must never be able to break a pull, so a
+          // throwing listener is swallowed rather than allowed to reject.
+          (event: PullProgressEvent) => {
+            try {
+              onProgress?.(event);
+            } catch {
+              // Ignored deliberately — see above.
+            }
+          }
+        );
       });
     },
 
