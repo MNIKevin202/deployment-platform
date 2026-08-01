@@ -201,10 +201,16 @@ export function generateSecret(length = 24): string {
  */
 export const BLUEPRINT_MODEL_CHOICES: TemplateModelChoice[] = [
   {
+    id: "gemma3:270m",
+    label: "Gemma 3 270M — fastest",
+    sizeLabel: "~300 MB",
+    note: "Measured ~3.5x faster than Llama 3.2 1B on a 2 vCPU server. Good for short chat and simple questions; not for code or multi-step reasoning."
+  },
+  {
     id: "llama3.2:1b",
-    label: "Llama 3.2 1B — fastest",
+    label: "Llama 3.2 1B — fast",
     sizeLabel: "~1.3 GB",
-    note: "Best choice on a 4 GB server. Least capable, but responds quickest."
+    note: "Fits comfortably on a 4 GB server, but derails easily on longer or more involved prompts."
   },
   {
     id: "qwen3:1.7b",
@@ -271,7 +277,28 @@ export const APP_TEMPLATES: AppTemplate[] = [
       { key: "WEBUI_SECRET_KEY", generate: "password", generateLength: 48, secret: true },
       // V1 is local-models-only; leaving the OpenAI integration on makes the
       // UI probe an endpoint that was never configured.
-      { key: "ENABLE_OPENAI_API", value: "false" }
+      { key: "ENABLE_OPENAI_API", value: "false" },
+      // Open WebUI 0.11 enables Notes, Calendar, Automations, and the code
+      // interpreter by default, and each registers a NATIVE TOOL that is
+      // attached to every chat message. That breaks Blueprint two ways on
+      // the small CPU models this template is built around:
+      //   - Gemma has no tool support at all, so the request is rejected
+      //     outright with "does not support tools" and nothing is answered;
+      //   - Llama 3.2 accepts tools, and a 1-3B model handed a pile of
+      //     function schemas starts emitting invented calendar/note code
+      //     instead of replying (verified live — this is exactly the
+      //     "confused" output it produces).
+      // None of these features are usable on a CPU-only install anyway, so
+      // they start off. Re-enable any of them from Admin Settings once a
+      // tool-capable model is in use.
+      { key: "ENABLE_CALENDAR", value: "false" },
+      { key: "ENABLE_NOTES", value: "false" },
+      { key: "ENABLE_AUTOMATIONS", value: "false" },
+      { key: "ENABLE_CODE_INTERPRETER", value: "false" },
+      // A second model call per message purely to suggest follow-up
+      // questions — real CPU cost on a 2 vCPU box, for output most people
+      // don't read.
+      { key: "ENABLE_FOLLOW_UP_GENERATION", value: "false" }
     ],
     volumes: ["/app/backend/data"],
     companions: [

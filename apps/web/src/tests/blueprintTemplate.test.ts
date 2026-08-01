@@ -96,9 +96,38 @@ describe("Blueprint template", () => {
     );
   });
 
-  test("offers CPU-friendly model tiers spanning roughly 1B to 8B", () => {
+  /**
+   * Open WebUI 0.11 turns Notes, Calendar, Automations, and the code
+   * interpreter on by default, and each attaches a native tool to every
+   * message. Verified live against this exact setup: Gemma rejects the
+   * request entirely ("does not support tools"), and Llama 3.2 accepts it
+   * and then answers with invented calendar/note code instead of replying.
+   * Neither is usable on the CPU-only models this template targets, so the
+   * template must ship with them off.
+   */
+  test("disables the Open WebUI features that attach tools to every message", () => {
+    for (const key of [
+      "ENABLE_CALENDAR",
+      "ENABLE_NOTES",
+      "ENABLE_AUTOMATIONS",
+      "ENABLE_CODE_INTERPRETER"
+    ]) {
+      expect(blueprint!.env.find((env) => env.key === key)?.value, `${key} must be off`).toBe(
+        "false"
+      );
+    }
+  });
+
+  test("skips the extra follow-up generation call", () => {
+    expect(
+      blueprint!.env.find((env) => env.key === "ENABLE_FOLLOW_UP_GENERATION")?.value
+    ).toBe("false");
+  });
+
+  test("offers CPU-friendly model tiers spanning roughly 270M to 8B", () => {
     expect(blueprint!.modelChoices).toBe(BLUEPRINT_MODEL_CHOICES);
     const ids = BLUEPRINT_MODEL_CHOICES.map((choice) => choice.id);
+    expect(ids).toContain("gemma3:270m");
     expect(ids).toContain("llama3.2:1b");
     expect(ids).toContain("llama3.2:3b");
     expect(ids).toContain("llama3.1:8b");

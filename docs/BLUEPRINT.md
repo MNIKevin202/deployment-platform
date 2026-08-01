@@ -156,3 +156,44 @@ silently discarded.
 - **Host disk is not pre-checked.** RAM and vCPU are compared against the
   template's stated minimum before install; free disk space is not, since
   the platform has no host-disk figure at that point.
+
+## Open WebUI features that must stay off
+
+Open WebUI 0.11 enables **Notes, Calendar, Automations, and the code
+interpreter** by default. Each registers a *native tool* that is attached to
+every chat message, and that breaks Blueprint on the small CPU models this
+template is built around. Verified live on a 2 vCPU server:
+
+- **Gemma models reject the request outright** — Ollama answers
+  `registry.ollama.ai/library/gemma3:4b does not support tools` and nothing
+  is generated at all.
+- **Llama 3.2 accepts tools**, and a 1–3B model handed a pile of function
+  schemas stops replying and starts emitting invented calendar/note code.
+  A plain "hello" came back as a page of Google Calendar Python. The same
+  model answers "hello" correctly the moment the tools are removed.
+
+An empty `tools: []` array is fine — only a non-empty one triggers this, so
+it is the built-in features, not the per-chat tool picker, that cause it.
+Turning tools off in the chat UI does **not** help.
+
+The template therefore ships with `ENABLE_CALENDAR`, `ENABLE_NOTES`,
+`ENABLE_AUTOMATIONS`, and `ENABLE_CODE_INTERPRETER` set to `false`, plus
+`ENABLE_FOLLOW_UP_GENERATION=false` (a second model call per message, on a
+box where CPU is the scarce resource). Re-enable any of them from Admin
+Settings once a tool-capable model is in use.
+
+**Existing installs** predate this and still have the features on. Fix an
+existing Blueprint app by adding those environment variables from its
+Environment tab and redeploying, or by switching the features off in
+Open WebUI's Admin Settings.
+
+## Measured performance (2 vCPU, 7 GB VPS)
+
+| Model | Speed | Notes |
+| --- | --- | --- |
+| `gemma3:270m` | ~37 tok/s | ~3.5x faster than the 1B; short chat only |
+| `llama3.2:1b` | ~11–17 tok/s | Derails on longer prompts |
+| `gemma3:4b` | ~12 tok/s | Coherent; a good default at this size |
+
+Speed is rarely the real complaint — an incoherent model that will not stop
+generating feels far slower than a coherent one at the same tokens/second.
