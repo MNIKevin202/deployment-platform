@@ -119,7 +119,12 @@ describe("CreateAppWizard — Blueprint", () => {
     expect(ollama.image).toBe("ollama/ollama:0.32.5");
     expect(ollama.containerPort).toBe(11434);
     expect(ollama.internalOnly).toBe(true);
-    expect(ollama.storageMounts).toEqual([{ containerPath: "/root/.ollama", readOnly: false }]);
+    expect(ollama.storageMounts).toEqual([{ containerPath: "/models", readOnly: false }]);
+    // The relocated model directory must actually be told to Ollama, or the
+    // volume would be mounted somewhere it never writes.
+    expect(ollama.environmentVariables).toEqual([
+      { key: "OLLAMA_MODELS", value: "/models", isSecret: false, enabled: true }
+    ]);
   });
 
   test("the chat interface itself is public and publishes no host port", async () => {

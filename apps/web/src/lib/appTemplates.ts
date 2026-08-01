@@ -284,7 +284,12 @@ export const APP_TEMPLATES: AppTemplate[] = [
         image: "ollama/ollama:0.32.5",
         containerPort: 11434,
         internalOnly: true,
-        volumes: ["/root/.ollama"]
+        // Ollama defaults to $HOME/.ollama/models — i.e. /root/.ollama in
+        // this image — but the platform reserves /root and every path under
+        // it for system use, so a volume can't be mounted there. Point
+        // Ollama at a normal application path instead and mount that.
+        env: [{ key: "OLLAMA_MODELS", value: "/models" }],
+        volumes: ["/models"]
       }
     ]
   },
@@ -494,7 +499,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
       "No web UI — internal service only",
       "Deploy alongside the Immich template"
     ],
-    image: "ghcr.io/immich-app/immich-machine-learning:release",
+    image: "ghcr.io/immich-app/immich-machine-learning:v3.1.0",
     containerPort: 3003,
     suggestedName: "immich-machine-learning",
     internalOnly: true,
@@ -514,7 +519,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
       "Facial recognition and smart, natural-language search",
       "Requires Immich PostgreSQL, Redis, and Immich Machine Learning apps"
     ],
-    image: "ghcr.io/immich-app/immich-server:release",
+    image: "ghcr.io/immich-app/immich-server:v3.1.0",
     containerPort: 2283,
     suggestedName: "immich",
     requiresTemplateId: "immich-postgres",
@@ -526,7 +531,10 @@ export const APP_TEMPLATES: AppTemplate[] = [
       { key: "REDIS_HOSTNAME", value: "app-redis" },
       { key: "IMMICH_MACHINE_LEARNING_URL", value: "http://app-immich-machine-learning:3003" }
     ],
-    volumes: ["/usr/src/app/upload"]
+    // Immich's own compose mounts its media store at /data. (Its older
+    // /usr/src/app/upload path would also be rejected outright — the
+    // platform reserves everything under /usr.)
+    volumes: ["/data"]
   },
   {
     id: "influxdb",
@@ -1390,7 +1398,11 @@ export const APP_TEMPLATES: AppTemplate[] = [
     containerPort: 80,
     suggestedName: "ntfy",
     env: [],
-    volumes: ["/var/cache/ntfy", "/etc/ntfy"]
+    // Only the message cache is mounted. ntfy's config directory lives under
+    // the reserved /etc tree, but nothing needs to be persisted there —
+    // every setting has an NTFY_* environment variable, which is how this
+    // platform configures apps anyway.
+    volumes: ["/var/cache/ntfy"]
   },
   {
     id: "healthchecks",

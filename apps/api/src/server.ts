@@ -957,6 +957,28 @@ const creationServiceDeps = {
  * echoed back in a stream. Deliberately narrow — a UUID from
  * crypto.randomUUID() is all the browser ever sends.
  */
+/**
+ * Turns a zod failure into a short, operator-readable summary naming the
+ * fields that were rejected and why, e.g.
+ * `companions.0.storageMounts.0.containerPath: This path is reserved and
+ * cannot be used for storage`. Capped so a pathological payload can't
+ * produce an unbounded message.
+ */
+function summarizeValidationIssues(error: z.ZodError): string {
+  const MAX_ISSUES = 3;
+
+  const issues = error.issues.slice(0, MAX_ISSUES).map((issue) => {
+    const path = issue.path.join(".");
+    return path ? `${path}: ${issue.message}` : issue.message;
+  });
+
+  const remaining = error.issues.length - issues.length;
+
+  return remaining > 0
+    ? `${issues.join("; ")} (and ${remaining} more)`
+    : issues.join("; ");
+}
+
 function parseInstallId(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -1071,9 +1093,13 @@ app.post(
     const parsedBody = createAppWizardWithCompanionsSchema.safeParse(request.body);
 
     if (!parsedBody.success) {
+      // Name the offending field(s) in the message itself. A bare
+      // "Invalid app configuration" left an operator staring at a rejected
+      // install with nothing to act on — the specifics were only ever in
+      // the `errors` payload, which the UI doesn't render.
       return reply.code(400).send({
         success: false,
-        message: "Invalid app configuration",
+        message: `Invalid app configuration: ${summarizeValidationIssues(parsedBody.error)}`,
         errors: parsedBody.error.flatten()
       });
     }
