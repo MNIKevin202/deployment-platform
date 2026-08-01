@@ -566,6 +566,22 @@ export function createAppSourceRepository(db: DatabaseSync) {
   }
 
   /**
+   * How long a deployment lock may be held before it is treated as
+   * abandoned. The lock is released in a `finally`, but a hard crash, a
+   * container restart, or an OOM kill between acquire and release leaves
+   * the row behind with no owner — and because acquiring is a plain
+   * INSERT on a unique column, that app could then NEVER deploy again.
+   *
+   * (Observed in production: an app sat locked for 35 hours, silently
+   * refusing every deployment with "already in progress".)
+   *
+   * Two hours is far longer than any real deployment — the build itself is
+   * separately bounded by its own timeout — so reclaiming a lock this old
+   * can only ever free a leaked one, never interrupt live work.
+   */
+  const DEPLOYMENT_LOCK_STALE_SECONDS = 2 * 60 * 60;
+
+  /**
    * Durable, crash-safe "one active GitHub deployment per app" lock,
    * backed by a real table rather than in-memory state — a process
    * restart mid-deployment doesn't leave an in-memory Set lying to the
@@ -573,6 +589,15 @@ export function createAppSourceRepository(db: DatabaseSync) {
    * deployment is already in progress for this app.
    */
   function acquireDeploymentLock(appId: number): boolean {
+    // Reclaim this app's lock first if it is older than any real
+    // deployment could be. Scoped to the one app, so a genuinely running
+    // deployment of a different app is never disturbed.
+    db.prepare(
+      `DELETE FROM github_deployment_locks
+        WHERE app_id = ?
+          AND started_at <= datetime('now', ?)`
+    ).run(appId, `-${DEPLOYMENT_LOCK_STALE_SECONDS} seconds`);
+
     try {
       db.prepare(
         `INSERT INTO github_deployment_locks (app_id, started_at) VALUES (?, CURRENT_TIMESTAMP)`
@@ -581,6 +606,22 @@ export function createAppSourceRepository(db: DatabaseSync) {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Drops every abandoned lock. Called once at startup, where the fact
+   * that the process is only now booting is itself proof that no
+   * deployment it owned is still running.
+   */
+  function releaseStaleDeploymentLocks(): number {
+    const result = db
+      .prepare(
+        `DELETE FROM github_deployment_locks
+          WHERE started_at <= datetime('now', ?)`
+      )
+      .run(`-${DEPLOYMENT_LOCK_STALE_SECONDS} seconds`);
+
+    return Number(result.changes ?? 0);
   }
 
   function releaseDeploymentLock(appId: number): void {
@@ -606,6 +647,7 @@ export function createAppSourceRepository(db: DatabaseSync) {
     deleteAppSource,
     acquireDeploymentLock,
     releaseDeploymentLock,
+    releaseStaleDeploymentLocks,
     isDeploymentLocked
   };
 }

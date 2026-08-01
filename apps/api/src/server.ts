@@ -16,6 +16,11 @@ import {
   NULL_REPORTER,
   subscribeToInstall
 } from "./services/install-progress-service.js";
+import {
+  dismissDeployProgress,
+  listDeployProgress,
+  subscribeToDeployProgress
+} from "./services/deploy-progress-service.js";
 import { createRoutingService } from "./services/routing-service.js";
 import { updateAppRouting } from "./services/app-routing-service.js";
 import {
@@ -170,6 +175,22 @@ function backfillMissingAppDomains(): void {
 }
 
 backfillMissingAppDomains();
+
+/**
+ * Reclaim deployment locks abandoned by a previous process. Reaching this
+ * line means the API is only now starting, which is itself proof that no
+ * deployment held by an earlier process is still running — so any lock old
+ * enough to be stale is definitively orphaned. Without this, a crash
+ * mid-deploy left an app permanently unable to deploy, rejecting every
+ * attempt with "a deployment for this app is already in progress".
+ */
+const reclaimedLocks = appDatabase.releaseStaleDeploymentLocks();
+if (reclaimedLocks > 0) {
+  app.log.warn(
+    { reclaimedLocks },
+    "Released stale GitHub deployment lock(s) left behind by a previous process"
+  );
+}
 
 await app.register(cors, {
   origin: true
@@ -1202,6 +1223,84 @@ app.post(
     });
   }
 );
+
+/**
+ * Live progress for every in-flight GitHub deployment, as Server-Sent
+ * Events. Deliberately NOT per-app: the panel shows one site-wide overlay
+ * that must keep updating as the operator navigates between pages, so a
+ * single connection carries all active deployments rather than requiring a
+ * subscription per app.
+ */
+app.get("/deployments/progress", async (request, reply) => {
+  reply.hijack();
+  const raw = reply.raw;
+
+  raw.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no"
+  });
+  raw.write("retry: 3000\n\n");
+
+  function send(event: string, data: unknown): void {
+    if (!raw.writableEnded) {
+      raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+  }
+
+  // Anything already running (or recently finished) is delivered up front,
+  // so an operator who opens the panel mid-deploy sees it immediately
+  // rather than waiting for the next change.
+  send("snapshot", { deployments: listDeployProgress() });
+
+  const heartbeat = setInterval(() => {
+    if (!raw.writableEnded) {
+      raw.write(": ping\n\n");
+    }
+  }, 25000);
+
+  const unsubscribe = subscribeToDeployProgress((progress) => {
+    send("progress", progress);
+  });
+
+  let closed = false;
+
+  function cleanup(): void {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    clearInterval(heartbeat);
+    unsubscribe();
+    if (!raw.writableEnded) {
+      raw.end();
+    }
+  }
+
+  request.raw.on("close", cleanup);
+});
+
+/** Clears a finished deployment from the overlay. */
+app.delete("/deployments/progress/:appId", async (request, reply) => {
+  const params = z
+    .object({ appId: z.coerce.number().int().positive() })
+    .safeParse(request.params);
+
+  if (!params.success) {
+    return reply.code(400).send({ success: false, message: "Invalid app id" });
+  }
+
+  const dismissed = dismissDeployProgress(params.data.appId);
+
+  return reply.send({
+    success: true,
+    dismissed,
+    message: dismissed
+      ? "Deployment dismissed."
+      : "No finished deployment to dismiss for that app."
+  });
+});
 
 /**
  * Live progress for an in-flight install, as Server-Sent Events. The client

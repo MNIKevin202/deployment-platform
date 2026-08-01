@@ -17,6 +17,7 @@ import { prepareBuildPlan, BuildPlanError } from "./build-strategy.js";
 import { sanitizeProcessOutput } from "./process-runner.js";
 import type { HealthCheckDependencies, HealthCheckHttpClient } from "./health-check-service.js";
 import { performHealthCheck, sanitizeHealthCheckError } from "./health-check-service.js";
+import { startDeployProgress } from "./deploy-progress-service.js";
 
 const PROTECTED_CONTAINER_NAMES = new Set([
   "deployment-platform-api",
@@ -327,7 +328,17 @@ export async function deployFromGithub(
     message: `GitHub deployment started for "${app.name}" (${source.repositoryOwner}/${source.repositoryName}@${source.branch})`
   });
 
+  // Live progress for the panel's site-wide overlay. Purely additive — it
+  // mirrors events that were already being recorded, and every call is a
+  // no-op when nothing is subscribed to the stream.
+  const progressReporter = startDeployProgress(
+    appId,
+    app.name,
+    `${source.repositoryOwner}/${source.repositoryName}@${source.branch}`
+  );
+
   function progress(stage: DeployStage, detail?: string) {
+    progressReporter.setStage(stage, detail);
     recordEvent({
       appId,
       eventType: "github-deploy-progress",
@@ -516,7 +527,11 @@ export async function deployFromGithub(
           dockerfileRelativePath: relative(buildPlan.buildContextPath, buildPlan.dockerfilePath),
           tag: imageTag,
           timeoutMs: buildTimeoutMs,
-          maxLogBytes
+          maxLogBytes,
+          // Feeds Docker's "Step X/Y" lines to the progress overlay, which
+          // is what makes the bar move during the long build stage rather
+          // than sitting at "Building image" for minutes.
+          onOutput: (chunk) => progressReporter.observeBuildOutput(chunk)
         });
 
         // Persist the build output so the Logs tab can show it. Stored before
@@ -776,6 +791,8 @@ export async function deployFromGithub(
     cleanupCheckout(cloneResult.workDir);
     workDir = null;
 
+    progressReporter.succeed();
+
     recordEvent({
       appId,
       eventType: "github-deploy-succeeded",
@@ -811,6 +828,11 @@ export async function deployFromGithub(
     // against (it drops anything else, caps string length, and rejects
     // secret-looking keys — this is deliberately never anything more than
     // stage/exit-code/signal-shaped facts, never raw process output).
+    // Reported before the branching below so the overlay shows a reason
+    // regardless of which failure path is taken. `rolledBack` is refined
+    // by the branches that actually restore the previous container.
+    progressReporter.fail(message, stage, false);
+
     const eventMetadata: Record<string, unknown> = { stage };
     if (selectedContainerPort !== null) {
       eventMetadata.configuredPort = selectedContainerPort;

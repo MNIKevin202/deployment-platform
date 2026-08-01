@@ -10,6 +10,12 @@ export interface BuildImageInput {
   timeoutMs: number;
   /** Caps how much of the build's own JSON-stream log text is retained. */
   maxLogBytes: number;
+  /**
+   * Receives each chunk of build output as it arrives, so a caller can
+   * track Docker's own "Step X/Y" counter live. Optional — omitting it
+   * leaves build behaviour completely unchanged.
+   */
+  onOutput?: (chunk: string) => void;
 }
 
 export interface BuildImageResult {
@@ -106,6 +112,15 @@ export function createGithubBuildDockerOps(docker: Docker): GithubBuildDockerOps
           (event: { stream?: string; error?: string }) => {
             if (typeof event.stream === "string") {
               appendLog(event.stream);
+
+              // Progress reporting must never be able to break a build, so
+              // a throwing listener is swallowed rather than allowed to
+              // reject the whole deployment.
+              try {
+                input.onOutput?.(event.stream);
+              } catch {
+                // Ignored deliberately — see above.
+              }
             }
             if (typeof event.error === "string" && !buildErrorMessage) {
               buildErrorMessage = event.error;

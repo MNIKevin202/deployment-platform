@@ -301,6 +301,41 @@ export interface CreateAppWizardResponse {
   companions?: CreatedAppSummary[];
 }
 
+export type DeployStage =
+  | "resolving-repository"
+  | "resolving-branch"
+  | "reading-commit-metadata"
+  | "preparing-checkout"
+  | "cloning-repository"
+  | "inspecting-project"
+  | "preparing-build"
+  | "building-image"
+  | "preserving-current-container"
+  | "starting-replacement"
+  | "verifying-health"
+  | "updating-route"
+  | "cleaning-temporary-files"
+  | "deployment-complete";
+
+export interface DeployProgress {
+  appId: number;
+  appName: string;
+  source: string | null;
+  status: "running" | "succeeded" | "failed";
+  stage: DeployStage;
+  stageLabel: string;
+  percent: number;
+  step: number | null;
+  totalSteps: number | null;
+  detail: string;
+  startedAt: string;
+  finishedAt: string | null;
+  etaSeconds: number | null;
+  error: string | null;
+  failedStage: DeployStage | null;
+  rolledBack: boolean;
+}
+
 export type InstallStage =
   | "queued"
   | "pulling"
