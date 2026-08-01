@@ -250,6 +250,31 @@ export interface CreateAppWizardPayload {
     readOnly: boolean;
   }>;
   publishedPorts: PublishedPort[];
+  /**
+   * Extra services a multi-service template deploys alongside this app.
+   * Omitted entirely for ordinary single-app creates, which behave exactly
+   * as they always have.
+   */
+  companions?: CreateAppCompanionPayload[];
+}
+
+export interface CreateAppCompanionPayload {
+  name: string;
+  image: string;
+  containerPort: number;
+  restartPolicy: RestartPolicy;
+  internalOnly: boolean;
+  environmentVariables: Array<{
+    key: string;
+    value: string;
+    isSecret: boolean;
+    enabled: boolean;
+  }>;
+  storageMounts: Array<{
+    containerPath: string;
+    volumeName?: string;
+    readOnly: boolean;
+  }>;
 }
 
 export interface CreatedAppSummary {
@@ -272,6 +297,52 @@ export interface CreateAppWizardResponse {
   success: boolean;
   message: string;
   app?: CreatedAppSummary;
+  /** The companion services created alongside `app`, when any. */
+  companions?: CreatedAppSummary[];
+}
+
+export interface OllamaModelSummary {
+  name: string;
+  size: number;
+  modifiedAt: string | null;
+  parameterSize: string | null;
+  quantization: string | null;
+}
+
+export interface BlueprintPullState {
+  model: string;
+  status: "running" | "succeeded" | "failed";
+  detail: string;
+  percent: number | null;
+  startedAt: string;
+  finishedAt: string | null;
+  error: string | null;
+}
+
+export interface BlueprintStatus {
+  webRunning: boolean;
+  webDomain: string | null;
+  modelServerName: string;
+  modelServerRunning: boolean;
+  modelServerReachable: boolean;
+  modelServerUrl: string;
+  version: string | null;
+  models: OllamaModelSummary[];
+  modelStorageBytes: number;
+  modelError: string | null;
+  pull: BlueprintPullState | null;
+}
+
+export interface BlueprintStatusResponse {
+  success: boolean;
+  message?: string;
+  status?: BlueprintStatus;
+}
+
+export interface BlueprintPullResponse {
+  success: boolean;
+  message: string;
+  pull?: BlueprintPullState | null;
 }
 
 export interface BuildBriefRequestPayload {

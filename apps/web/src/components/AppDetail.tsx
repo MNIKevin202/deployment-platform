@@ -33,7 +33,8 @@ import HistoryPanel from "./HistoryPanel";
 import SourcePanel from "./SourcePanel";
 import IrcSettingsPanel from "./IrcSettingsPanel";
 import IrcBotSettingsPanel from "./IrcBotSettingsPanel";
-import { isIrcServerImage, isIrcBotImage } from "../lib/appKind";
+import { isIrcServerImage, isIrcBotImage, isBlueprintImage } from "../lib/appKind";
+import BlueprintPanel from "./BlueprintPanel";
 
 // Pulls in recharts (a large dependency) only when the Metrics tab is
 // actually opened, instead of shipping it in every page's initial bundle.
@@ -60,7 +61,8 @@ type DetailTab =
   | "history"
   | "activity"
   | "irc-settings"
-  | "bot-settings";
+  | "bot-settings"
+  | "blueprint";
 
 async function readApiError(
   response: Response,
@@ -907,6 +909,9 @@ export default function AppDetail({
             : []),
           ...(isIrcBotImage(detail.image)
             ? [{ key: "bot-settings", label: "Settings" }]
+            : []),
+          ...(isBlueprintImage(detail.image)
+            ? [{ key: "blueprint", label: "Blueprint" }]
             : [])
         ]}
         active={activeTab}
@@ -1238,6 +1243,10 @@ export default function AppDetail({
 
       {activeTab === "bot-settings" && isIrcBotImage(detail.image) && (
         <IrcBotSettingsPanel appId={appId} containerRunning={isRunning} />
+      )}
+
+      {activeTab === "blueprint" && isBlueprintImage(detail.image) && (
+        <BlueprintPanel appId={appId} containerRunning={isRunning} />
       )}
 
       <EnvVarDialog

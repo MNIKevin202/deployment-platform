@@ -34,7 +34,13 @@ import {
   validateStorageMounts
 } from "../lib/wizardValidation";
 import BulkEnvVarDialog from "./BulkEnvVarDialog";
-import { generateSecret, type AppTemplate } from "../lib/appTemplates";
+import {
+  companionAppName,
+  generateSecret,
+  resolveTemplatePlaceholders,
+  type AppTemplate,
+  type TemplateCompanion
+} from "../lib/appTemplates";
 import { useGithubRepositories } from "../hooks/useGithubRepositories";
 import { PORT_SOURCE_LABELS, PROJECT_TYPE_LABELS, STRATEGY_INFO } from "./SourcePanel";
 
@@ -44,6 +50,12 @@ interface CreateAppWizardProps {
   onCreated: (app: CreatedAppSummary) => void;
   /** When set, pre-fills the manual-image flow from a catalog template. */
   initialTemplate?: AppTemplate | null;
+  /**
+   * An optional model to download right after a template that supports it
+   * finishes deploying (Blueprint). Chosen in the template gallery; empty
+   * means "deploy without downloading a model".
+   */
+  initialModel?: string | null;
 }
 
 const STEP_LABELS = [
@@ -200,7 +212,8 @@ export default function CreateAppWizard({
   open,
   onClose,
   onCreated,
-  initialTemplate
+  initialTemplate,
+  initialModel
 }: CreateAppWizardProps) {
   const [step, setStep] = useState(0);
 
@@ -270,6 +283,13 @@ export default function CreateAppWizard({
   const [globalVars, setGlobalVars] = useState<MaskedGlobalEnvVar[]>([]);
   const [globalVarsLoaded, setGlobalVarsLoaded] = useState(false);
 
+  // Extra services a multi-service template deploys with this app. Held as
+  // template definitions rather than resolved payloads because their real
+  // app names depend on the name the operator settles on, which they can
+  // still change on the Basics step.
+  const [templateCompanions, setTemplateCompanions] = useState<TemplateCompanion[]>([]);
+  const [pendingModel, setPendingModel] = useState<string | null>(null);
+
   const [routingChoice, setRoutingChoice] = useState<"public" | "internal">("public");
   const [domainChoice, setDomainChoice] = useState<"default" | "custom">("default");
   const [customDomain, setCustomDomain] = useState("");
@@ -322,6 +342,8 @@ export default function CreateAppWizard({
     setEnvRows([]);
     setVolumeRows([]);
     setPortRows([]);
+    setTemplateCompanions([]);
+    setPendingModel(null);
     setRoutingChoice("public");
     setDomainChoice("default");
     setCustomDomain("");
@@ -380,6 +402,8 @@ export default function CreateAppWizard({
         protocol: port.protocol
       }))
     );
+    setTemplateCompanions(initialTemplate.companions ?? []);
+    setPendingModel(initialModel ?? null);
     // Game/raw-TCP servers have no meaningful HTTP route — a template can opt
     // out of a public domain so it's reached purely via its published port.
     if (initialTemplate.internalOnly) {
@@ -387,7 +411,7 @@ export default function CreateAppWizard({
     }
     setStep(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, initialTemplate]);
+  }, [open, initialTemplate, initialModel]);
 
   useEffect(() => {
     if (!open || globalVarsLoaded) {
@@ -854,7 +878,11 @@ export default function CreateAppWizard({
         customDomain: briefCustomDomain || undefined,
         environmentVariables: envRows.map((row) => ({
           key: row.key,
-          value: row.value,
+          // Companion references are resolved here, at submit time, rather
+          // than when the template was selected — the operator can still
+          // rename the app on the Basics step, and the companion's real
+          // container name follows that name.
+          value: resolveTemplatePlaceholders(row.value, trimmedName, templateCompanions),
           isSecret: row.isSecret,
           enabled: row.enabled
         })),
@@ -867,7 +895,35 @@ export default function CreateAppWizard({
           hostPort: Number(row.hostPort),
           containerPort: Number(row.containerPort),
           protocol: row.protocol
-        }))
+        })),
+        ...(templateCompanions.length > 0
+          ? {
+              companions: templateCompanions.map((companion) => ({
+                name: companionAppName(trimmedName, companion),
+                image: companion.image,
+                containerPort: companion.containerPort,
+                restartPolicy,
+                internalOnly: companion.internalOnly ?? true,
+                environmentVariables: (companion.env ?? []).map((envVar) => ({
+                  key: envVar.key,
+                  value:
+                    envVar.generate === "password"
+                      ? generateSecret(envVar.generateLength ?? 24)
+                      : resolveTemplatePlaceholders(
+                          envVar.value ?? "",
+                          trimmedName,
+                          templateCompanions
+                        ),
+                  isSecret: Boolean(envVar.secret),
+                  enabled: true
+                })),
+                storageMounts: (companion.volumes ?? []).map((containerPath) => ({
+                  containerPath,
+                  readOnly: false
+                }))
+              }))
+            }
+          : {})
       };
 
       // One key for this whole attempt, including the automatic
@@ -889,6 +945,10 @@ export default function CreateAppWizard({
 
       setCreatedApp(result.app);
 
+      if (pendingModel) {
+        await startInitialModelDownload(result.app.id, pendingModel);
+      }
+
       if (sourceType === "github" && githubRepo) {
         await linkAndOptionallyDeployGithubSource(result.app.id);
       }
@@ -897,6 +957,38 @@ export default function CreateAppWizard({
     } finally {
       setCreating(false);
       submitLockRef.current = false;
+    }
+  };
+
+  /**
+   * Kicks off the optional first model download after the app itself is
+   * already created and running. Deliberately best-effort: a model download
+   * is a long, retryable background task, so a failure here reports a
+   * notice and leaves a perfectly good app in place rather than failing the
+   * install. The app's Blueprint tab can retry it at any time.
+   */
+  const startInitialModelDownload = async (appId: number, model: string) => {
+    try {
+      const response = await fetch(`/api/apps/${appId}/blueprint/models`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model })
+      });
+
+      if (!response.ok) {
+        setPostCreateNotice(
+          `The app was created, but the download of "${model}" could not be started. Start it from the app's Blueprint tab.`
+        );
+        return;
+      }
+
+      setPostCreateNotice(
+        `Downloading "${model}" in the background — follow its progress on the app's Blueprint tab. This can take several minutes.`
+      );
+    } catch {
+      setPostCreateNotice(
+        `The app was created, but the download of "${model}" could not be started. Start it from the app's Blueprint tab.`
+      );
     }
   };
 
@@ -1701,6 +1793,19 @@ export default function CreateAppWizard({
                                   placeholder="https://example.com"
                                   autoComplete="off"
                                 />
+                                {row.value.includes("{{companion:") && (
+                                  <small className="text-faint">
+                                    Becomes{" "}
+                                    <code>
+                                      {resolveTemplatePlaceholders(
+                                        row.value,
+                                        trimmedName || "your-app",
+                                        templateCompanions
+                                      )}
+                                    </code>{" "}
+                                    — it follows the app name you chose.
+                                  </small>
+                                )}
                               </label>
                             </div>
 
@@ -2108,6 +2213,47 @@ export default function CreateAppWizard({
                       <dd>{volumeRows.length}</dd>
                     </div>
                   </dl>
+
+                  {templateCompanions.length > 0 && (
+                    <div className="env-scope-block">
+                      <div className="env-scope-heading">
+                        <h3>Services deployed with this app</h3>
+                      </div>
+                      <p className="section-description">
+                        These are created first, as managed apps of their own — each gets its
+                        own container, storage, and Delete button, and can be removed
+                        separately later.
+                      </p>
+                      <div className="wizard-row-list">
+                        {templateCompanions.map((companion) => (
+                          <div className="wizard-row" key={companion.key}>
+                            <strong>
+                              {companion.label}{" "}
+                              <code>app-{companionAppName(trimmedName, companion)}</code>
+                            </strong>
+                            <span className="text-faint">{companion.description}</span>
+                            <span className="text-faint">
+                              {companion.image} · port {companion.containerPort} ·{" "}
+                              {companion.internalOnly ?? true
+                                ? "internal only, no public domain"
+                                : "public"}
+                              {companion.volumes && companion.volumes.length > 0
+                                ? ` · storage: ${companion.volumes.join(", ")}`
+                                : ""}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {pendingModel && (
+                    <div className="notice-banner">
+                      After deployment, <code>{pendingModel}</code> will start downloading in
+                      the background. The app stays usable while it downloads, and the
+                      download can be retried from the Blueprint tab.
+                    </div>
+                  )}
 
                   {volumeRows.length === 0 && (
                     <div className="warning-banner">
