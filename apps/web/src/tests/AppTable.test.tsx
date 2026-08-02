@@ -1,7 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import AppTable from "../components/AppTable";
-import type { ContainerSummary, StoredApp } from "../types/api";
+import { DeployProgressContext } from "../lib/deployProgress";
+import type { ContainerSummary, DeployProgress, StoredApp } from "../types/api";
 
 function container(overrides: Partial<ContainerSummary> = {}): ContainerSummary {
   return {
@@ -82,5 +83,68 @@ describe("AppTable — Update column", () => {
     );
 
     expect(screen.queryByText("Update Available")).not.toBeInTheDocument();
+  });
+});
+
+describe("AppTable — deploy progress", () => {
+  function deployProgress(overrides: Partial<DeployProgress> = {}): DeployProgress {
+    return {
+      appId: 1,
+      appName: "example",
+      source: "MNIKevin202/Example@main",
+      status: "running",
+      stage: "building-image",
+      stageLabel: "Building image",
+      percent: 55,
+      step: 8,
+      totalSteps: 14,
+      detail: "Building image",
+      startedAt: "2026-08-01T00:00:00Z",
+      finishedAt: null,
+      etaSeconds: 60,
+      error: null,
+      failedStage: null,
+      rolledBack: false,
+      ...overrides
+    };
+  }
+
+  test("replaces the status pill with a live progress bar while deploying", () => {
+    const app = storedApp({ id: 1 });
+    render(
+      <DeployProgressContext.Provider value={new Map([[1, deployProgress()]])}>
+        <AppTable
+          managedApps={[container()]}
+          storedAppsByName={new Map([["example", app]])}
+          missingApps={[]}
+          actionLoading={null}
+          {...noop}
+        />
+      </DeployProgressContext.Provider>
+    );
+
+    expect(screen.getByText("Deploying")).toBeInTheDocument();
+    expect(screen.getByText("55%")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "55");
+    // The plain running/stopped pill is not shown while deploying.
+    expect(screen.queryByText("running")).not.toBeInTheDocument();
+  });
+
+  test("shows the normal status pill when the app is not deploying", () => {
+    const app = storedApp({ id: 1 });
+    render(
+      <DeployProgressContext.Provider value={new Map()}>
+        <AppTable
+          managedApps={[container()]}
+          storedAppsByName={new Map([["example", app]])}
+          missingApps={[]}
+          actionLoading={null}
+          {...noop}
+        />
+      </DeployProgressContext.Provider>
+    );
+
+    expect(screen.getByText("running")).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 });
