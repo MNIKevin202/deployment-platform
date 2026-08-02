@@ -35,6 +35,8 @@ import IrcSettingsPanel from "./IrcSettingsPanel";
 import IrcBotSettingsPanel from "./IrcBotSettingsPanel";
 import { isIrcServerImage, isIrcBotImage, isBlueprintImage } from "../lib/appKind";
 import BlueprintPanel from "./BlueprintPanel";
+import { useAppDeployProgress } from "../lib/deployProgress";
+import { DeployProgressBanner } from "./DeployProgressIndicator";
 
 // Pulls in recharts (a large dependency) only when the Metrics tab is
 // actually opened, instead of shipping it in every page's initial bundle.
@@ -196,6 +198,11 @@ export default function AppDetail({
   const [storageDeleteTarget, setStorageDeleteTarget] =
     useState<StoredAppVolume | null>(null);
   const [storageDeleting, setStorageDeleting] = useState(false);
+
+  // Live deploy progress for this app (from the shared SSE stream). Present
+  // only while a deployment is in flight — the banner appears on Redeploy and
+  // disappears the moment it finishes.
+  const deployProgress = useAppDeployProgress(appId);
 
   const loadDetail = useCallback(async () => {
     try {
@@ -805,6 +812,8 @@ export default function AppDetail({
             tone={isConfigPending ? "warning" : "positive"}
           />
         </div>
+
+        {deployProgress && <DeployProgressBanner progress={deployProgress} />}
 
         <ImageUpdateBanner
           appId={appId}

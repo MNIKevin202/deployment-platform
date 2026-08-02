@@ -1,4 +1,6 @@
 import type { ContainerAction, ContainerSummary, StoredApp } from "../types/api";
+import { useDeployProgress } from "../lib/deployProgress";
+import { InlineDeployProgress } from "./DeployProgressIndicator";
 
 interface AppTableProps {
   managedApps: ContainerSummary[];
@@ -39,6 +41,8 @@ export default function AppTable({
   onDeleteMissingApp,
   onViewApp
 }: AppTableProps) {
+  const deployProgress = useDeployProgress();
+
   return (
     <div className="table-wrap">
       <table className="env-table apps-table">
@@ -59,6 +63,7 @@ export default function AppTable({
             const isRunning = container.state === "running";
             const canOpen = Boolean(storedApp?.domain && storedApp.routingReady);
             const name = container.names[0]?.replace(/^\//, "") ?? container.shortId;
+            const deploying = storedApp ? deployProgress.get(storedApp.id) : undefined;
 
             return (
               <tr key={container.id}>
@@ -72,7 +77,13 @@ export default function AppTable({
                   )}
                 </td>
                 <td>
-                  <span className={`status-pill ${isRunning ? "running" : "stopped"}`}>{container.state}</span>
+                  {deploying ? (
+                    <InlineDeployProgress progress={deploying} />
+                  ) : (
+                    <span className={`status-pill ${isRunning ? "running" : "stopped"}`}>
+                      {container.state}
+                    </span>
+                  )}
                 </td>
                 <td>
                   <code className="inline-code">{container.image}</code>

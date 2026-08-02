@@ -1,4 +1,6 @@
 import type { ContainerAction, ContainerPort, ContainerSummary, StoredApp } from "../types/api";
+import { useAppDeployProgress } from "../lib/deployProgress";
+import { InlineDeployProgress } from "./DeployProgressIndicator";
 
 interface AppCardProps {
   container: ContainerSummary;
@@ -73,6 +75,7 @@ export default function AppCard({
 }: AppCardProps) {
   const isRunning = container.state === "running";
   const containerName = container.names[0] ?? container.shortId;
+  const deploying = useAppDeployProgress(storedApp?.id);
 
   const canOpenApp = Boolean(storedApp?.domain && storedApp.routingReady);
   const canStart = !container.isSystemContainer && !isRunning;
@@ -98,9 +101,13 @@ export default function AppCard({
         </div>
 
         <div className="card-status">
-          <span className={`status-pill ${isRunning ? "running" : "stopped"}`}>
-            {container.state}
-          </span>
+          {deploying ? (
+            <InlineDeployProgress progress={deploying} />
+          ) : (
+            <span className={`status-pill ${isRunning ? "running" : "stopped"}`}>
+              {container.state}
+            </span>
+          )}
 
           {container.isManagedApp &&
             (() => {
