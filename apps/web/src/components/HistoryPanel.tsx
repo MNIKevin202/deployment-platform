@@ -11,6 +11,10 @@ interface HistoryPanelProps {
   appId: number;
   /** Bubbled up so the parent can refresh the app's live status after a revert. */
   onReverted?: () => void;
+  /** The app's current per-app retention override; null/undefined means the global default applies. */
+  deploymentRetention?: number | null;
+  /** Bubbled up so the parent can refresh after the override changes. */
+  onRetentionChanged?: () => void;
 }
 
 async function readApiError(response: Response, fallback: string): Promise<string> {
@@ -31,7 +35,12 @@ function shortSha(sha: string | null): string {
   return sha ? sha.slice(0, 7) : "—";
 }
 
-export default function HistoryPanel({ appId, onReverted }: HistoryPanelProps) {
+export default function HistoryPanel({
+  appId,
+  onReverted,
+  deploymentRetention,
+  onRetentionChanged
+}: HistoryPanelProps) {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -39,6 +48,10 @@ export default function HistoryPanel({ appId, onReverted }: HistoryPanelProps) {
   const [reverting, setReverting] = useState(false);
   const [dialogError, setDialogError] = useState("");
   const [notice, setNotice] = useState("");
+  const [retentionInput, setRetentionInput] = useState(
+    deploymentRetention == null ? "" : String(deploymentRetention)
+  );
+  const [savingRetention, setSavingRetention] = useState(false);
 
   const loadDeployments = useCallback(async () => {
     try {
@@ -63,6 +76,39 @@ export default function HistoryPanel({ appId, onReverted }: HistoryPanelProps) {
   useEffect(() => {
     void loadDeployments();
   }, [loadDeployments]);
+
+  const saveRetention = async () => {
+    try {
+      setSavingRetention(true);
+      setError("");
+      setNotice("");
+
+      const trimmed = retentionInput.trim();
+      // Blank clears the override, restoring the global default.
+      const retention = trimmed === "" ? null : Number(trimmed);
+
+      const response = await fetch(`/api/apps/${appId}/retention`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ retention })
+      });
+
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Unable to save retention"));
+      }
+
+      setNotice(
+        retention === null
+          ? "Using the global retention default for this app."
+          : `Keeping the ${retention} most recent version${retention === 1 ? "" : "s"} for this app.`
+      );
+      onRetentionChanged?.();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Unable to save retention");
+    } finally {
+      setSavingRetention(false);
+    }
+  };
 
   const confirmRevert = async () => {
     if (!target) {
@@ -104,14 +150,38 @@ export default function HistoryPanel({ appId, onReverted }: HistoryPanelProps) {
             version.
           </p>
         </div>
-        <button
-          className="secondary-button compact"
-          type="button"
-          onClick={() => void loadDeployments()}
-          disabled={loading}
-        >
-          Refresh
-        </button>
+        <div className="inline-field">
+          <label className="text-faint" htmlFor={`retention-${appId}`}>
+            Keep versions
+          </label>
+          <input
+            id={`retention-${appId}`}
+            type="number"
+            className="wizard-input compact"
+            min={1}
+            max={50}
+            placeholder="default"
+            value={retentionInput}
+            onChange={(event) => setRetentionInput(event.target.value)}
+            aria-label="Rollback versions to keep for this app"
+          />
+          <button
+            className="secondary-button compact"
+            type="button"
+            onClick={() => void saveRetention()}
+            disabled={savingRetention}
+          >
+            {savingRetention ? "Saving…" : "Save"}
+          </button>
+          <button
+            className="secondary-button compact"
+            type="button"
+            onClick={() => void loadDeployments()}
+            disabled={loading}
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}

@@ -78,8 +78,14 @@ import { registerDeploymentRoutes } from "./routes/deployments.js";
 import { registerDeploymentSettingsRoutes } from "./routes/deployment-settings.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerPortsRoutes } from "./routes/ports.js";
-import { registerImageRoutes } from "./routes/images.js";
-import { createImagePruneDockerOps } from "./services/image-prune-service.js";
+import {
+  createRetentionDockerOps,
+  cleanupAppRetention,
+  cleanupAppRetentionLocked,
+  runGlobalSweep,
+  type RetentionDeps
+} from "./services/deployment-retention-service.js";
+import { createRetentionScheduler } from "./services/retention-scheduler.js";
 import { createBackupArchive } from "./services/backup-service.js";
 import { runScheduledBackup } from "./services/backup-schedule-service.js";
 import { createBackupScheduler } from "./services/backup-scheduler.js";
@@ -88,7 +94,9 @@ import {
   registerPlatformSettingsRoutes,
   readAutoBackupConfig,
   readNotificationConfig,
-  AUTO_BACKUP_LAST_RUN_KEY
+  readRetentionConfig,
+  AUTO_BACKUP_LAST_RUN_KEY,
+  RETENTION_LAST_RUN_KEY
 } from "./routes/platform-settings.js";
 import type { RecordEventFn } from "./services/deployment-event-service.js";
 import { createAutoDeployScheduler } from "./services/auto-deploy-service.js";
@@ -328,6 +336,28 @@ const BUILD_TIMEOUT_MS = Math.max(
   Number(process.env.BUILD_TIMEOUT_MS) || 20 * 60 * 1000
 );
 
+// Deployment retention: reclaim rollback versions beyond the keep limit. The
+// Docker ops are shared across the post-deploy hook, the revert hook, and the
+// daily sweep; config is read fresh on every call so a settings change takes
+// effect immediately without a restart.
+const retentionDockerOps = createRetentionDockerOps(docker);
+
+function buildRetentionDeps(): RetentionDeps {
+  return {
+    appDatabase,
+    dockerOps: retentionDockerOps,
+    config: readRetentionConfig(appDatabase),
+    logger: app.log
+  };
+}
+
+// A deploy already holds the per-app deployment lock when its post-deploy
+// cleanup runs, so it uses the lock-free variant. A revert does not hold the
+// lock, so it uses the lock-guarded variant (which skips if a deploy is live).
+const cleanupRetentionForDeploy = (appId: number) => cleanupAppRetention(buildRetentionDeps(), appId);
+const cleanupRetentionForRevert = (appId: number) => cleanupAppRetentionLocked(buildRetentionDeps(), appId);
+const runRetentionSweep = () => runGlobalSweep(buildRetentionDeps());
+
 const deployDeps: GithubDeployDependencies = {
   appDatabase,
   dockerOps: { ...dockerOps, ...githubBuildDockerOps },
@@ -335,6 +365,7 @@ const deployDeps: GithubDeployDependencies = {
   resolveCredential: resolveGithubCredential,
   reconcileRouting: (db) => routingService.reconcile(db),
   recordEvent,
+  cleanupRetention: cleanupRetentionForDeploy,
   buildTimeoutMs: BUILD_TIMEOUT_MS,
   healthCheckDeps: {
     httpClient: createHttpHealthCheckClient(),
@@ -355,7 +386,8 @@ const revertDeps: RevertDependencies = {
   appDatabase,
   dockerOps: deployDeps.dockerOps,
   reconcileRouting: (db) => routingService.reconcile(db),
-  recordEvent
+  recordEvent,
+  cleanupRetention: cleanupRetentionForRevert
 };
 
 await registerDeploymentRoutes(app, { appDatabase, revertDeps });
@@ -365,8 +397,6 @@ await registerDeploymentSettingsRoutes(app, { appDatabase });
 await registerSettingsRoutes(app, { appDatabase, dbPath: DATABASE_PATH, backupsDir: BACKUPS_DIR });
 
 await registerPortsRoutes(app, { appDatabase });
-
-await registerImageRoutes(app, { appDatabase, imageOps: createImagePruneDockerOps(docker) });
 
 // Scheduled backups: snapshot the DB to /data/backups on an interval, with
 // retention. Reuses the same archive builder as the manual download.
@@ -421,7 +451,20 @@ const imageUpdateChecker = createImageUpdateChecker({
 await registerPlatformSettingsRoutes(app, {
   appDatabase,
   backupsDir: BACKUPS_DIR,
-  runBackupNow: () => runScheduledBackupNow()
+  runBackupNow: () => runScheduledBackupNow(),
+  runRetentionSweep
+});
+
+// Daily safety-net sweep: catches rollback versions left behind when a deploy
+// fails partway through and never runs its own post-deploy cleanup.
+const retentionScheduler = createRetentionScheduler({
+  getLastRunAt: () => {
+    const raw = appDatabase.getSetting(RETENTION_LAST_RUN_KEY);
+    return raw ? Number(raw) : null;
+  },
+  setLastRunAt: (ms) => appDatabase.setSetting(RETENTION_LAST_RUN_KEY, String(ms)),
+  runSweep: runRetentionSweep,
+  logger: app.log
 });
 
 // Auto-deploy: poll each auto-deploy-enabled GitHub app's branch and deploy
@@ -1776,6 +1819,7 @@ const start = async (): Promise<void> => {
   backupScheduler.start();
   imageUpdateChecker.start();
   cronScheduler.start();
+  retentionScheduler.start();
 };
 
 let shuttingDown = false;
@@ -1796,6 +1840,7 @@ async function shutdown(signal: string): Promise<void> {
   backupScheduler.stop();
   imageUpdateChecker.stop();
   cronScheduler.stop();
+  retentionScheduler.stop();
 
   try {
     await app.close();

@@ -43,6 +43,9 @@ export type EventType =
   | "revert-started"
   | "revert-succeeded"
   | "revert-failed"
+  /** Rollback-retention cleanup after a successful deploy (see deployment-retention-service.ts). */
+  | "retention-cleanup"
+  | "retention-cleanup-failed"
   /**
    * GitHub connect/disconnect is a global integration event, not tied to
    * any one app. app_deployment_events requires an app_id (FK, NOT NULL),

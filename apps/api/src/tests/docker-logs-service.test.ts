@@ -31,6 +31,7 @@ function fakeApp(overrides: Partial<StoredApp> = {}): StoredApp {
     environmentTouchedAt: null,
     memoryLimitMb: null,
     cpuLimit: null,
+    deploymentRetention: null,
     ...overrides
   };
 }

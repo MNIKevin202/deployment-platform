@@ -1241,7 +1241,12 @@ export default function AppDetail({
       {activeTab === "console" && <ConsolePanel appId={appId} />}
 
       {activeTab === "history" && (
-        <HistoryPanel appId={appId} onReverted={() => void loadDetail()} />
+        <HistoryPanel
+          appId={appId}
+          onReverted={() => void loadDetail()}
+          deploymentRetention={detail.deploymentRetention}
+          onRetentionChanged={() => void loadDetail()}
+        />
       )}
 
       {activeTab === "activity" && <ActivityPanel appId={appId} />}
