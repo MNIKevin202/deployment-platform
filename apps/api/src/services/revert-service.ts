@@ -6,6 +6,7 @@ import {
   type RedeployDockerOps,
   type RedeployReconcileResult
 } from "./redeploy-service.js";
+import type { RetentionCleanupResult } from "./deployment-retention-service.js";
 
 /**
  * Reverting re-runs a past version's retained image. It needs everything a
@@ -21,6 +22,13 @@ export interface RevertDependencies {
   dockerOps: RevertDockerOps;
   reconcileRouting: (appDatabase: AppDatabase) => Promise<RedeployReconcileResult>;
   recordEvent: RecordEventFn;
+  /**
+   * Best-effort retention cleanup, run after a successful revert (a revert
+   * appends a new version and can push an older one out of the keep window).
+   * This must be the lock-guarded variant, since a revert does not hold the
+   * deployment lock. Optional; a failure never affects the revert result.
+   */
+  cleanupRetention?: (appId: number) => Promise<RetentionCleanupResult>;
   now?: () => Date;
 }
 
@@ -160,6 +168,17 @@ export async function revertToDeployment(
     message: `Reverted "${app.name}" to version ${version} (now version ${recorded.version})`,
     metadata: { targetVersion: version, newVersion: recorded.version, imageTag: target.imageTag }
   });
+
+  // Best-effort: a revert appended a new version, which may push an old one
+  // beyond the keep window. Never throws (the runner collects failures) and
+  // never affects the revert result.
+  if (deps.cleanupRetention) {
+    try {
+      await deps.cleanupRetention(appId);
+    } catch {
+      // Deliberately swallowed — the revert already succeeded.
+    }
+  }
 
   return {
     success: true,

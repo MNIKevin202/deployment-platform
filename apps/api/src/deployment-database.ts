@@ -150,11 +150,80 @@ export function createDeploymentRepository(db: DatabaseSync) {
     return row ? mapDeployment(row) : null;
   }
 
+  /**
+   * Every GitHub-built version for one app, newest first and unbounded (unlike
+   * listDeployments, which is capped for the History panel). Retention needs
+   * the complete list to decide which versions fall beyond the keep count.
+   * Only "github" versions are returned: they alone have a retained, per-commit
+   * image that is a rollback target and therefore a cleanup candidate.
+   */
+  function listGithubDeployments(appId: number): StoredDeployment[] {
+    const rows = db
+      .prepare(
+        `SELECT ${DEPLOYMENT_COLUMNS} FROM app_deployments
+         WHERE app_id = ? AND source_kind = 'github'
+         ORDER BY version DESC`
+      )
+      .all(appId) as unknown as DeploymentRow[];
+
+    return rows.map(mapDeployment);
+  }
+
+  /**
+   * Every GitHub-built version across all apps, newest first per app. Retention
+   * uses this to build the set of image tags still referenced by a retained
+   * version anywhere — so an image shared by another app's retained version is
+   * never removed while cleaning up this app.
+   */
+  function listAllGithubDeployments(): StoredDeployment[] {
+    const rows = db
+      .prepare(
+        `SELECT ${DEPLOYMENT_COLUMNS} FROM app_deployments
+         WHERE source_kind = 'github'
+         ORDER BY app_id ASC, version DESC`
+      )
+      .all() as unknown as DeploymentRow[];
+
+    return rows.map(mapDeployment);
+  }
+
+  /**
+   * Removes the given versions of one app from the ledger. The current version
+   * is refused outright (defence in depth — retention never selects it, but a
+   * bug must never be able to delete the live version's row): the DELETE
+   * explicitly excludes is_current = 1. Runs in a single transaction and
+   * returns how many rows were actually removed.
+   */
+  function deleteDeployments(appId: number, versions: number[]): number {
+    if (versions.length === 0) {
+      return 0;
+    }
+
+    const placeholders = versions.map(() => "?").join(", ");
+    const statement = db.prepare(
+      `DELETE FROM app_deployments
+       WHERE app_id = ? AND is_current = 0 AND version IN (${placeholders})`
+    );
+
+    db.exec("BEGIN");
+    try {
+      const result = statement.run(appId, ...versions);
+      db.exec("COMMIT");
+      return Number(result.changes ?? 0);
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   return {
     recordDeployment,
     listDeployments,
     getDeployment,
-    getCurrentDeployment
+    getCurrentDeployment,
+    listGithubDeployments,
+    listAllGithubDeployments,
+    deleteDeployments
   };
 }
 

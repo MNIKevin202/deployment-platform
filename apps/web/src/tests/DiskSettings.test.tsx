@@ -7,18 +7,39 @@ function json(body: unknown, ok = true) {
   return { ok, json: async () => body } as Response;
 }
 
+const RETENTION_INFO = {
+  success: true,
+  config: { count: 3, platformImageKeep: 3 },
+  defaults: { count: 3, platformImageKeep: 3 },
+  lastRunAt: null
+};
+
 describe("DiskSettings", () => {
   beforeEach(() => vi.restoreAllMocks());
   afterEach(() => vi.unstubAllGlobals());
 
-  test("shows reclaimable space and prunes on demand", async () => {
+  test("loads the retention config and runs a cleanup on demand", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
-      if (url === "/api/images/prune" && (!init || init.method === undefined)) {
-        return json({ success: true, keepPerApp: 5, candidates: 3, reclaimableBytes: 3 * 1024 ** 2 });
+      if (url === "/api/settings/retention" && (!init || init.method === undefined)) {
+        return json(RETENTION_INFO);
       }
-      if (url === "/api/images/prune/run") {
-        return json({ success: true, removed: 3, reclaimedBytes: 3 * 1024 ** 2, failed: 0 });
+      if (url === "/api/settings/retention/run") {
+        return json({
+          success: true,
+          summary: {
+            scope: "global",
+            appId: null,
+            skipped: false,
+            versionsPruned: 4,
+            imagesDeleted: 4,
+            imagesRetained: 9,
+            containersRemoved: 2,
+            bytesReclaimed: 3 * 1024 ** 2,
+            durationMs: 1200,
+            failures: []
+          }
+        });
       }
       return json({ success: true });
     });
@@ -26,25 +47,46 @@ describe("DiskSettings", () => {
 
     render(<DiskSettings />);
 
-    expect(await screen.findByText(/3 images can be removed/)).toBeInTheDocument();
+    // Wait for the config to load (the run button is disabled until then).
+    const runButton = await screen.findByRole("button", { name: "Clean up now" });
+    await waitFor(() => expect(runButton).toBeEnabled());
 
-    await userEvent.click(screen.getByRole("button", { name: "Prune now" }));
+    await userEvent.click(runButton);
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/images/prune/run", expect.objectContaining({ method: "POST" }));
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings/retention/run",
+        expect.objectContaining({ method: "POST" })
+      );
     });
-    expect(await screen.findByText(/Removed 3 images/)).toBeInTheDocument();
+    expect(await screen.findByText(/Removed 4 images and 2 containers/)).toBeInTheDocument();
   });
 
-  test("disables Prune now when nothing is reclaimable", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => json({ success: true, keepPerApp: 5, candidates: 0, reclaimableBytes: 0 }))
-    );
+  test("saves an updated retention count", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/settings/retention" && init?.method === "PATCH") {
+        return json({ success: true, config: { count: 5, platformImageKeep: 3 } });
+      }
+      return json(RETENTION_INFO);
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<DiskSettings />);
 
-    expect(await screen.findByText(/0 images can be removed/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Prune now" })).toBeDisabled();
+    const saveButton = await screen.findByRole("button", { name: "Save" });
+    await waitFor(() => expect(saveButton).toBeEnabled());
+
+    const [countInput] = screen.getAllByRole("spinbutton");
+    await userEvent.clear(countInput);
+    await userEvent.type(countInput, "5");
+    await userEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings/retention",
+        expect.objectContaining({ method: "PATCH", body: JSON.stringify({ count: 5, platformImageKeep: 3 }) })
+      );
+    });
   });
 });

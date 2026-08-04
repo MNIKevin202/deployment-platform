@@ -18,6 +18,7 @@ import { sanitizeProcessOutput } from "./process-runner.js";
 import type { HealthCheckDependencies, HealthCheckHttpClient } from "./health-check-service.js";
 import { performHealthCheck, sanitizeHealthCheckError } from "./health-check-service.js";
 import { startDeployProgress } from "./deploy-progress-service.js";
+import type { RetentionCleanupResult } from "./deployment-retention-service.js";
 
 const PROTECTED_CONTAINER_NAMES = new Set([
   "deployment-platform-api",
@@ -234,6 +235,13 @@ export interface GithubDeployDependencies {
   recordEvent: RecordEventFn;
   /** Only constructed/used when the app actually has a health check configured. */
   healthCheckDeps?: Pick<HealthCheckDependencies, "httpClient" | "isContainerRunning" | "logger">;
+  /**
+   * Best-effort deployment retention cleanup, run after a successful deploy
+   * while the per-app deployment lock is still held. Optional so tests and
+   * other callers need not provide it; a failure here never affects the deploy
+   * result (the runner never throws, and the call site swallows anything).
+   */
+  cleanupRetention?: (appId: number) => Promise<RetentionCleanupResult>;
   now?: () => Date;
   cloneTimeoutMs?: number;
   buildTimeoutMs?: number;
@@ -890,6 +898,45 @@ export async function deployFromGithub(
         severity: "warning",
         message: `Routing warning after deploying "${app.name}" from GitHub: ${routingWarning}`
       });
+    }
+
+    // Enforce rollback retention: reclaim rollback versions beyond the keep
+    // limit (old images, ledger rows, leftover rollback containers). Run while
+    // the per-app deployment lock is still held, so nothing races this app's
+    // deploy. Strictly best-effort — the deploy has already succeeded, so a
+    // cleanup failure is logged and swallowed, never surfaced as a deploy
+    // failure (requirement: cleanup failures must not fail deployments).
+    if (deps.cleanupRetention) {
+      try {
+        const cleanup = await deps.cleanupRetention(appId);
+        recordEvent({
+          appId,
+          eventType: "retention-cleanup",
+          severity: cleanup.failures.length > 0 ? "warning" : "info",
+          message:
+            cleanup.imagesDeleted === 0 && cleanup.containersRemoved === 0 && cleanup.versionsPruned === 0
+              ? `Retention cleanup for "${app.name}": nothing to reclaim.`
+              : `Retention cleanup for "${app.name}": removed ${cleanup.imagesDeleted} image(s) and ` +
+                `${cleanup.containersRemoved} container(s), pruned ${cleanup.versionsPruned} old version(s), ` +
+                `reclaimed ~${Math.round(cleanup.bytesReclaimed / 1024 / 1024)} MB in ${cleanup.durationMs}ms.`,
+          metadata: {
+            imagesDeleted: cleanup.imagesDeleted,
+            containersRemoved: cleanup.containersRemoved,
+            versionsPruned: cleanup.versionsPruned,
+            imagesRetained: cleanup.imagesRetained,
+            bytesReclaimed: cleanup.bytesReclaimed,
+            durationMs: cleanup.durationMs,
+            cleanupFailures: cleanup.failures.length
+          }
+        });
+      } catch (cleanupError) {
+        recordEvent({
+          appId,
+          eventType: "retention-cleanup-failed",
+          severity: "warning",
+          message: `Retention cleanup for "${app.name}" failed but the deployment succeeded: ${errorMessage(cleanupError)}`
+        });
+      }
     }
 
     return {

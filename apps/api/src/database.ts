@@ -109,6 +109,11 @@ export interface StoredApp {
   memoryLimitMb: number | null;
   /** Optional CPU-core cap (fractional allowed); null means no limit. */
   cpuLimit: number | null;
+  /**
+   * Optional per-app override for how many recent rollback versions to keep.
+   * null means "use the global deployment_retention setting".
+   */
+  deploymentRetention: number | null;
 }
 
 interface AppRow {
@@ -129,6 +134,7 @@ interface AppRow {
   environment_touched_at: string | null;
   memory_limit_mb: number | null;
   cpu_limit: number | null;
+  deployment_retention: number | null;
 }
 
 const APP_COLUMNS = `
@@ -148,7 +154,8 @@ const APP_COLUMNS = `
   last_deployed_at,
   environment_touched_at,
   memory_limit_mb,
-  cpu_limit
+  cpu_limit,
+  deployment_retention
 `;
 
 function mapApp(row: AppRow): StoredApp {
@@ -169,7 +176,8 @@ function mapApp(row: AppRow): StoredApp {
     lastDeployedAt: row.last_deployed_at,
     environmentTouchedAt: row.environment_touched_at,
     memoryLimitMb: row.memory_limit_mb,
-    cpuLimit: row.cpu_limit
+    cpuLimit: row.cpu_limit,
+    deploymentRetention: row.deployment_retention
   };
 }
 
@@ -287,6 +295,16 @@ export function createAppDatabase(databasePath: string) {
     db.prepare(
       `UPDATE apps SET memory_limit_mb = ?, cpu_limit = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
     ).run(input.memoryLimitMb, input.cpuLimit, id);
+  }
+
+  /**
+   * Sets (or clears, with null) an app's per-app rollback retention override.
+   * null restores "use the global deployment_retention setting".
+   */
+  function updateAppRetention(id: number, retention: number | null): void {
+    db.prepare(
+      `UPDATE apps SET deployment_retention = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(retention, id);
   }
 
   function updateAppContainer(
@@ -451,6 +469,7 @@ export function createAppDatabase(databasePath: string) {
     updateAppDomain,
     updateAppRouting,
     updateAppResources,
+    updateAppRetention,
     deleteApp,
     touchAppEnvironment,
     touchAllAppsEnvironment,

@@ -44,6 +44,7 @@ function appDetail(overrides: Partial<AppDetailData> = {}): AppDetailData {
     restartPolicy: "unless-stopped",
     memoryLimitMb: null,
     cpuLimit: null,
+    deploymentRetention: null,
     containerExists: true,
     dockerState: "running",
     dockerStatusText: "Up 2 minutes",

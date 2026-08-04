@@ -22,6 +22,7 @@ function makeApp(overrides: Partial<StoredApp>): StoredApp {
     environmentTouchedAt: null,
     memoryLimitMb: null,
     cpuLimit: null,
+    deploymentRetention: null,
     ...overrides
   };
 }

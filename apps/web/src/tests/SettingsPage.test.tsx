@@ -29,9 +29,6 @@ describe("SettingsPage — backup & restore", () => {
   test("uploading a backup and confirming posts it to the restore endpoint", async () => {
     const settingsPayload = {
       success: true,
-      keepPerApp: 5,
-      candidates: 0,
-      reclaimableBytes: 0,
       config: { enabled: false, type: "discord", webhookUrl: "", intervalHours: 24, retention: 7 },
       backups: [],
       lastRunAt: null
@@ -82,9 +79,6 @@ describe("SettingsPage — backup & restore", () => {
             ok: true,
             json: async () => ({
               success: true,
-              keepPerApp: 5,
-              candidates: 0,
-              reclaimableBytes: 0,
               config: { enabled: false, type: "discord", webhookUrl: "", intervalHours: 24, retention: 7 },
               backups: [],
               lastRunAt: null

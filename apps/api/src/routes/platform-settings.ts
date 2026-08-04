@@ -6,10 +6,18 @@ import {
   sendNotification,
   type NotificationConfig
 } from "../services/notification-service.js";
+import {
+  normalizeRetentionConfig,
+  DEFAULT_RETENTION_CONFIG,
+  type RetentionConfig,
+  type RetentionCleanupResult
+} from "../services/deployment-retention-service.js";
 
 export const AUTO_BACKUP_KEY = "auto_backup";
 export const AUTO_BACKUP_LAST_RUN_KEY = "auto_backup_last_run";
 export const NOTIFICATIONS_KEY = "notifications";
+export const RETENTION_KEY = "deployment_retention";
+export const RETENTION_LAST_RUN_KEY = "deployment_retention_last_run";
 
 export interface AutoBackupConfig {
   enabled: boolean;
@@ -32,8 +40,18 @@ const notificationsSchema = z.object({
   webhookUrl: z.string().max(2000)
 });
 
+const retentionSchema = z.object({
+  count: z.coerce.number().int().min(1).max(50),
+  platformImageKeep: z.coerce.number().int().min(0).max(50)
+});
+
 export function readAutoBackupConfig(appDatabase: AppDatabase): AutoBackupConfig {
   return appDatabase.getJsonSetting<AutoBackupConfig>(AUTO_BACKUP_KEY) ?? DEFAULT_AUTO_BACKUP;
+}
+
+/** The global rollback-retention config, always fully clamped/normalized. */
+export function readRetentionConfig(appDatabase: AppDatabase): RetentionConfig {
+  return normalizeRetentionConfig(appDatabase.getJsonSetting<Partial<RetentionConfig>>(RETENTION_KEY));
 }
 
 export function readNotificationConfig(appDatabase: AppDatabase): NotificationConfig {
@@ -45,11 +63,13 @@ interface RegisterPlatformSettingsRoutesOptions {
   backupsDir: string;
   /** Runs a scheduled backup immediately (write to disk + retention). */
   runBackupNow: () => Promise<void>;
+  /** Runs the deployment-retention safety-net sweep immediately. */
+  runRetentionSweep: () => Promise<RetentionCleanupResult>;
 }
 
 export async function registerPlatformSettingsRoutes(
   fastify: FastifyInstance,
-  { appDatabase, backupsDir, runBackupNow }: RegisterPlatformSettingsRoutesOptions
+  { appDatabase, backupsDir, runBackupNow, runRetentionSweep }: RegisterPlatformSettingsRoutesOptions
 ): Promise<void> {
   // ---- Automatic backups ----
   fastify.get("/settings/auto-backup", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async () => {
@@ -80,6 +100,39 @@ export async function registerPlatformSettingsRoutes(
       return reply.code(500).send({
         success: false,
         message: error instanceof Error ? error.message : "Backup failed."
+      });
+    }
+  });
+
+  // ---- Rollback retention ----
+  fastify.get("/settings/retention", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async () => {
+    const lastRunRaw = appDatabase.getSetting(RETENTION_LAST_RUN_KEY);
+    return {
+      success: true,
+      config: readRetentionConfig(appDatabase),
+      defaults: DEFAULT_RETENTION_CONFIG,
+      lastRunAt: lastRunRaw ? Number(lastRunRaw) : null
+    };
+  });
+
+  fastify.patch("/settings/retention", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
+    const parsed = retentionSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ success: false, message: "Invalid retention settings.", errors: parsed.error.flatten() });
+    }
+    appDatabase.setJsonSetting(RETENTION_KEY, parsed.data);
+    return { success: true, config: parsed.data };
+  });
+
+  fastify.post("/settings/retention/run", { config: { rateLimit: { max: 6, timeWindow: "1 minute" } } }, async (_request, reply) => {
+    try {
+      const summary = await runRetentionSweep();
+      appDatabase.setSetting(RETENTION_LAST_RUN_KEY, String(Date.now()));
+      return { success: true, summary };
+    } catch (error) {
+      return reply.code(500).send({
+        success: false,
+        message: error instanceof Error ? error.message : "Retention cleanup failed."
       });
     }
   });

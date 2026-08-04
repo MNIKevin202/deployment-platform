@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ApiError, ImagePruneInfo, ImagePruneResult } from "../types/api";
+import type { ApiError, RetentionInfo, RetentionRunResult, RetentionSummary } from "../types/api";
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) {
@@ -12,12 +12,26 @@ function formatBytes(bytes: number): string {
   return `${mb.toFixed(1)} MB`;
 }
 
+function describeSummary(summary: RetentionSummary): string {
+  if (summary.imagesDeleted === 0 && summary.containersRemoved === 0 && summary.versionsPruned === 0) {
+    return "Nothing to reclaim — disk usage is already within your retention limits.";
+  }
+  const failed = summary.failures.length > 0 ? ` (${summary.failures.length} skipped)` : "";
+  return (
+    `Removed ${summary.imagesDeleted} image${summary.imagesDeleted === 1 ? "" : "s"} and ` +
+    `${summary.containersRemoved} container${summary.containersRemoved === 1 ? "" : "s"}, pruned ` +
+    `${summary.versionsPruned} old version${summary.versionsPruned === 1 ? "" : "s"}, reclaiming ` +
+    `${formatBytes(summary.bytesReclaimed)} in ${(summary.durationMs / 1000).toFixed(1)}s${failed}.`
+  );
+}
+
 export default function DiskSettings() {
-  const [info, setInfo] = useState<ImagePruneInfo | null>(null);
-  const [keepInput, setKeepInput] = useState("5");
+  const [info, setInfo] = useState<RetentionInfo | null>(null);
+  const [countInput, setCountInput] = useState("3");
+  const [platformInput, setPlatformInput] = useState("3");
   const [loading, setLoading] = useState(true);
-  const [savingKeep, setSavingKeep] = useState(false);
-  const [pruning, setPruning] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -25,15 +39,16 @@ export default function DiskSettings() {
     try {
       setLoading(true);
       setError("");
-      const response = await fetch("/api/images/prune");
-      const result = (await response.json().catch(() => null)) as (ImagePruneInfo & ApiError) | null;
+      const response = await fetch("/api/settings/retention");
+      const result = (await response.json().catch(() => null)) as (RetentionInfo & ApiError) | null;
       if (!response.ok || !result?.success) {
-        throw new Error(result?.message || "Unable to load image info.");
+        throw new Error(result?.message || "Unable to load retention settings.");
       }
       setInfo(result);
-      setKeepInput(String(result.keepPerApp));
+      setCountInput(String(result.config.count));
+      setPlatformInput(String(result.config.platformImageKeep));
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Unable to load image info.");
+      setError(loadError instanceof Error ? loadError.message : "Unable to load retention settings.");
     } finally {
       setLoading(false);
     }
@@ -43,15 +58,15 @@ export default function DiskSettings() {
     void load();
   }, [load]);
 
-  const saveKeep = async () => {
+  const save = async () => {
     try {
-      setSavingKeep(true);
+      setSaving(true);
       setError("");
       setNotice("");
-      const response = await fetch("/api/images/prune", {
+      const response = await fetch("/api/settings/retention", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keepPerApp: Number(keepInput) })
+        body: JSON.stringify({ count: Number(countInput), platformImageKeep: Number(platformInput) })
       });
       const result = (await response.json().catch(() => null)) as ApiError | null;
       if (!response.ok) {
@@ -61,30 +76,26 @@ export default function DiskSettings() {
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Unable to save.");
     } finally {
-      setSavingKeep(false);
+      setSaving(false);
     }
   };
 
-  const runPrune = async () => {
+  const runCleanup = async () => {
     try {
-      setPruning(true);
+      setRunning(true);
       setError("");
       setNotice("");
-      const response = await fetch("/api/images/prune/run", { method: "POST" });
-      const result = (await response.json().catch(() => null)) as (ImagePruneResult & ApiError) | null;
+      const response = await fetch("/api/settings/retention/run", { method: "POST" });
+      const result = (await response.json().catch(() => null)) as (RetentionRunResult & ApiError) | null;
       if (!response.ok || !result?.success) {
-        throw new Error(result?.message || "Prune failed.");
+        throw new Error(result?.message || "Cleanup failed.");
       }
-      setNotice(
-        `Removed ${result.removed} image${result.removed === 1 ? "" : "s"}, reclaiming ${formatBytes(
-          result.reclaimedBytes
-        )}${result.failed > 0 ? ` (${result.failed} skipped)` : ""}.`
-      );
+      setNotice(describeSummary(result.summary));
       await load();
-    } catch (pruneError) {
-      setError(pruneError instanceof Error ? pruneError.message : "Prune failed.");
+    } catch (runError) {
+      setError(runError instanceof Error ? runError.message : "Cleanup failed.");
     } finally {
-      setPruning(false);
+      setRunning(false);
     }
   };
 
@@ -93,14 +104,15 @@ export default function DiskSettings() {
       <div className="section-heading">
         <div>
           <p className="eyebrow">Disk &amp; images</p>
-          <h2>Clean up build images</h2>
+          <h2>Rollback retention</h2>
         </div>
       </div>
 
       <p className="text-faint">
-        Every GitHub deploy builds a new image; old ones pile up and use disk. This removes dangling
-        images and, per app, keeps only the most recent builds (the rest are still available to revert
-        to until pruned).
+        Every GitHub deploy keeps a revertable rollback point (its image + version). Only the most
+        recent few are kept — older versions, their images, and any leftover rollback containers are
+        reclaimed automatically after each deploy and once daily. The currently running version, its
+        image, and all volumes are never removed.
       </p>
 
       {error && <div className="error-banner">{error}</div>}
@@ -108,45 +120,52 @@ export default function DiskSettings() {
 
       <div className="settings-form">
         <label>
-          <span>Recent builds to keep per app</span>
-          <div className="inline-field">
-            <input
-              type="number"
-              className="wizard-input"
-              min={0}
-              max={50}
-              value={keepInput}
-              onChange={(event) => setKeepInput(event.target.value)}
-            />
-            <button
-              className="secondary-button compact"
-              type="button"
-              onClick={() => void saveKeep()}
-              disabled={savingKeep}
-            >
-              {savingKeep ? "Saving…" : "Save"}
-            </button>
-          </div>
+          <span>Rollback versions to keep per app</span>
+          <input
+            type="number"
+            className="wizard-input"
+            min={1}
+            max={50}
+            value={countInput}
+            onChange={(event) => setCountInput(event.target.value)}
+          />
         </label>
 
-        <p className="text-faint">
-          {loading
-            ? "Checking reclaimable space…"
-            : info
-              ? `${info.candidates} image${info.candidates === 1 ? "" : "s"} can be removed, reclaiming about ${formatBytes(
-                  info.reclaimableBytes
-                )}.`
-              : ""}
-        </p>
+        <label>
+          <span>Platform images to keep (deployment-platform-api/web)</span>
+          <input
+            type="number"
+            className="wizard-input"
+            min={0}
+            max={50}
+            value={platformInput}
+            onChange={(event) => setPlatformInput(event.target.value)}
+          />
+        </label>
+
+        <div className="inline-field">
+          <button
+            className="secondary-button compact"
+            type="button"
+            onClick={() => void save()}
+            disabled={saving || loading}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+
+        {info?.lastRunAt && (
+          <p className="text-faint">Last full cleanup: {new Date(info.lastRunAt).toLocaleString()}.</p>
+        )}
 
         <div className="form-actions form-actions-start">
           <button
             className="primary-button"
             type="button"
-            onClick={() => void runPrune()}
-            disabled={pruning || loading || (info?.candidates ?? 0) === 0}
+            onClick={() => void runCleanup()}
+            disabled={running || loading}
           >
-            {pruning ? "Pruning…" : "Prune now"}
+            {running ? "Cleaning up…" : "Clean up now"}
           </button>
           <button className="secondary-button" type="button" onClick={() => void load()} disabled={loading}>
             Refresh

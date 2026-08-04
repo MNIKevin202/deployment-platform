@@ -38,6 +38,8 @@ export interface AppDetail {
   restartPolicy: string;
   memoryLimitMb: number | null;
   cpuLimit: number | null;
+  /** Per-app rollback retention override; null means the global default applies. */
+  deploymentRetention: number | null;
   containerExists: boolean;
   dockerState: string | null;
   dockerStatusText: string | null;
@@ -99,6 +101,7 @@ export function buildAppDetail(
     restartPolicy: storedApp.restartPolicy,
     memoryLimitMb: storedApp.memoryLimitMb,
     cpuLimit: storedApp.cpuLimit,
+    deploymentRetention: storedApp.deploymentRetention,
     containerExists: inspection !== null,
     dockerState: inspection ? inspection.state.status : null,
     dockerStatusText: inspection

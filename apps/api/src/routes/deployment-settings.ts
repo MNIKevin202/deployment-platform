@@ -14,6 +14,11 @@ const autoDeployBodySchema = z.object({
   enabled: z.boolean()
 });
 
+const retentionBodySchema = z.object({
+  // null clears the per-app override, restoring the global default.
+  retention: z.number().int().min(1).max(50).nullable()
+});
+
 interface AppIdParams {
   id: string;
 }
@@ -86,6 +91,40 @@ export async function registerDeploymentSettingsRoutes(
       }
 
       return { success: true, autoDeploy: parsedBody.data.enabled };
+    }
+  );
+
+  // Set (or clear, with null) how many rollback versions to keep for this app,
+  // overriding the global default.
+  fastify.patch<{ Params: AppIdParams }>(
+    "/apps/:id/retention",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const parsedParams = idParamSchema.safeParse(request.params);
+
+      if (!parsedParams.success) {
+        return reply.code(400).send({ success: false, message: "Invalid app id" });
+      }
+
+      const parsedBody = retentionBodySchema.safeParse(request.body ?? {});
+
+      if (!parsedBody.success) {
+        return reply.code(400).send({
+          success: false,
+          message: "Retention must be a whole number between 1 and 50, or null to use the global default.",
+          errors: parsedBody.error.flatten()
+        });
+      }
+
+      const app = appDatabase.getAppById(parsedParams.data.id);
+
+      if (!app) {
+        return reply.code(404).send({ success: false, message: "App not found" });
+      }
+
+      appDatabase.updateAppRetention(parsedParams.data.id, parsedBody.data.retention);
+
+      return { success: true, deploymentRetention: parsedBody.data.retention };
     }
   );
 }

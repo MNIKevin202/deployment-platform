@@ -112,6 +112,7 @@ export interface AppDetail {
   restartPolicy: string;
   memoryLimitMb: number | null;
   cpuLimit: number | null;
+  deploymentRetention: number | null;
   containerExists: boolean;
   dockerState: string | null;
   dockerStatusText: string | null;
@@ -794,18 +795,34 @@ export interface SuggestPortResponse {
   port: number;
 }
 
-export interface ImagePruneInfo {
-  success: boolean;
-  keepPerApp: number;
-  candidates: number;
-  reclaimableBytes: number;
+export interface RetentionConfig {
+  count: number;
+  platformImageKeep: number;
 }
 
-export interface ImagePruneResult {
+export interface RetentionInfo {
   success: boolean;
-  removed: number;
-  reclaimedBytes: number;
-  failed: number;
+  config: RetentionConfig;
+  defaults: RetentionConfig;
+  lastRunAt: number | null;
+}
+
+export interface RetentionSummary {
+  scope: "app" | "global";
+  appId: number | null;
+  skipped: boolean;
+  versionsPruned: number;
+  imagesDeleted: number;
+  imagesRetained: number;
+  containersRemoved: number;
+  bytesReclaimed: number;
+  durationMs: number;
+  failures: string[];
+}
+
+export interface RetentionRunResult {
+  success: boolean;
+  summary: RetentionSummary;
 }
 
 export interface AutoBackupConfig {
