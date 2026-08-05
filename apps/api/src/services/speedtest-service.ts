@@ -114,7 +114,7 @@ export function normalizeBaseUrl(url: string): string {
 
 export type SpeedtestFetch = (
   url: string,
-  init: { headers: Record<string, string>; signal?: AbortSignal }
+  init: { method?: string; headers: Record<string, string>; signal?: AbortSignal }
 ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
 
 const defaultFetch: SpeedtestFetch = (url, init) =>
@@ -373,4 +373,99 @@ export async function saveSpeedtestConnection(
 export function clearSpeedtestConnection(appDatabase: AppDatabase): void {
   appDatabase.deleteSetting(SPEEDTEST_URL_KEY);
   appDatabase.deleteProviderCredential(SPEEDTEST_PROVIDER);
+}
+
+
+export interface RunSpeedtestResult {
+  success: boolean;
+  statusCode?: number;
+  message: string;
+}
+
+/**
+ * Asks the configured instance to run a test now. Speedtest Tracker queues
+ * it and returns 201 immediately — the result appears in a later reading
+ * rather than in this response, which is why this reports "started" rather
+ * than returning a measurement.
+ *
+ * Needs a token with the "Run Speedtest" ability; a token that only has
+ * "Read Results" gets a 403, reported here as exactly that so the operator
+ * knows to re-issue the token rather than wondering why nothing happened.
+ */
+export async function runSpeedtest(deps: SpeedtestDeps): Promise<RunSpeedtestResult> {
+  const { appDatabase } = deps;
+  const fetchImpl = deps.fetchImpl ?? defaultFetch;
+  // A speedtest itself takes a while, but the request only queues it, so the
+  // usual short budget is right.
+  const timeoutMs = deps.timeoutMs ?? 10_000;
+
+  const url = appDatabase.getSetting(SPEEDTEST_URL_KEY);
+  const stored = appDatabase.getProviderCredential(SPEEDTEST_PROVIDER);
+
+  if (!url || !stored) {
+    return { success: false, statusCode: 400, message: "No Speedtest Tracker is connected." };
+  }
+
+  const keyStatus = loadEncryptionKey();
+  if (!keyStatus.available) {
+    return {
+      success: false,
+      statusCode: 503,
+      message: "The encryption key needed to read the saved API token is unavailable."
+    };
+  }
+
+  let token: string;
+  try {
+    token = decryptSecret(keyStatus.key, stored.encryptedPayload);
+  } catch {
+    return {
+      success: false,
+      statusCode: 400,
+      message: "The saved API token could not be decrypted. Re-enter it to reconnect."
+    };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetchImpl(`${normalizeBaseUrl(url)}/api/v1/speedtests/run`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, Accept: JSON_ACCEPT },
+      signal: controller.signal
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      return {
+        success: false,
+        statusCode: 400,
+        message:
+          "Speedtest Tracker refused to start a test. The API token needs the \"Run Speedtest\" ability — the one saved here may only have \"Read Results\"."
+      };
+    }
+    if (!response.ok) {
+      return {
+        success: false,
+        statusCode: 400,
+        message: `Speedtest Tracker returned HTTP ${response.status} when starting a test.`
+      };
+    }
+
+    return {
+      success: true,
+      message: "Speed test started. It takes a minute or so — the reading updates once it finishes."
+    };
+  } catch (error) {
+    const aborted = error instanceof Error && error.name === "AbortError";
+    return {
+      success: false,
+      statusCode: 400,
+      message: aborted
+        ? `Speedtest Tracker did not respond within ${timeoutMs}ms.`
+        : "Could not reach Speedtest Tracker at the saved URL."
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }

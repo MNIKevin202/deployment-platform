@@ -6,6 +6,7 @@ import {
   normalizeBaseUrl,
   createSpeedtestProvider,
   saveSpeedtestConnection,
+  runSpeedtest,
   type SpeedtestFetch
 } from "../services/speedtest-service.js";
 import { createAppDatabase } from "../database.js";
@@ -303,5 +304,75 @@ describe("createSpeedtestProvider", () => {
     const result = await provider.getLatest();
     assert.equal(result.reading, null);
     assert.match(result.error ?? "", /Read Results/);
+  });
+});
+
+describe("runSpeedtest", () => {
+  async function connectedDb() {
+    const db = createAppDatabase(":memory:");
+    await saveSpeedtestConnection(
+      { appDatabase: db, fetchImpl: stubFetch({ ok: true, status: 200, body: latestPayload() }) },
+      { url: "https://speedtest.example.com", token: "tok" }
+    );
+    return db;
+  }
+
+  test("POSTs to the run endpoint with the bearer token and Accept header", async () => {
+    const db = await connectedDb();
+    const record: { url?: string; headers?: Record<string, string>; method?: string } = {};
+    const fetchImpl: SpeedtestFetch = async (url, init) => {
+      record.url = url;
+      record.headers = init.headers;
+      record.method = init.method;
+      return { ok: true, status: 201, json: async () => ({ message: "queued" }) };
+    };
+
+    const result = await runSpeedtest({ appDatabase: db, fetchImpl });
+
+    assert.equal(result.success, true);
+    assert.equal(record.method, "POST");
+    assert.equal(record.url, "https://speedtest.example.com/api/v1/speedtests/run");
+    assert.equal(record.headers?.Authorization, "Bearer tok");
+    assert.equal(record.headers?.Accept, "application/json");
+  });
+
+  test("a token without the Run Speedtest ability is reported as exactly that", async () => {
+    const db = await connectedDb();
+
+    const result = await runSpeedtest({
+      appDatabase: db,
+      fetchImpl: stubFetch({ ok: false, status: 403 })
+    });
+
+    assert.equal(result.success, false);
+    // The common case is a token issued with only "Read Results" — say so
+    // rather than surfacing a bare 403.
+    assert.match(result.message, /Run Speedtest/);
+  });
+
+  test("refuses, without calling out, when nothing is connected", async () => {
+    const db = createAppDatabase(":memory:");
+    let called = false;
+    const fetchImpl: SpeedtestFetch = async () => {
+      called = true;
+      return { ok: true, status: 201, json: async () => ({}) };
+    };
+
+    const result = await runSpeedtest({ appDatabase: db, fetchImpl });
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /No Speedtest Tracker is connected/);
+    assert.equal(called, false);
+  });
+
+  test("an unreachable instance is reported, not thrown", async () => {
+    const db = await connectedDb();
+    const fetchImpl: SpeedtestFetch = async () => {
+      throw new Error("ECONNREFUSED");
+    };
+
+    const result = await runSpeedtest({ appDatabase: db, fetchImpl });
+    assert.equal(result.success, false);
+    assert.match(result.message, /Could not reach/);
   });
 });

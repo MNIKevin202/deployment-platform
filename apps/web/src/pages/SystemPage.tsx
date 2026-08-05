@@ -1,4 +1,5 @@
 import AppCard from "../components/AppCard";
+import { useState } from "react";
 import { useSpeedtest } from "../hooks/useSpeedtest";
 import type { ContainerAction, ContainerSummary, DockerInfo } from "../types/api";
 
@@ -21,12 +22,33 @@ function formatMemory(bytes: number | undefined): string {
 /** Connectivity belongs with the host's other vitals, in fuller detail than the Overview card. */
 function InternetSection() {
   const { data } = useSpeedtest();
+  const [running, setRunning] = useState(false);
+  const [runNotice, setRunNotice] = useState("");
+  const [runError, setRunError] = useState("");
 
   if (!data?.configured) {
     return null;
   }
 
   const r = data.reading;
+
+  const runNow = async () => {
+    try {
+      setRunning(true);
+      setRunNotice("");
+      setRunError("");
+      const response = await fetch("/api/speedtest/run", { method: "POST" });
+      const result = (await response.json().catch(() => null)) as { message?: string } | null;
+      if (!response.ok) {
+        throw new Error(result?.message || "Could not start a speed test.");
+      }
+      setRunNotice(result?.message ?? "Speed test started.");
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : "Could not start a speed test.");
+    } finally {
+      setRunning(false);
+    }
+  };
 
   return (
     <section className="page-section">
@@ -35,7 +57,18 @@ function InternetSection() {
           <p className="eyebrow">Host</p>
           <h2>Internet Connection</h2>
         </div>
+        <button
+          className="secondary-button compact"
+          type="button"
+          onClick={() => void runNow()}
+          disabled={running}
+        >
+          {running ? "Starting…" : "Run test now"}
+        </button>
       </div>
+
+      {runError && <div className="error-banner">{runError}</div>}
+      {runNotice && <div className="notice-banner">{runNotice}</div>}
 
       {!r ? (
         <p className="text-faint">{data.error ?? "No speedtest result recorded yet."}</p>
