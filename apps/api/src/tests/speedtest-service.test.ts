@@ -84,6 +84,64 @@ describe("normalizeSpeedtestResult", () => {
     assert.equal(reading?.healthy, null);
   });
 
+  test("a successful reading is not flagged as failed", () => {
+    assert.equal(normalizeSpeedtestResult(latestPayload())?.failed, false);
+  });
+
+  test("numeric strings are accepted — Laravel serialises decimal columns that way", () => {
+    const reading = normalizeSpeedtestResult(
+      latestPayload({ ping: "12.34", download_bits: "241529872" })
+    );
+
+    assert.equal(reading?.pingMs, 12.34);
+    assert.equal(reading?.downloadBits, 241529872);
+    assert.equal(reading?.failed, false);
+  });
+
+  test("falls back to the raw byte columns when the *_bits accessors are absent", () => {
+    // The bare model has `download`/`upload` (bytes/sec) but not the
+    // accessors, so a version that serialises it directly must still work.
+    const reading = normalizeSpeedtestResult(
+      latestPayload({
+        download_bits: undefined,
+        upload_bits: undefined,
+        download_bits_human: undefined,
+        upload_bits_human: undefined
+      })
+    );
+
+    assert.equal(reading?.downloadBits, 30191234 * 8);
+    assert.equal(reading?.uploadBits, 5123456 * 8);
+    assert.equal(reading?.downloadHuman, "241.53 Mbps");
+    assert.equal(reading?.failed, false);
+  });
+
+  test("a run that recorded no measurements is flagged as failed", () => {
+    // Speedtest Tracker still writes a row when a test fails, so a fresh
+    // timestamp with no numbers must read as "the test failed", not as a
+    // reading full of blanks.
+    const reading = normalizeSpeedtestResult({
+      id: 43,
+      status: "failed",
+      created_at: "2026-08-05T13:10:20.000Z",
+      data: { message: "No servers available" }
+    });
+
+    assert.equal(reading?.failed, true);
+    assert.equal(reading?.failureMessage, "No servers available");
+    assert.equal(reading?.measuredAt, "2026-08-05T13:10:20.000Z");
+  });
+
+  test("a failure whose data is a bare string still surfaces the reason", () => {
+    const reading = normalizeSpeedtestResult({
+      created_at: "2026-08-05T13:10:20.000Z",
+      data: "Ookla CLI exited with code 1"
+    });
+
+    assert.equal(reading?.failed, true);
+    assert.equal(reading?.failureMessage, "Ookla CLI exited with code 1");
+  });
+
   test("a payload with nothing usable reports no reading at all", () => {
     assert.equal(normalizeSpeedtestResult({}), null);
     assert.equal(normalizeSpeedtestResult(null), null);
