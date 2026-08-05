@@ -2395,15 +2395,81 @@ code {
   color: var(--color-accent);
 }
 
+.apps-table {
+  table-layout: fixed;
+}
+
 .apps-table td {
   vertical-align: middle;
 }
 
+/* Fixed per-column widths so a long image tag or domain can never squeeze
+   the Actions column down to nothing and force its buttons to wrap onto
+   separate lines (exactly what happened before this was added). */
+.apps-table th:nth-child(1),
+.apps-table td:nth-child(1) {
+  width: 40px;
+}
+
+.apps-table th:nth-child(2),
+.apps-table td:nth-child(2) {
+  width: 22%;
+}
+
+.apps-table th:nth-child(3),
+.apps-table td:nth-child(3) {
+  width: 11%;
+}
+
+.apps-table th:nth-child(4),
+.apps-table td:nth-child(4) {
+  width: 16%;
+}
+
+.apps-table th:nth-child(5),
+.apps-table td:nth-child(5) {
+  width: 7%;
+}
+
+.apps-table th:nth-child(6),
+.apps-table td:nth-child(6) {
+  width: 11%;
+}
+
+.apps-table th:nth-child(7),
+.apps-table td:nth-child(7) {
+  width: 12%;
+}
+
+.apps-table th:nth-child(8),
+.apps-table td:nth-child(8) {
+  width: 8%;
+}
+
+.apps-table th:nth-child(9),
+.apps-table td:nth-child(9) {
+  width: 250px;
+}
+
 .apps-table-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-wrap: nowrap;
+  gap: 4px;
   justify-content: flex-end;
+}
+
+/* Open/Start/Stop stay text buttons but shed the extra horizontal padding
+   inside the now-tighter Actions column — 3 icon buttons already sit beside
+   them, and there's no room for `.compact`'s normal button padding too. */
+.apps-table-actions > .primary-button.compact,
+.apps-table-actions > .secondary-button.compact {
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.apps-table-image-cell code {
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 .table-name-button {
