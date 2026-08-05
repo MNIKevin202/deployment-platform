@@ -1599,11 +1599,12 @@ export const APP_TEMPLATES: AppTemplate[] = [
     icon: "⚡",
     description: "Tracks your internet speed over time on a graph.",
     longDescription:
-      "Speedtest Tracker periodically runs an internet speed test and graphs the results over time, so you can spot slowdowns and hold your ISP to their advertised speed.",
+      "Speedtest Tracker periodically runs an internet speed test and graphs the results over time, so you can spot slowdowns and hold your ISP to their advertised speed. Sign in with the admin email and password below — they seed the account on the very first boot, so set them before installing.",
     highlights: [
       "Scheduled speed tests, graphed over time",
       "Great for catching ISP slowdowns",
-      "Uses its own SQLite database — no external DB needed"
+      "Uses its own SQLite database — no external DB needed",
+      "Admin login is seeded on first boot from the values below"
     ],
     image: "lscr.io/linuxserver/speedtest-tracker:latest",
     containerPort: 80,
@@ -1613,7 +1614,20 @@ export const APP_TEMPLATES: AppTemplate[] = [
       { key: "PGID", value: "1000" },
       { key: "TZ", value: "Etc/UTC" },
       { key: "APP_KEY", generate: "password", generateLength: 32, secret: true },
-      { key: "DB_CONNECTION", value: "sqlite" }
+      { key: "DB_CONNECTION", value: "sqlite" },
+      /*
+       * These three seed the admin account, and ONLY on the first boot — the
+       * app writes the user row into /config/database.sqlite and afterwards
+       * ignores them entirely. Setting them here means a fresh install gets
+       * the operator's own credentials from the start; adding them to an
+       * already-running app does nothing, because the user row already
+       * exists (the volume outlives the container). Anyone who hits that has
+       * to either sign in with whatever was seeded first, or wipe /config so
+       * the seeder runs again.
+       */
+      { key: "ADMIN_EMAIL", value: "admin@example.com" },
+      { key: "ADMIN_NAME", value: "Admin" },
+      { key: "ADMIN_PASSWORD", generate: "password", generateLength: 20, secret: true }
     ],
     volumes: ["/config"]
   },
