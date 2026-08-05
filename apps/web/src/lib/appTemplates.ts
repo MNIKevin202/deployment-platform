@@ -10,7 +10,7 @@ export interface TemplateEnvVar {
   generateLength?: number;
 }
 
-export type TemplateCategory = "AI" | "Databases" | "Apps" | "Tools";
+export type TemplateCategory = "AI" | "Graphics" | "Databases" | "Apps" | "Tools";
 
 /**
  * A second service a template deploys alongside its main app — e.g.
@@ -319,6 +319,56 @@ export const APP_TEMPLATES: AppTemplate[] = [
         volumes: ["/models"]
       }
     ]
+  },
+
+  // ---- Graphics ----
+  {
+    id: "canvasmint",
+    name: "CanvasMint",
+    category: "Graphics",
+    icon: "🎨",
+    iconImage: "/canvasmint-icon.png",
+    badge: "DevMinted Original",
+    description:
+      "A self-hosted browser image editor with layers, text, drawing tools, filters, project saving, and image export.",
+    longDescription:
+      "CanvasMint is a browser-based image editor that runs entirely on your own server — layers, text, brush and eraser, shapes, non-destructive filters, crop and resize, undo/redo, and export to PNG, WebP, or JPG. Projects are stored on a persistent volume as plain JSON alongside their uploaded images, with no database to run or back up, so they survive restarts and upgrades. It opens straight into single-user mode by default; fill in the optional admin fields below to require a sign-in instead.",
+    highlights: [
+      "Layers, text, shapes, brush and eraser, and non-destructive image filters",
+      "Projects, uploads, and thumbnails persist on the app's own volume",
+      "Optional single-user sign-in — leave the admin fields blank to skip it",
+      "Exports PNG, WebP, and JPG with transparency preserved",
+      "One container, one HTTP port, no database"
+    ],
+    resources: {
+      minCpu: 1,
+      minMemoryMb: 512,
+      minDiskGb: 5,
+      recommendedCpu: 2,
+      recommendedMemoryMb: 1024,
+      recommendedDiskGb: 10
+    },
+    image: "ghcr.io/mnikevin202/canvasmint:latest",
+    containerPort: 3000,
+    suggestedName: "canvasmint",
+    env: [
+      { key: "APP_NAME", value: "CanvasMint" },
+      // Blank by default: with neither set, CanvasMint runs single-user with
+      // no sign-in. Setting BOTH turns authentication on — a half-filled pair
+      // is deliberately treated as "not configured" by the app rather than
+      // locking the operator out.
+      { key: "ADMIN_USERNAME", value: "" },
+      { key: "ADMIN_PASSWORD", value: "", secret: true },
+      // Signs session cookies. Generated per install so two deployments never
+      // share one; the app falls back to generating its own on the volume if
+      // this is ever cleared.
+      { key: "SESSION_SECRET", generate: "password", generateLength: 48, secret: true },
+      { key: "MAX_UPLOAD_MB", value: "50" },
+      { key: "AUTOSAVE_DELAY_MS", value: "1500" }
+    ],
+    // Everything worth keeping — projects, uploaded images, thumbnails, and
+    // the generated session secret — lives under this one path.
+    volumes: ["/app/data"]
   },
 
   // ---- Databases ----

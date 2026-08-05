@@ -26,7 +26,7 @@ describe("APP_TEMPLATES catalog", () => {
   });
 
   test("templatesInCategory returns entries sorted A–Z, case-insensitively", () => {
-    for (const category of ["Databases", "Apps", "Tools"] as const) {
+    for (const category of ["Graphics", "Databases", "Apps", "Tools"] as const) {
       const names = templatesInCategory(category).map((t) => t.name);
       const sorted = [...names].sort((a, b) =>
         a.localeCompare(b, undefined, { sensitivity: "base" })
@@ -154,6 +154,81 @@ describe("APP_TEMPLATES catalog", () => {
   test("at least one template generates a secret (e.g. a DB password)", () => {
     const hasGenerated = APP_TEMPLATES.some((t) => t.env.some((e) => e.generate === "password"));
     expect(hasGenerated).toBe(true);
+  });
+});
+
+describe("CanvasMint", () => {
+  const template = APP_TEMPLATES.find((entry) => entry.id === "canvasmint");
+
+  test("is in the catalog under Graphics as a first-party template", () => {
+    expect(template).toBeDefined();
+    expect(template!.category).toBe("Graphics");
+    expect(template!.badge).toBe("DevMinted Original");
+    expect(template!.iconImage).toBe("/canvasmint-icon.png");
+  });
+
+  test("publishes one HTTP port and takes a public domain", () => {
+    expect(template!.containerPort).toBe(3000);
+    // No publishedPorts and not internalOnly: it is reached over the
+    // platform's HTTPS routing like any other web app.
+    expect(template!.publishedPorts).toBeUndefined();
+    expect(template!.internalOnly).toBeUndefined();
+  });
+
+  test("persists its data on /app/data", () => {
+    expect(template!.volumes).toEqual(["/app/data"]);
+  });
+
+  /**
+   * The app hashes whatever password it is given at boot, so a shared literal
+   * baked into the catalog would be a shared credential across every install.
+   * The session secret must be generated per-install and marked secret.
+   */
+  test("generates the session secret per install and marks it secret", () => {
+    const secret = template!.env.find((entry) => entry.key === "SESSION_SECRET")!;
+    expect(secret.generate).toBe("password");
+    expect(secret.secret).toBe(true);
+    expect(secret.value).toBeUndefined();
+    expect(secret.generateLength).toBeGreaterThanOrEqual(32);
+  });
+
+  /**
+   * CanvasMint treats a half-filled credential pair as "not configured" and
+   * opens single-user. Shipping a generated password with a blank username
+   * would therefore be worse than useless — it would look like auth was on
+   * while the app stayed open — so both are deliberately blank literals.
+   */
+  test("leaves both admin fields blank so the default install is single-user", () => {
+    const username = template!.env.find((entry) => entry.key === "ADMIN_USERNAME")!;
+    const password = template!.env.find((entry) => entry.key === "ADMIN_PASSWORD")!;
+
+    expect(username.value).toBe("");
+    expect(username.generate).toBeUndefined();
+    expect(password.value).toBe("");
+    expect(password.generate).toBeUndefined();
+    expect(password.secret).toBe(true);
+  });
+
+  test("exposes the upload and autosave settings the install form asks for", () => {
+    const keys = template!.env.map((entry) => entry.key);
+    expect(keys).toContain("APP_NAME");
+    expect(keys).toContain("MAX_UPLOAD_MB");
+    expect(keys).toContain("AUTOSAVE_DELAY_MS");
+  });
+
+  test("declares the resource guidance shown before install", () => {
+    expect(template!.resources).toMatchObject({
+      minCpu: 1,
+      minMemoryMb: 512,
+      minDiskGb: 5
+    });
+    expect(template!.resources!.recommendedMemoryMb).toBeGreaterThanOrEqual(1024);
+    expect(template!.resources!.recommendedDiskGb).toBeGreaterThanOrEqual(5);
+  });
+
+  test("says where projects are stored, since that is what the volume holds", () => {
+    const prose = [template!.longDescription, ...template!.highlights].join(" ").toLowerCase();
+    expect(prose).toMatch(/persist|volume/);
   });
 });
 
