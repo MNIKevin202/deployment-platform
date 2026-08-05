@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 import { useAuth } from "./AuthGate";
 import AppShell from "./layout/AppShell";
-import Sidebar, { type Section } from "./layout/Sidebar";
+import Sidebar, { parseSection, type Section } from "./layout/Sidebar";
 import Header from "./layout/Header";
 import Notice from "./components/Notice";
 import LogViewer from "./components/LogViewer";
@@ -65,15 +65,11 @@ function App() {
   // query string. Read the initial section from it once, synchronously,
   // so the very first render already lands on the right page.
   const [section, setSection] = useState<Section>(() => {
+    // Validated against the nav's own section list rather than a hand-kept
+    // copy — the previous inline list silently omitted newer pages (cron,
+    // templates), so linking to them landed on Overview instead.
     const requested = new URLSearchParams(window.location.search).get("section");
-    return requested === "apps" ||
-      requested === "databases" ||
-      requested === "repositories" ||
-      requested === "environment" ||
-      requested === "system" ||
-      requested === "settings"
-      ? requested
-      : "overview";
+    return parseSection(requested) ?? "overview";
   });
   // Captured once, synchronously, in the same initial render as `section`
   // above — RepositoriesPage strips the "github" query param (via
