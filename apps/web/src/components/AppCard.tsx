@@ -1,6 +1,7 @@
 import type { ContainerAction, ContainerPort, ContainerSummary, StoredApp } from "../types/api";
 import { useAppDeployProgress } from "../lib/deployProgress";
 import { InlineDeployProgress } from "./DeployProgressIndicator";
+import { formatRelativeTimeFromIso } from "../lib/formatTime";
 
 interface AppCardProps {
   container: ContainerSummary;
@@ -10,6 +11,8 @@ interface AppCardProps {
   onOpenLogs: (container: ContainerSummary) => void;
   onDeleteApp?: (container: ContainerSummary) => void;
   onViewApp?: (storedApp: StoredApp) => void;
+  isFavorite?: boolean;
+  onToggleFavorite?: (appId: number) => void;
 }
 
 /**
@@ -71,7 +74,9 @@ export default function AppCard({
   onAction,
   onOpenLogs,
   onDeleteApp,
-  onViewApp
+  onViewApp,
+  isFavorite = false,
+  onToggleFavorite
 }: AppCardProps) {
   const isRunning = container.state === "running";
   const containerName = container.names[0] ?? container.shortId;
@@ -90,6 +95,17 @@ export default function AppCard({
       <div className="container-card-header">
         <div>
           <div className="title-row">
+            {storedApp && onToggleFavorite && (
+              <button
+                type="button"
+                className="favorite-toggle"
+                aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+                aria-pressed={isFavorite}
+                onClick={() => onToggleFavorite(storedApp.id)}
+              >
+                {isFavorite ? "★" : "☆"}
+              </button>
+            )}
             <h3>{containerName}</h3>
 
             {container.isSystemContainer && (
@@ -162,6 +178,20 @@ export default function AppCard({
           <dt>Ports</dt>
           <dd>{formatPorts(container.ports)}</dd>
         </div>
+
+        {storedApp?.currentVersion != null && (
+          <div>
+            <dt>Version</dt>
+            <dd title={storedApp.currentVersionCommitSha ?? undefined}>v{storedApp.currentVersion}</dd>
+          </div>
+        )}
+
+        {formatRelativeTimeFromIso(storedApp?.lastDeployedAt) && (
+          <div>
+            <dt>Last deployed</dt>
+            <dd className="text-faint">{formatRelativeTimeFromIso(storedApp?.lastDeployedAt)}</dd>
+          </div>
+        )}
 
         {storedApp?.internalOnly ? (
           <div>

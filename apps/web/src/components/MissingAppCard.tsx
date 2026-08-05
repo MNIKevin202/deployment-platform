@@ -5,6 +5,8 @@ interface MissingAppCardProps {
   actionLoading: string | null;
   onViewApp: (storedApp: StoredApp) => void;
   onDeleteApp: (storedApp: StoredApp) => void;
+  isFavorite?: boolean;
+  onToggleFavorite?: (appId: number) => void;
 }
 
 /**
@@ -19,7 +21,9 @@ export default function MissingAppCard({
   storedApp,
   actionLoading,
   onViewApp,
-  onDeleteApp
+  onDeleteApp,
+  isFavorite = false,
+  onToggleFavorite
 }: MissingAppCardProps) {
   const cardName = storedApp.containerName ?? storedApp.name;
 
@@ -28,6 +32,17 @@ export default function MissingAppCard({
       <div className="container-card-header">
         <div>
           <div className="title-row">
+            {onToggleFavorite && (
+              <button
+                type="button"
+                className="favorite-toggle"
+                aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+                aria-pressed={isFavorite}
+                onClick={() => onToggleFavorite(storedApp.id)}
+              >
+                {isFavorite ? "★" : "☆"}
+              </button>
+            )}
             <h3>{cardName}</h3>
             <span className="type-badge missing">Recovery required</span>
           </div>

@@ -78,6 +78,10 @@ export interface StoredApp {
   latestEventSeverity: DeploymentEventSeverity | null;
   /** The type of that same latest event (e.g. "github-deploy-failed") — used to distinguish a failed deployment from other error-severity events. */
   latestEventType: string | null;
+  /** The app's current deployment version number, if it has any deployment history. */
+  currentVersion?: number | null;
+  /** The commit sha of the current version, when it was a GitHub-built deployment. */
+  currentVersionCommitSha?: string | null;
   /**
    * Live Docker runtime state for this app, cross-checked against the actual
    * container. `present: false` means the database record exists but the
