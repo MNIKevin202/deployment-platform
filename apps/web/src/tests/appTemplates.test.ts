@@ -168,3 +168,42 @@ describe("generateSecret", () => {
     expect(generateSecret()).not.toBe(generateSecret());
   });
 });
+
+describe("templates that seed an admin account on first boot", () => {
+  /*
+   * These images write their admin user into a persistent volume the first
+   * time they boot and ignore the variables afterwards. If the template
+   * doesn't ship the credentials, the first boot seeds someone else's
+   * defaults and the operator can never set their own without wiping the
+   * volume — which is exactly what happened with speedtest-tracker in
+   * production before this was added.
+   */
+  const FIRST_BOOT_ADMIN_SEEDERS = ["speedtest-tracker"];
+
+  test.each(FIRST_BOOT_ADMIN_SEEDERS)(
+    "%s ships admin credentials so the first boot seeds the operator's own",
+    (id) => {
+      const template = APP_TEMPLATES.find((entry) => entry.id === id);
+      expect(template, `${id} is missing from the catalog`).toBeDefined();
+
+      const keys = template!.env.map((entry) => entry.key);
+      expect(keys).toContain("ADMIN_EMAIL");
+      expect(keys).toContain("ADMIN_PASSWORD");
+
+      // The password must be generated per-install and marked secret, never a
+      // shared literal baked into the catalog.
+      const password = template!.env.find((entry) => entry.key === "ADMIN_PASSWORD")!;
+      expect(password.generate).toBe("password");
+      expect(password.secret).toBe(true);
+      expect(password.value).toBeUndefined();
+    }
+  );
+
+  test("such a template says the credentials only apply on the first boot", () => {
+    for (const id of FIRST_BOOT_ADMIN_SEEDERS) {
+      const template = APP_TEMPLATES.find((entry) => entry.id === id)!;
+      const prose = [template.longDescription, ...template.highlights].join(" ").toLowerCase();
+      expect(prose, `${id} should warn that seeding is first-boot only`).toMatch(/first boot/);
+    }
+  });
+});
