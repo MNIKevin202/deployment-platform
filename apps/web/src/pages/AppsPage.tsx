@@ -1,12 +1,37 @@
+import { useState } from "react";
 import AppCard from "../components/AppCard";
 import MissingAppCard from "../components/MissingAppCard";
 import AppTable from "../components/AppTable";
 import { useAppsView } from "../hooks/useAppsView";
+import { useFavoriteApps } from "../hooks/useFavoriteApps";
+import {
+  filterAndSortAppEntries,
+  type AppFilterKey,
+  type AppListEntry,
+  type AppSortKey
+} from "../lib/appsFilter";
 import type {
   ContainerAction,
   ContainerSummary,
   StoredApp
 } from "../types/api";
+
+const FILTER_OPTIONS: { key: AppFilterKey; label: string }[] = [
+  { key: "favorites", label: "Favorites" },
+  { key: "running", label: "Running" },
+  { key: "stopped", label: "Stopped" },
+  { key: "public", label: "Public" },
+  { key: "internal", label: "Internal" },
+  { key: "healthy", label: "Healthy" },
+  { key: "failed", label: "Failed" },
+  { key: "recent", label: "Recently deployed" }
+];
+
+const SORT_OPTIONS: { key: AppSortKey; label: string }[] = [
+  { key: "name", label: "Name (A–Z)" },
+  { key: "recent-deploy", label: "Last deployed" },
+  { key: "status", label: "Status" }
+];
 
 interface AppsPageProps {
   managedApps: ContainerSummary[];
@@ -50,12 +75,46 @@ export default function AppsPage({
 }: AppsPageProps) {
   const hasAnyApp = managedApps.length > 0 || missingApps.length > 0;
   const [view, setView] = useAppsView();
+  const [favoriteAppIds, toggleFavorite] = useFavoriteApps();
+  const [search, setSearch] = useState("");
+  const [activeFilters, setActiveFilters] = useState<Set<AppFilterKey>>(() => new Set());
+  const [sortKey, setSortKey] = useState<AppSortKey>("name");
+
+  const toggleFilter = (key: AppFilterKey) => {
+    setActiveFilters((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
 
   const updatesAvailableCount = managedApps.filter((container) => {
     const appName = container.labels["com.deployment-platform.app-name"];
     const storedApp = appName ? storedAppsByName.get(appName) : undefined;
     return Boolean(storedApp?.imageUpdateAvailable);
   }).length;
+
+  // Managed (running/stopped) and missing (recovery-needed) apps are filtered
+  // and sorted as two separate groups — missing apps stay their own
+  // visually-distinct "needs recovery" tier at the bottom of each view,
+  // rather than being interleaved with live containers.
+  const managedEntries: AppListEntry[] = managedApps.map((container) => {
+    const appName = container.labels["com.deployment-platform.app-name"];
+    return { container, app: appName ? storedAppsByName.get(appName) : undefined };
+  });
+  const missingEntries: AppListEntry[] = missingApps.map((app) => ({ app }));
+
+  const filterOptions = { search, filters: activeFilters, sortKey, favoriteIds: favoriteAppIds };
+  const filteredManagedContainers = filterAndSortAppEntries(managedEntries, filterOptions)
+    .map((entry) => entry.container)
+    .filter((container): container is ContainerSummary => container !== undefined);
+  const filteredMissingApps = filterAndSortAppEntries(missingEntries, filterOptions)
+    .map((entry) => entry.app)
+    .filter((app): app is StoredApp => app !== undefined);
 
   return (
     <div className="page">
@@ -111,6 +170,43 @@ export default function AppsPage({
           </div>
         </div>
 
+        {hasAnyApp && (
+          <div className="apps-filter-row">
+            <input
+              className="apps-filter-search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search by name or image..."
+              aria-label="Search apps"
+            />
+            <div className="apps-filter-chips" role="group" aria-label="Filters">
+              {FILTER_OPTIONS.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  className={`apps-filter-chip ${activeFilters.has(option.key) ? "active" : ""}`}
+                  aria-pressed={activeFilters.has(option.key)}
+                  onClick={() => toggleFilter(option.key)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <select
+              className="apps-filter-sort"
+              value={sortKey}
+              onChange={(event) => setSortKey(event.target.value as AppSortKey)}
+              aria-label="Sort apps"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.key} value={option.key}>
+                  Sort: {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {!hasAnyApp ? (
           <div className="empty-state app-empty-state">
             <h3>{emptyTitle}</h3>
@@ -119,21 +215,28 @@ export default function AppsPage({
               Deploy First App
             </button>
           </div>
+        ) : filteredManagedContainers.length === 0 && filteredMissingApps.length === 0 ? (
+          <div className="empty-state">
+            <h3>No apps match your search or filters</h3>
+            <p>Try clearing the search box or turning off a filter.</p>
+          </div>
         ) : view === "table" ? (
           <AppTable
-            managedApps={managedApps}
+            managedApps={filteredManagedContainers}
             storedAppsByName={storedAppsByName}
-            missingApps={missingApps}
+            missingApps={filteredMissingApps}
             actionLoading={actionLoading}
             onAction={onAction}
             onOpenLogs={onOpenLogs}
             onDeleteApp={onDeleteApp}
             onDeleteMissingApp={onDeleteMissingApp}
             onViewApp={onViewApp}
+            favoriteAppIds={favoriteAppIds}
+            onToggleFavorite={toggleFavorite}
           />
         ) : (
           <div className="container-grid">
-            {managedApps.map((container) => {
+            {filteredManagedContainers.map((container) => {
               const appName = container.labels["com.deployment-platform.app-name"];
               const storedApp = appName ? storedAppsByName.get(appName) : undefined;
 
@@ -147,17 +250,21 @@ export default function AppsPage({
                   onOpenLogs={onOpenLogs}
                   onDeleteApp={onDeleteApp}
                   onViewApp={onViewApp}
+                  isFavorite={Boolean(storedApp && favoriteAppIds.has(storedApp.id))}
+                  onToggleFavorite={toggleFavorite}
                 />
               );
             })}
 
-            {missingApps.map((storedApp) => (
+            {filteredMissingApps.map((storedApp) => (
               <MissingAppCard
                 key={`missing-${storedApp.id}`}
                 storedApp={storedApp}
                 actionLoading={actionLoading}
                 onViewApp={onViewApp}
                 onDeleteApp={onDeleteMissingApp}
+                isFavorite={favoriteAppIds.has(storedApp.id)}
+                onToggleFavorite={toggleFavorite}
               />
             ))}
           </div>

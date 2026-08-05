@@ -54,7 +54,8 @@ export interface ComputePlatformHealthInput {
   now?: () => number;
 }
 
-const DEPLOY_FAILURE_EVENT_TYPES = new Set([
+/** Exported so appsFilter.ts's "Failed" filter uses the exact same definition of a failed deployment. */
+export const DEPLOY_FAILURE_EVENT_TYPES = new Set([
   "github-deploy-failed",
   "redeploy-failed",
   "revert-failed",

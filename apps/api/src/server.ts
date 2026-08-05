@@ -689,6 +689,7 @@ app.get("/apps", async () => {
   return {
     apps: appDatabase.listApps().map((storedApp) => {
       const event = latestEvent(storedApp.id);
+      const currentDeployment = appDatabase.getCurrentDeployment(storedApp.id);
 
       return {
         ...storedApp,
@@ -696,6 +697,8 @@ app.get("/apps", async () => {
         health: summarizeAppHealth(storedApp.id),
         latestEventSeverity: event?.severity ?? null,
         latestEventType: event?.eventType ?? null,
+        currentVersion: currentDeployment?.version ?? null,
+        currentVersionCommitSha: currentDeployment?.commitSha ?? null,
         runtime: resolveAppRuntime(storedApp.containerName, runtimeByName),
         publishedPorts: appDatabase.listAppPublishedPorts(storedApp.id),
         imageUpdateAvailable: imageUpdateChecker.getStatus(storedApp.id)?.updateAvailable ?? false,

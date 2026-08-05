@@ -1,6 +1,7 @@
 import type { ContainerAction, ContainerSummary, StoredApp } from "../types/api";
 import { useDeployProgress } from "../lib/deployProgress";
 import { InlineDeployProgress } from "./DeployProgressIndicator";
+import { formatRelativeTimeFromIso } from "../lib/formatTime";
 
 interface AppTableProps {
   managedApps: ContainerSummary[];
@@ -12,6 +13,32 @@ interface AppTableProps {
   onDeleteApp: (container: ContainerSummary) => void;
   onDeleteMissingApp: (storedApp: StoredApp) => void;
   onViewApp: (storedApp: StoredApp) => void;
+  favoriteAppIds?: ReadonlySet<number>;
+  onToggleFavorite?: (appId: number) => void;
+}
+
+function favoriteButton(
+  appId: number,
+  isFavorite: boolean,
+  onToggleFavorite: ((appId: number) => void) | undefined
+) {
+  if (!onToggleFavorite) {
+    return null;
+  }
+  return (
+    <button
+      type="button"
+      className="favorite-toggle compact"
+      aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+      aria-pressed={isFavorite}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggleFavorite(appId);
+      }}
+    >
+      {isFavorite ? "★" : "☆"}
+    </button>
+  );
 }
 
 function domainCell(storedApp: StoredApp | undefined, canOpen: boolean) {
@@ -39,7 +66,9 @@ export default function AppTable({
   onOpenLogs,
   onDeleteApp,
   onDeleteMissingApp,
-  onViewApp
+  onViewApp,
+  favoriteAppIds,
+  onToggleFavorite
 }: AppTableProps) {
   const deployProgress = useDeployProgress();
 
@@ -51,6 +80,8 @@ export default function AppTable({
             <th>App</th>
             <th>Status</th>
             <th>Image</th>
+            <th>Version</th>
+            <th>Last Deployed</th>
             <th>Domain</th>
             <th>Update</th>
             <th aria-label="Actions" />
@@ -68,6 +99,7 @@ export default function AppTable({
             return (
               <tr key={container.id}>
                 <td>
+                  {favoriteButton(storedApp?.id ?? -1, Boolean(storedApp && favoriteAppIds?.has(storedApp.id)), storedApp ? onToggleFavorite : undefined)}
                   {storedApp ? (
                     <button className="table-name-button" type="button" onClick={() => onViewApp(storedApp)}>
                       {name}
@@ -88,6 +120,14 @@ export default function AppTable({
                 <td>
                   <code className="inline-code">{container.image}</code>
                 </td>
+                <td>
+                  {storedApp?.currentVersion != null ? (
+                    <span title={storedApp.currentVersionCommitSha ?? undefined}>v{storedApp.currentVersion}</span>
+                  ) : (
+                    <span className="text-faint">—</span>
+                  )}
+                </td>
+                <td className="text-faint">{formatRelativeTimeFromIso(storedApp?.lastDeployedAt) ?? "—"}</td>
                 <td>{domainCell(storedApp, canOpen)}</td>
                 <td>
                   {storedApp?.imageUpdateAvailable ? (
@@ -155,6 +195,7 @@ export default function AppTable({
           {missingApps.map((storedApp) => (
             <tr key={`missing-${storedApp.id}`} className="apps-table-missing-row">
               <td>
+                {favoriteButton(storedApp.id, Boolean(favoriteAppIds?.has(storedApp.id)), onToggleFavorite)}
                 <button className="table-name-button" type="button" onClick={() => onViewApp(storedApp)}>
                   {storedApp.containerName ?? storedApp.name}
                 </button>
@@ -165,6 +206,14 @@ export default function AppTable({
               <td>
                 <code className="inline-code">{storedApp.image}</code>
               </td>
+              <td>
+                {storedApp.currentVersion != null ? (
+                  <span title={storedApp.currentVersionCommitSha ?? undefined}>v{storedApp.currentVersion}</span>
+                ) : (
+                  <span className="text-faint">—</span>
+                )}
+              </td>
+              <td className="text-faint">{formatRelativeTimeFromIso(storedApp.lastDeployedAt) ?? "—"}</td>
               <td>{domainCell(storedApp, false)}</td>
               <td>
                 <span className="text-faint">—</span>

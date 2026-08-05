@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import AppTable from "../components/AppTable";
 import { DeployProgressContext } from "../lib/deployProgress";
 import type { ContainerSummary, DeployProgress, StoredApp } from "../types/api";
@@ -147,5 +148,95 @@ describe("AppTable — deploy progress", () => {
 
     expect(screen.getByText("running")).toBeInTheDocument();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+});
+
+describe("AppTable — favorites and version columns", () => {
+  test("clicking the favorite toggle calls onToggleFavorite with the app id", async () => {
+    const onToggleFavorite = vi.fn();
+    render(
+      <AppTable
+        managedApps={[container()]}
+        storedAppsByName={new Map([["example", storedApp()]])}
+        missingApps={[]}
+        actionLoading={null}
+        {...noop}
+        favoriteAppIds={new Set()}
+        onToggleFavorite={onToggleFavorite}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Add to favorites" }));
+    expect(onToggleFavorite).toHaveBeenCalledWith(1);
+  });
+
+  test("shows a filled star for a favorited app", () => {
+    render(
+      <AppTable
+        managedApps={[container()]}
+        storedAppsByName={new Map([["example", storedApp()]])}
+        missingApps={[]}
+        actionLoading={null}
+        {...noop}
+        favoriteAppIds={new Set([1])}
+        onToggleFavorite={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Remove from favorites" })).toHaveTextContent("★");
+  });
+
+  test("no favorite toggle renders when onToggleFavorite is absent", () => {
+    render(
+      <AppTable
+        managedApps={[container()]}
+        storedAppsByName={new Map([["example", storedApp()]])}
+        missingApps={[]}
+        actionLoading={null}
+        {...noop}
+      />
+    );
+    expect(screen.queryByRole("button", { name: /favorites/ })).not.toBeInTheDocument();
+  });
+
+  test("shows the current version and last-deployed time when present, and dashes when absent", () => {
+    const { rerender } = render(
+      <AppTable
+        managedApps={[container()]}
+        storedAppsByName={new Map([["example", storedApp({ currentVersion: 5, currentVersionCommitSha: "deadbeef" })]])}
+        missingApps={[]}
+        actionLoading={null}
+        {...noop}
+      />
+    );
+    expect(screen.getByText("v5")).toBeInTheDocument();
+
+    rerender(
+      <AppTable
+        managedApps={[container()]}
+        storedAppsByName={new Map([["example", storedApp({ currentVersion: null })]])}
+        missingApps={[]}
+        actionLoading={null}
+        {...noop}
+      />
+    );
+    expect(screen.queryByText(/^v\d+$/)).not.toBeInTheDocument();
+  });
+
+  test("a missing app also shows its favorite toggle and version", () => {
+    render(
+      <AppTable
+        managedApps={[]}
+        storedAppsByName={new Map()}
+        missingApps={[storedApp({ currentVersion: 3 })]}
+        actionLoading={null}
+        {...noop}
+        favoriteAppIds={new Set()}
+        onToggleFavorite={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Add to favorites" })).toBeInTheDocument();
+    expect(screen.getByText("v3")).toBeInTheDocument();
   });
 });

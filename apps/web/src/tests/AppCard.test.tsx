@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import AppCard from "../components/AppCard";
 import type { ContainerSummary, StoredApp } from "../types/api";
 
@@ -136,5 +137,76 @@ describe("AppCard — image update indicator", () => {
     );
 
     expect(screen.queryByText("Update Available")).not.toBeInTheDocument();
+  });
+});
+
+describe("AppCard — favorites and version display", () => {
+  test("clicking the favorite toggle calls onToggleFavorite with the app id", async () => {
+    const onToggleFavorite = vi.fn();
+    render(
+      <AppCard
+        container={container()}
+        storedApp={storedApp()}
+        actionLoading={null}
+        onAction={vi.fn()}
+        onOpenLogs={vi.fn()}
+        isFavorite={false}
+        onToggleFavorite={onToggleFavorite}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Add to favorites" }));
+    expect(onToggleFavorite).toHaveBeenCalledWith(1);
+  });
+
+  test("shows a filled star and 'Remove from favorites' label when already favorited", () => {
+    render(
+      <AppCard
+        container={container()}
+        storedApp={storedApp()}
+        actionLoading={null}
+        onAction={vi.fn()}
+        onOpenLogs={vi.fn()}
+        isFavorite={true}
+        onToggleFavorite={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Remove from favorites" })).toHaveTextContent("★");
+  });
+
+  test("no favorite toggle is rendered when onToggleFavorite is absent", () => {
+    render(
+      <AppCard container={container()} storedApp={storedApp()} actionLoading={null} onAction={vi.fn()} onOpenLogs={vi.fn()} />
+    );
+    expect(screen.queryByRole("button", { name: /favorites/ })).not.toBeInTheDocument();
+  });
+
+  test("shows the current version and last-deployed time when present", () => {
+    render(
+      <AppCard
+        container={container()}
+        storedApp={storedApp({ currentVersion: 12, currentVersionCommitSha: "abc123def456" })}
+        actionLoading={null}
+        onAction={vi.fn()}
+        onOpenLogs={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("v12")).toBeInTheDocument();
+    expect(screen.getByText("Last deployed")).toBeInTheDocument();
+  });
+
+  test("omits the version row entirely when there is no current version", () => {
+    render(
+      <AppCard
+        container={container()}
+        storedApp={storedApp({ currentVersion: null })}
+        actionLoading={null}
+        onAction={vi.fn()}
+        onOpenLogs={vi.fn()}
+      />
+    );
+    expect(screen.queryByText(/^v\d+$/)).not.toBeInTheDocument();
   });
 });
