@@ -41,6 +41,7 @@ function storedApp(overrides: Partial<StoredApp> = {}): StoredApp {
     routingReady: false,
     health: null,
     latestEventSeverity: null,
+    latestEventType: null,
     ...overrides
   };
 }

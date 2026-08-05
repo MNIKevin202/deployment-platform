@@ -76,6 +76,8 @@ export interface StoredApp {
   routingReady: boolean;
   health: { state: HealthState; lastCheckedAt: string | null } | null;
   latestEventSeverity: DeploymentEventSeverity | null;
+  /** The type of that same latest event (e.g. "github-deploy-failed") — used to distinguish a failed deployment from other error-severity events. */
+  latestEventType: string | null;
   /**
    * Live Docker runtime state for this app, cross-checked against the actual
    * container. `present: false` means the database record exists but the

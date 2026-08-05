@@ -25,6 +25,7 @@ function missingApp(overrides: Partial<StoredApp> = {}): StoredApp {
     routingReady: true,
     health: null,
     latestEventSeverity: null,
+    latestEventType: null,
     runtime: { present: false, running: false, status: null },
     ...overrides
   };

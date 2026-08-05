@@ -675,9 +675,9 @@ function summarizeAppHealth(appId: number): { state: string; lastCheckedAt: stri
   return health ? { state: health.state, lastCheckedAt: health.lastCheckedAt } : null;
 }
 
-function latestEventSeverity(appId: number): string | null {
+function latestEvent(appId: number): { severity: string; eventType: string } | null {
   const [latest] = appDatabase.listDeploymentEvents(appId, { limit: 1 });
-  return latest?.severity ?? null;
+  return latest ? { severity: latest.severity, eventType: latest.eventType } : null;
 }
 
 app.get("/apps", async () => {
@@ -687,16 +687,21 @@ app.get("/apps", async () => {
   const runtimeByName = await loadManagedContainerRuntime();
 
   return {
-    apps: appDatabase.listApps().map((storedApp) => ({
-      ...storedApp,
-      routingReady: isRoutingReady(storedApp.domain !== null),
-      health: summarizeAppHealth(storedApp.id),
-      latestEventSeverity: latestEventSeverity(storedApp.id),
-      runtime: resolveAppRuntime(storedApp.containerName, runtimeByName),
-      publishedPorts: appDatabase.listAppPublishedPorts(storedApp.id),
-      imageUpdateAvailable: imageUpdateChecker.getStatus(storedApp.id)?.updateAvailable ?? false,
-      imageUpdateCheckedAt: imageUpdateChecker.getStatus(storedApp.id)?.checkedAt ?? null
-    }))
+    apps: appDatabase.listApps().map((storedApp) => {
+      const event = latestEvent(storedApp.id);
+
+      return {
+        ...storedApp,
+        routingReady: isRoutingReady(storedApp.domain !== null),
+        health: summarizeAppHealth(storedApp.id),
+        latestEventSeverity: event?.severity ?? null,
+        latestEventType: event?.eventType ?? null,
+        runtime: resolveAppRuntime(storedApp.containerName, runtimeByName),
+        publishedPorts: appDatabase.listAppPublishedPorts(storedApp.id),
+        imageUpdateAvailable: imageUpdateChecker.getStatus(storedApp.id)?.updateAvailable ?? false,
+        imageUpdateCheckedAt: imageUpdateChecker.getStatus(storedApp.id)?.checkedAt ?? null
+      };
+    })
   };
 });
 
