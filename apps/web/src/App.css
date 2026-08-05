@@ -746,6 +746,221 @@ code {
   cursor: pointer;
   text-align: left;
   color: inherit;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+/* ---------- Cron jobs: list layout ---------- */
+
+.cron-stats {
+  margin-bottom: 18px;
+}
+
+/*
+ * Fixed layout with widths summing to 100% — same reasoning as the Apps
+ * table: with auto layout the long command block starves every other
+ * column, and with over-allocated widths the browser silently rescales
+ * them all.
+ */
+.cron-table {
+  table-layout: fixed;
+}
+
+.cron-table th,
+.cron-table td {
+  vertical-align: top;
+  overflow: hidden;
+}
+
+.cron-table th:nth-child(1),
+.cron-table td:nth-child(1) {
+  width: 34%;
+}
+
+.cron-table th:nth-child(2),
+.cron-table td:nth-child(2) {
+  width: 12%;
+}
+
+.cron-table th:nth-child(3),
+.cron-table td:nth-child(3) {
+  width: 14%;
+}
+
+.cron-table th:nth-child(4),
+.cron-table td:nth-child(4) {
+  width: 16%;
+}
+
+.cron-table th:nth-child(5),
+.cron-table td:nth-child(5) {
+  width: 8%;
+}
+
+.cron-table th:nth-child(6),
+.cron-table td:nth-child(6) {
+  width: 16%;
+}
+
+.cron-name-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cron-job-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.cron-name-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.cron-job-name {
+  overflow-wrap: anywhere;
+}
+
+.cron-command-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+}
+
+.cron-command-box code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* Long commands are clamped by default; the 👁 button toggles the full text. */
+.cron-command-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cron-command-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.cron-app-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cron-app-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.cron-app-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-schedule-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.cron-schedule-expr {
+  display: inline-block;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.76rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cron-subtext {
+  font-size: 0.74rem;
+  color: var(--color-text-faint);
+}
+
+/* An accessible switch — a real button with role="switch", not a bare checkbox. */
+.cron-toggle {
+  position: relative;
+  width: 38px;
+  height: 21px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-raised);
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease;
+  flex-shrink: 0;
+}
+
+.cron-toggle.on {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.cron-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.14s ease;
+}
+
+.cron-toggle.on .cron-toggle-knob {
+  transform: translateX(17px);
+}
+
+.cron-table-footer {
+  margin: 12px 2px 0;
+  font-size: 0.82rem;
 }
 
 .cron-presets {

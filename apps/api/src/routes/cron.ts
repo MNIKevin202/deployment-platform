@@ -22,7 +22,19 @@ export function registerCronRoutes(
   { appDatabase, dockerOps }: RegisterCronRoutesOptions
 ): void {
   app.get("/cron-jobs", async () => {
-    return { success: true, jobs: appDatabase.listCronJobs() };
+    // Each job carries a plain-English rendering of its schedule, from the
+    // same describer the create/edit form's live preview uses — so the list
+    // can show "Every 15 minutes" beside the raw expression without the
+    // panel needing a preview request per job.
+    const jobs = appDatabase.listCronJobs().map((job) => {
+      const preview = previewCron(job.cronExpression);
+      return {
+        ...job,
+        scheduleDescription: preview.ok ? preview.description : null
+      };
+    });
+
+    return { success: true, jobs };
   });
 
   // A job's run history, newest first — every scheduled fire and manual

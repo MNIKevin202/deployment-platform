@@ -67,7 +67,7 @@ describe("AppsPage — grid/table view toggle", () => {
     localStorage.setItem("dp_apps_view", "table");
     render(<AppsPage {...baseProps({ onOpenLogs })} />);
 
-    expect(screen.getByText("app-web")).toBeInTheDocument();
+    expect(screen.getByText("web")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Logs" }));
     expect(onOpenLogs).toHaveBeenCalledTimes(1);
   });

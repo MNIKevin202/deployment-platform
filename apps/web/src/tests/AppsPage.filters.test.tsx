@@ -90,8 +90,8 @@ describe("AppsPage — filter pills", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /^Running/ }));
 
-    expect(screen.getByText("app-web")).toBeInTheDocument();
-    expect(screen.queryByText("app-worker")).not.toBeInTheDocument();
+    expect(screen.getByText("web")).toBeInTheDocument();
+    expect(screen.queryByText("worker")).not.toBeInTheDocument();
     expect(screen.getByText("Clear filters")).toBeInTheDocument();
   });
 
@@ -99,12 +99,12 @@ describe("AppsPage — filter pills", () => {
     render(<AppsPage {...baseProps()} />);
 
     await userEvent.click(screen.getByRole("button", { name: /^Running/ }));
-    expect(screen.queryByText("app-worker")).not.toBeInTheDocument();
+    expect(screen.queryByText("worker")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByText("Clear filters"));
 
-    expect(screen.getByText("app-web")).toBeInTheDocument();
-    expect(screen.getByText("app-worker")).toBeInTheDocument();
+    expect(screen.getByText("web")).toBeInTheDocument();
+    expect(screen.getByText("worker")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^All/ })).toHaveClass("active");
   });
 
@@ -113,8 +113,8 @@ describe("AppsPage — filter pills", () => {
 
     await userEvent.type(screen.getByLabelText("Search apps"), "worker");
 
-    expect(screen.queryByText("app-web")).not.toBeInTheDocument();
-    expect(screen.getByText("app-worker")).toBeInTheDocument();
+    expect(screen.queryByText("web")).not.toBeInTheDocument();
+    expect(screen.getByText("worker")).toBeInTheDocument();
     expect(screen.getByText("Clear filters")).toBeInTheDocument();
   });
 });

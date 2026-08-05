@@ -315,6 +315,8 @@ export interface CronJob {
   containerName: string | null;
   name: string;
   cronExpression: string;
+  /** Plain-English rendering of cronExpression (e.g. "Every 15 minutes"), from the API's describer. */
+  scheduleDescription?: string | null;
   command: string;
   enabled: boolean;
   timeoutSeconds: number;

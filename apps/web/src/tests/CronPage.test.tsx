@@ -222,7 +222,11 @@ describe("CronPage", () => {
 
     await screen.findByText("Nightly cleanup");
     const row = screen.getByText("Nightly cleanup").closest("tr") as HTMLElement;
-    await user.click(within(row).getByRole("checkbox"));
+    // The enabled control is a role="switch" button (not a bare checkbox), so
+    // it exposes its on/off state via aria-checked.
+    const toggle = within(row).getByRole("switch");
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    await user.click(toggle);
 
     await waitFor(() => expect(calls.puts.length).toBeGreaterThan(0));
     expect((calls.puts[0].body as { enabled: boolean }).enabled).toBe(false);

@@ -1,4 +1,5 @@
 import type { StoredApp } from "../types/api";
+import { displayAppName } from "../lib/appName";
 
 interface MissingAppCardProps {
   storedApp: StoredApp;
@@ -25,7 +26,7 @@ export default function MissingAppCard({
   isFavorite = false,
   onToggleFavorite
 }: MissingAppCardProps) {
-  const cardName = storedApp.containerName ?? storedApp.name;
+  const cardName = displayAppName(storedApp.name, storedApp.containerName);
 
   return (
     <article className="container-card missing-app-card">
