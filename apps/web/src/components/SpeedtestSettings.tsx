@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ApiError, SpeedtestConnection, SpeedtestLatestResponse } from "../types/api";
+import { useSpeedtest } from "../hooks/useSpeedtest";
+import SpeedtestRunningBar from "./SpeedtestRunningBar";
 
 /**
  * Connects the panel to the operator's own Speedtest Tracker so the
@@ -8,13 +10,15 @@ import type { ApiError, SpeedtestConnection, SpeedtestLatestResponse } from "../
  * so the field is always blank on load, and saving requires re-entering it.
  */
 export default function SpeedtestSettings() {
+  // Shared with the Overview card and System page, so starting a test here
+  // shows the same running state everywhere.
+  const speedtest = useSpeedtest();
   const [connection, setConnection] = useState<SpeedtestConnection | null>(null);
   const [latest, setLatest] = useState<SpeedtestLatestResponse | null>(null);
   const [url, setUrl] = useState("");
   const [token, setToken] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -90,24 +94,6 @@ export default function SpeedtestSettings() {
     }
   };
 
-  const runNow = async () => {
-    try {
-      setRunning(true);
-      setError("");
-      setNotice("");
-      const response = await fetch("/api/speedtest/run", { method: "POST" });
-      const result = (await response.json().catch(() => null)) as ApiError | null;
-      if (!response.ok) {
-        throw new Error(result?.message || "Could not start a speed test.");
-      }
-      setNotice(result?.message ?? "Speed test started.");
-    } catch (runError) {
-      setError(runError instanceof Error ? runError.message : "Could not start a speed test.");
-    } finally {
-      setRunning(false);
-    }
-  };
-
   const configured = connection?.configured ?? false;
 
   return (
@@ -139,6 +125,14 @@ export default function SpeedtestSettings() {
         </div>
       )}
       {configured && latest?.error && <div className="warning-banner">{latest.error}</div>}
+      {speedtest.runError && <div className="error-banner">{speedtest.runError}</div>}
+      {speedtest.runTimedOut && (
+        <div className="warning-banner">
+          The test was started but no new result arrived within three minutes. Check Speedtest Tracker —
+          it may have failed or been skipped.
+        </div>
+      )}
+      {speedtest.running && <SpeedtestRunningBar />}
 
       <div className="settings-form">
         <label>
@@ -183,10 +177,10 @@ export default function SpeedtestSettings() {
             <button
               className="secondary-button"
               type="button"
-              onClick={() => void runNow()}
-              disabled={running || saving}
+              onClick={() => void speedtest.runTest()}
+              disabled={speedtest.running || saving}
             >
-              {running ? "Starting…" : "Run test now"}
+              {speedtest.running ? "Running…" : "Run test now"}
             </button>
           )}
           {configured && (
@@ -194,7 +188,7 @@ export default function SpeedtestSettings() {
               className="secondary-button"
               type="button"
               onClick={() => void disconnect()}
-              disabled={saving || running}
+              disabled={saving || speedtest.running}
             >
               Disconnect
             </button>

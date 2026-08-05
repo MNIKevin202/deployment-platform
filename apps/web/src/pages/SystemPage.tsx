@@ -1,6 +1,6 @@
 import AppCard from "../components/AppCard";
-import { useState } from "react";
 import { useSpeedtest } from "../hooks/useSpeedtest";
+import SpeedtestRunningBar from "../components/SpeedtestRunningBar";
 import type { ContainerAction, ContainerSummary, DockerInfo } from "../types/api";
 
 interface SystemPageProps {
@@ -21,34 +21,13 @@ function formatMemory(bytes: number | undefined): string {
 
 /** Connectivity belongs with the host's other vitals, in fuller detail than the Overview card. */
 function InternetSection() {
-  const { data } = useSpeedtest();
-  const [running, setRunning] = useState(false);
-  const [runNotice, setRunNotice] = useState("");
-  const [runError, setRunError] = useState("");
+  const { data, running, runError, runTimedOut, runTest } = useSpeedtest();
 
   if (!data?.configured) {
     return null;
   }
 
   const r = data.reading;
-
-  const runNow = async () => {
-    try {
-      setRunning(true);
-      setRunNotice("");
-      setRunError("");
-      const response = await fetch("/api/speedtest/run", { method: "POST" });
-      const result = (await response.json().catch(() => null)) as { message?: string } | null;
-      if (!response.ok) {
-        throw new Error(result?.message || "Could not start a speed test.");
-      }
-      setRunNotice(result?.message ?? "Speed test started.");
-    } catch (error) {
-      setRunError(error instanceof Error ? error.message : "Could not start a speed test.");
-    } finally {
-      setRunning(false);
-    }
-  };
 
   return (
     <section className="page-section">
@@ -60,15 +39,21 @@ function InternetSection() {
         <button
           className="secondary-button compact"
           type="button"
-          onClick={() => void runNow()}
+          onClick={() => void runTest()}
           disabled={running}
         >
-          {running ? "Starting…" : "Run test now"}
+          {running ? "Running…" : "Run test now"}
         </button>
       </div>
 
       {runError && <div className="error-banner">{runError}</div>}
-      {runNotice && <div className="notice-banner">{runNotice}</div>}
+      {runTimedOut && (
+        <div className="warning-banner">
+          The test was started but no new result arrived within three minutes. Check Speedtest Tracker —
+          it may have failed or been skipped.
+        </div>
+      )}
+      {running && <SpeedtestRunningBar />}
 
       {!r ? (
         <p className="text-faint">{data.error ?? "No speedtest result recorded yet."}</p>
