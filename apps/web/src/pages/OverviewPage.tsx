@@ -1,14 +1,20 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import StatCard from "../components/StatCard";
 import AppCard from "../components/AppCard";
 import AppTable from "../components/AppTable";
+import AttentionPanel from "../components/AttentionPanel";
 
 // Pulls in recharts (a large dependency) only once Overview actually
 // mounts, instead of shipping it in the app's initial bundle.
 const ClusterMetricsChart = lazy(() => import("../components/ClusterMetricsChart"));
 import { useAppsView } from "../hooks/useAppsView";
-import { computeHostPressure, formatMib } from "../lib/hostPressure";
 import { isDatabaseImage } from "../lib/appKind";
+import {
+  computePlatformHealth,
+  type AutoBackupStatus,
+  type DiskUsageStatus,
+  type PlatformHealthStatus
+} from "../lib/platformHealth";
 import type {
   ContainerAction,
   ContainerSummary,
@@ -16,6 +22,27 @@ import type {
   RoutingStatus,
   StoredApp
 } from "../types/api";
+
+/**
+ * How often the platform-health inputs not already covered by App.tsx's 5s
+ * dashboard poll (disk usage, backup status) are refreshed. Both endpoints
+ * are already cheap/cached server-side (see docker-usage-service.ts), but
+ * there's no reason to poll them faster than DiskSettings.tsx does for the
+ * same underlying data.
+ */
+const HEALTH_POLL_INTERVAL_MS = 60_000;
+
+const PLATFORM_HEALTH_LABEL: Record<PlatformHealthStatus, string> = {
+  healthy: "Healthy",
+  warning: "Needs Attention",
+  critical: "Critical"
+};
+
+const PLATFORM_HEALTH_TONE: Record<PlatformHealthStatus, "positive" | "warning" | "negative"> = {
+  healthy: "positive",
+  warning: "warning",
+  critical: "negative"
+};
 
 interface OverviewPageProps {
   dockerInfo: DockerInfo | null;
@@ -79,25 +106,73 @@ export default function OverviewPage({
   const stoppedCount = managedApps.length - runningCount;
   const routingHealth = routingHealthLabel(routingStatus);
 
-  const pressure = computeHostPressure(
-    Array.from(storedAppsByName.values()),
-    dockerInfo?.memoryTotalBytes ?? null
-  );
+  // Disk usage and backup status aren't part of App.tsx's 5s dashboard poll —
+  // self-fetched here, slower, since Platform Health is the only consumer.
+  const [diskUsage, setDiskUsage] = useState<DiskUsageStatus | null>(null);
+  const [autoBackup, setAutoBackup] = useState<AutoBackupStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadHealthInputs() {
+      try {
+        const response = await fetch("/api/settings/retention");
+        const result = await response.json().catch(() => null);
+        if (!cancelled && response.ok && result?.success && result.usage) {
+          setDiskUsage({ usedBytes: result.usage.usedBytes, totalBytes: result.usage.totalBytes });
+        }
+      } catch {
+        // Non-fatal — the disk-usage attention check is simply skipped.
+      }
+
+      try {
+        const response = await fetch("/api/settings/auto-backup");
+        const result = await response.json().catch(() => null);
+        if (!cancelled && response.ok && result?.success && result.config) {
+          setAutoBackup({
+            enabled: result.config.enabled,
+            intervalHours: result.config.intervalHours,
+            lastRunAt: result.lastRunAt
+          });
+        }
+      } catch {
+        // Non-fatal — the backup-overdue attention check is simply skipped.
+      }
+    }
+
+    void loadHealthInputs();
+    const interval = window.setInterval(() => void loadHealthInputs(), HEALTH_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  const health = computePlatformHealth({
+    managedApps,
+    storedAppsByName,
+    dockerInfo,
+    routingStatus,
+    diskUsage,
+    autoBackup
+  });
 
   return (
     <div className="page">
-      {pressure.level !== "ok" && pressure.hostTotalMb !== null && (
-        <div className={`host-pressure-banner ${pressure.level === "over" ? "over" : ""}`} role="status">
-          <span className="host-pressure-dot" aria-hidden="true" />
-          <span>
-            Memory {pressure.level === "over" ? "over-committed" : "nearly committed"}:{" "}
-            <strong>{formatMib(pressure.committedMb)}</strong> of limits set across {pressure.cappedCount}{" "}
-            app{pressure.cappedCount === 1 ? "" : "s"}, out of{" "}
-            <strong>{formatMib(pressure.hostTotalMb)}</strong> on this host ({Math.round(pressure.ratio * 100)}%).
-            {pressure.level === "over" ? " Reduce some limits or add memory to avoid out-of-memory kills." : ""}
-          </span>
-        </div>
-      )}
+      <section className="stats-grid platform-health-grid">
+        <StatCard
+          label="Platform Health"
+          value={PLATFORM_HEALTH_LABEL[health.status]}
+          tone={PLATFORM_HEALTH_TONE[health.status]}
+          hint={
+            health.items.length > 0
+              ? `${health.items.length} item${health.items.length === 1 ? "" : "s"} need attention`
+              : "All systems normal"
+          }
+        />
+      </section>
+
+      <AttentionPanel items={health.items} onViewApp={onViewApp} />
 
       <section className="stats-grid">
         <StatCard label="Apps" value={String(serviceApps.length)} />
