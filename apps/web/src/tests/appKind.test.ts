@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { appKind, imageRepoName, isDatabaseImage, isIrcBotImage } from "../lib/appKind";
+import { appKind, imageRepoName, inferAppCategory, isDatabaseImage, isIrcBotImage } from "../lib/appKind";
 
 describe("imageRepoName — reduce an image reference to its bare repo name", () => {
   test.each([
@@ -60,5 +60,47 @@ describe("isDatabaseImage / appKind", () => {
   ])("classifies %s as a service", (image) => {
     expect(isDatabaseImage(image)).toBe(false);
     expect(appKind(image)).toBe("service");
+  });
+});
+
+describe("inferAppCategory", () => {
+  test("recognizes well-known datastores as Database", () => {
+    expect(inferAppCategory("postgres:16-alpine").label).toBe("Database");
+    expect(inferAppCategory("redis:7").label).toBe("Database");
+  });
+
+  test("recognizes ollama as AI / LLM", () => {
+    expect(inferAppCategory("ollama/ollama:0.32.5").label).toBe("AI / LLM");
+  });
+
+  test("recognizes open-webui as Web UI", () => {
+    expect(inferAppCategory("ghcr.io/open-webui/open-webui:0.11.0").label).toBe("Web UI");
+  });
+
+  test("recognizes the Quipora Bot template specifically as Discord Bot", () => {
+    expect(inferAppCategory("ghcr.io/mikevin202/quipora-bot:latest").label).toBe("Discord Bot");
+  });
+
+  test("recognizes a generic *-bot image as Bot, not specifically Discord", () => {
+    expect(inferAppCategory("myorg/telegram-bot:latest").label).toBe("Bot");
+  });
+
+  test("recognizes ergo as IRC Server", () => {
+    expect(inferAppCategory("ergo:latest").label).toBe("IRC Server");
+  });
+
+  test("recognizes known CMS images", () => {
+    expect(inferAppCategory("joomla:latest").label).toBe("CMS");
+    expect(inferAppCategory("wordpress:6").label).toBe("CMS");
+  });
+
+  test("recognizes plain web-server images as Website", () => {
+    expect(inferAppCategory("nginx:alpine").label).toBe("Website");
+    expect(inferAppCategory("caddy:2").label).toBe("Website");
+  });
+
+  test("falls back to a generic Service for anything unrecognized", () => {
+    expect(inferAppCategory("deployment-app-9:c1de769df417").label).toBe("Service");
+    expect(inferAppCategory("ghcr.io/acme/api-server:sha-abc").label).toBe("Service");
   });
 });

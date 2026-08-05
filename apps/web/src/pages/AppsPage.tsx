@@ -6,6 +6,7 @@ import { useAppsView } from "../hooks/useAppsView";
 import { useFavoriteApps } from "../hooks/useFavoriteApps";
 import {
   filterAndSortAppEntries,
+  matchesFilters,
   type AppFilterKey,
   type AppListEntry,
   type AppSortKey
@@ -116,6 +117,22 @@ export default function AppsPage({
     .map((entry) => entry.app)
     .filter((app): app is StoredApp => app !== undefined);
 
+  // Each pill's count reflects the full (unfiltered-by-other-pills) set, so
+  // toggling one filter doesn't make the others' counts shift underneath it —
+  // "how many apps match this facet", not "how many remain if combined".
+  const allEntries = [...managedEntries, ...missingEntries];
+  const filterCounts = new Map<AppFilterKey, number>(
+    FILTER_OPTIONS.map((option) => [
+      option.key,
+      allEntries.filter((entry) => matchesFilters(entry, new Set([option.key]), favoriteAppIds)).length
+    ])
+  );
+  const hasActiveFilters = activeFilters.size > 0 || search !== "";
+  const clearFilters = () => {
+    setActiveFilters(new Set());
+    setSearch("");
+  };
+
   return (
     <div className="page">
       <section className="page-section">
@@ -171,40 +188,62 @@ export default function AppsPage({
         </div>
 
         {hasAnyApp && (
-          <div className="apps-filter-row">
-            <input
-              className="apps-filter-search"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search by name or image..."
-              aria-label="Search apps"
-            />
-            <div className="apps-filter-chips" role="group" aria-label="Filters">
-              {FILTER_OPTIONS.map((option) => (
-                <button
-                  key={option.key}
-                  type="button"
-                  className={`apps-filter-chip ${activeFilters.has(option.key) ? "active" : ""}`}
-                  aria-pressed={activeFilters.has(option.key)}
-                  onClick={() => toggleFilter(option.key)}
-                >
-                  {option.label}
-                </button>
-              ))}
+          <>
+            <div className="apps-filter-row">
+              <input
+                className="apps-filter-search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search by name or image..."
+                aria-label="Search apps"
+              />
+              <select
+                className="apps-filter-sort"
+                value={sortKey}
+                onChange={(event) => setSortKey(event.target.value as AppSortKey)}
+                aria-label="Sort apps"
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    Sort: {option.label}
+                  </option>
+                ))}
+              </select>
+              <span className="apps-filter-count text-faint">
+                {filteredManagedContainers.length + filteredMissingApps.length} app
+                {filteredManagedContainers.length + filteredMissingApps.length === 1 ? "" : "s"}
+              </span>
             </div>
-            <select
-              className="apps-filter-sort"
-              value={sortKey}
-              onChange={(event) => setSortKey(event.target.value as AppSortKey)}
-              aria-label="Sort apps"
-            >
-              {SORT_OPTIONS.map((option) => (
-                <option key={option.key} value={option.key}>
-                  Sort: {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
+
+            <div className="apps-filter-pill-row">
+              <div className="apps-filter-chips" role="group" aria-label="Filters">
+                <button
+                  type="button"
+                  className={`apps-filter-chip ${activeFilters.size === 0 ? "active" : ""}`}
+                  aria-pressed={activeFilters.size === 0}
+                  onClick={() => setActiveFilters(new Set())}
+                >
+                  All <span className="apps-filter-chip-count">{allEntries.length}</span>
+                </button>
+                {FILTER_OPTIONS.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    className={`apps-filter-chip ${activeFilters.has(option.key) ? "active" : ""}`}
+                    aria-pressed={activeFilters.has(option.key)}
+                    onClick={() => toggleFilter(option.key)}
+                  >
+                    {option.label} <span className="apps-filter-chip-count">{filterCounts.get(option.key)}</span>
+                  </button>
+                ))}
+              </div>
+              {hasActiveFilters && (
+                <button type="button" className="apps-filter-clear" onClick={clearFilters}>
+                  Clear filters
+                </button>
+              )}
+            </div>
+          </>
         )}
 
         {!hasAnyApp ? (

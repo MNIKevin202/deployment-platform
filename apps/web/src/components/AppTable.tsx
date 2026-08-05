@@ -1,7 +1,9 @@
+import { useState } from "react";
 import type { ContainerAction, ContainerSummary, StoredApp } from "../types/api";
 import { useDeployProgress } from "../lib/deployProgress";
 import { InlineDeployProgress } from "./DeployProgressIndicator";
 import { formatRelativeTimeFromIso } from "../lib/formatTime";
+import { inferAppCategory } from "../lib/appKind";
 
 interface AppTableProps {
   managedApps: ContainerSummary[];
@@ -41,6 +43,54 @@ function favoriteButton(
   );
 }
 
+/** A small "copy to clipboard" affordance for the image/container-id line — non-fatal if the browser denies clipboard access. */
+function CopyButton({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <button
+      type="button"
+      className="copy-button"
+      aria-label={`Copy ${label}`}
+      title={copied ? "Copied!" : `Copy ${label}`}
+      onClick={async (event) => {
+        event.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1500);
+        } catch {
+          // Clipboard access denied/unavailable — silently do nothing.
+        }
+      }}
+    >
+      {copied ? "✓" : "⧉"}
+    </button>
+  );
+}
+
+function appCategoryCell(name: string, image: string, internalOnly: boolean, hasDomain: boolean) {
+  const category = inferAppCategory(image);
+  return (
+    <div className="apps-table-app-cell">
+      <span className="apps-table-app-icon" aria-hidden="true">
+        {category.icon}
+      </span>
+      <div className="apps-table-app-meta">
+        <span className="apps-table-app-name">{name}</span>
+        <span className="apps-table-app-subtitle">
+          {category.label}
+          {internalOnly ? (
+            <span className="status-badge compact neutral">Internal</span>
+          ) : (
+            hasDomain && <span className="status-badge compact positive">Public</span>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function domainCell(storedApp: StoredApp | undefined, canOpen: boolean) {
   if (storedApp?.internalOnly) {
     return <span className="routing-badge internal-only">Internal only</span>;
@@ -48,7 +98,7 @@ function domainCell(storedApp: StoredApp | undefined, canOpen: boolean) {
   if (storedApp?.domain) {
     return canOpen ? (
       <a href={`https://${storedApp.domain}`} target="_blank" rel="noreferrer" className="table-link">
-        {storedApp.domain}
+        {storedApp.domain} <span aria-hidden="true">↗</span>
       </a>
     ) : (
       <span className="text-faint">{storedApp.domain}</span>
@@ -77,6 +127,7 @@ export default function AppTable({
       <table className="env-table apps-table">
         <thead>
           <tr>
+            <th aria-label="Favorite" />
             <th>App</th>
             <th>Status</th>
             <th>Image</th>
@@ -98,27 +149,36 @@ export default function AppTable({
 
             return (
               <tr key={container.id}>
+                <td>{favoriteButton(storedApp?.id ?? -1, Boolean(storedApp && favoriteAppIds?.has(storedApp.id)), storedApp ? onToggleFavorite : undefined)}</td>
                 <td>
-                  {favoriteButton(storedApp?.id ?? -1, Boolean(storedApp && favoriteAppIds?.has(storedApp.id)), storedApp ? onToggleFavorite : undefined)}
                   {storedApp ? (
-                    <button className="table-name-button" type="button" onClick={() => onViewApp(storedApp)}>
-                      {name}
+                    <button className="table-name-button apps-table-app-button" type="button" onClick={() => onViewApp(storedApp)}>
+                      {appCategoryCell(name, container.image, storedApp.internalOnly, Boolean(storedApp.domain))}
                     </button>
                   ) : (
-                    name
+                    appCategoryCell(name, container.image, false, false)
                   )}
                 </td>
                 <td>
                   {deploying ? (
                     <InlineDeployProgress progress={deploying} />
                   ) : (
-                    <span className={`status-pill ${isRunning ? "running" : "stopped"}`}>
-                      {container.state}
-                    </span>
+                    <div className="apps-table-status-cell">
+                      <span className={`status-pill ${isRunning ? "running" : "stopped"}`}>
+                        {container.state}
+                      </span>
+                      <span className="apps-table-subtext">{container.status}</span>
+                    </div>
                   )}
                 </td>
                 <td>
-                  <code className="inline-code">{container.image}</code>
+                  <div className="apps-table-image-cell">
+                    <code className="inline-code">{container.image}</code>
+                    <span className="apps-table-subtext apps-table-id-row">
+                      {container.shortId}
+                      <CopyButton value={container.image} label="image name" />
+                    </span>
+                  </div>
                 </td>
                 <td>
                   {storedApp?.currentVersion != null ? (
@@ -127,7 +187,14 @@ export default function AppTable({
                     <span className="text-faint">—</span>
                   )}
                 </td>
-                <td className="text-faint">{formatRelativeTimeFromIso(storedApp?.lastDeployedAt) ?? "—"}</td>
+                <td className="text-faint">
+                  <div className="apps-table-last-deployed">
+                    <span>{formatRelativeTimeFromIso(storedApp?.lastDeployedAt) ?? "—"}</span>
+                    {storedApp?.lastDeployedAt && (
+                      <span className="apps-table-subtext">{new Date(storedApp.lastDeployedAt).toLocaleString()}</span>
+                    )}
+                  </div>
+                </td>
                 <td>{domainCell(storedApp, canOpen)}</td>
                 <td>
                   {storedApp?.imageUpdateAvailable ? (
@@ -140,7 +207,7 @@ export default function AppTable({
                   <div className="apps-table-actions">
                     {canOpen && (
                       <a
-                        className="secondary-button compact"
+                        className="primary-button compact"
                         href={`https://${storedApp?.domain}`}
                         target="_blank"
                         rel="noreferrer"
@@ -159,7 +226,7 @@ export default function AppTable({
                       </button>
                     ) : (
                       <button
-                        className="secondary-button compact"
+                        className={canOpen ? "secondary-button compact" : "primary-button compact"}
                         type="button"
                         onClick={() => onAction(container, "start")}
                         disabled={actionLoading === `${container.id}:start`}
@@ -168,23 +235,33 @@ export default function AppTable({
                       </button>
                     )}
                     <button
-                      className="secondary-button compact"
+                      className="icon-button compact"
                       type="button"
+                      aria-label="Restart"
+                      title="Restart"
                       onClick={() => onAction(container, "restart")}
                       disabled={!isRunning || actionLoading === `${container.id}:restart`}
                     >
-                      Restart
-                    </button>
-                    <button className="secondary-button compact" type="button" onClick={() => onOpenLogs(container)}>
-                      Logs
+                      ↻
                     </button>
                     <button
-                      className="danger-button compact"
+                      className="icon-button compact"
                       type="button"
+                      aria-label="Logs"
+                      title="Logs"
+                      onClick={() => onOpenLogs(container)}
+                    >
+                      ▤
+                    </button>
+                    <button
+                      className="icon-button compact danger"
+                      type="button"
+                      aria-label="Delete"
+                      title="Delete"
                       onClick={() => onDeleteApp(container)}
                       disabled={actionLoading === `${container.id}:delete`}
                     >
-                      Delete
+                      🗑
                     </button>
                   </div>
                 </td>
@@ -194,10 +271,10 @@ export default function AppTable({
 
           {missingApps.map((storedApp) => (
             <tr key={`missing-${storedApp.id}`} className="apps-table-missing-row">
+              <td>{favoriteButton(storedApp.id, Boolean(favoriteAppIds?.has(storedApp.id)), onToggleFavorite)}</td>
               <td>
-                {favoriteButton(storedApp.id, Boolean(favoriteAppIds?.has(storedApp.id)), onToggleFavorite)}
-                <button className="table-name-button" type="button" onClick={() => onViewApp(storedApp)}>
-                  {storedApp.containerName ?? storedApp.name}
+                <button className="table-name-button apps-table-app-button" type="button" onClick={() => onViewApp(storedApp)}>
+                  {appCategoryCell(storedApp.containerName ?? storedApp.name, storedApp.image, storedApp.internalOnly, Boolean(storedApp.domain))}
                 </button>
               </td>
               <td>
