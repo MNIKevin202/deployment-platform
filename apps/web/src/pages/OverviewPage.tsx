@@ -3,6 +3,7 @@ import StatCard from "../components/StatCard";
 import AppCard from "../components/AppCard";
 import AppTable from "../components/AppTable";
 import AttentionPanel from "../components/AttentionPanel";
+import { useSpeedtest } from "../hooks/useSpeedtest";
 
 // Pulls in recharts (a large dependency) only once Overview actually
 // mounts, instead of shipping it in the app's initial bundle.
@@ -148,6 +149,8 @@ export default function OverviewPage({
     };
   }, []);
 
+  const speedtest = useSpeedtest();
+
   const health = computePlatformHealth({
     managedApps,
     storedAppsByName,
@@ -200,6 +203,25 @@ export default function OverviewPage({
           value={dockerInfo ? `${dockerInfo.cpuCount} cores` : "—"}
           hint={dockerInfo ? formatMemory(dockerInfo.memoryTotalBytes) : undefined}
         />
+        {/* Only rendered once a Speedtest Tracker is connected — an
+            unconfigured integration shows nothing rather than an empty card. */}
+        {speedtest.data?.configured && speedtest.data.reading && (
+          <StatCard
+            label="Internet Speed"
+            value={speedtest.data.reading.downloadHuman ?? "—"}
+            tone={speedtest.data.reading.healthy === false ? "warning" : "positive"}
+            hint={
+              [
+                speedtest.data.reading.uploadHuman ? `${speedtest.data.reading.uploadHuman} up` : null,
+                speedtest.data.reading.pingMs !== null
+                  ? `${speedtest.data.reading.pingMs.toFixed(0)} ms`
+                  : null
+              ]
+                .filter(Boolean)
+                .join(" · ") || undefined
+            }
+          />
+        )}
       </section>
 
       <Suspense fallback={null}>

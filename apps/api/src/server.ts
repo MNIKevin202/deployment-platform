@@ -78,6 +78,8 @@ import { registerDeploymentRoutes } from "./routes/deployments.js";
 import { registerDeploymentSettingsRoutes } from "./routes/deployment-settings.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerPortsRoutes } from "./routes/ports.js";
+import { registerSpeedtestRoutes } from "./routes/speedtest.js";
+import { createSpeedtestProvider, type SpeedtestDeps } from "./services/speedtest-service.js";
 import {
   createRetentionDockerOps,
   cleanupAppRetention,
@@ -432,6 +434,17 @@ await registerDeploymentSettingsRoutes(app, { appDatabase });
 await registerSettingsRoutes(app, { appDatabase, dbPath: DATABASE_PATH, backupsDir: BACKUPS_DIR });
 
 await registerPortsRoutes(app, { appDatabase });
+
+// Internet-speed readings pulled from the operator's own Speedtest Tracker.
+// One provider per process so its cache is shared; deps are rebuilt per call
+// so a URL/token change applies without a restart.
+const buildSpeedtestDeps = (): SpeedtestDeps => ({ appDatabase });
+const speedtestProvider = createSpeedtestProvider(buildSpeedtestDeps());
+await registerSpeedtestRoutes(app, {
+  appDatabase,
+  provider: speedtestProvider,
+  buildDeps: buildSpeedtestDeps
+});
 
 // Scheduled backups: snapshot the DB to /data/backups on an interval, with
 // retention. Reuses the same archive builder as the manual download.

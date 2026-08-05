@@ -3,6 +3,7 @@ import ConfirmationDialog from "../components/ConfirmationDialog";
 import Tabs from "../components/Tabs";
 import AccountSettings from "../components/AccountSettings";
 import DiskSettings from "../components/DiskSettings";
+import SpeedtestSettings from "../components/SpeedtestSettings";
 import NotificationSettings from "../components/NotificationSettings";
 import BackupScheduleSettings from "../components/BackupScheduleSettings";
 import UpdatesSettings from "../components/UpdatesSettings";
@@ -13,11 +14,12 @@ interface RestoreResponse {
   message: string;
 }
 
-type SettingsTab = "account" | "notifications" | "backups" | "maintenance" | "updates";
+type SettingsTab = "account" | "notifications" | "integrations" | "backups" | "maintenance" | "updates";
 
 const SETTINGS_TABS = [
   { key: "account", label: "Account" },
   { key: "notifications", label: "Notifications" },
+  { key: "integrations", label: "Integrations" },
   { key: "backups", label: "Backups" },
   { key: "maintenance", label: "Maintenance" },
   { key: "updates", label: "Updates" }
@@ -82,6 +84,8 @@ export default function SettingsPage() {
       {tab === "account" && <AccountSettings />}
 
       {tab === "notifications" && <NotificationSettings />}
+
+      {tab === "integrations" && <SpeedtestSettings />}
 
       {tab === "maintenance" && <DiskSettings />}
 

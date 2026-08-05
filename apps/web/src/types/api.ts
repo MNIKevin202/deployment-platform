@@ -1263,3 +1263,34 @@ export interface BrowserResourceEntryPayload {
   transferBytes: number | null;
   statusOk: boolean;
 }
+
+export interface SpeedtestReading {
+  /** Pre-formatted by Speedtest Tracker, e.g. "241.53 Mbps". */
+  downloadHuman: string | null;
+  uploadHuman: string | null;
+  downloadBits: number | null;
+  uploadBits: number | null;
+  pingMs: number | null;
+  jitterMs: number | null;
+  packetLoss: number | null;
+  isp: string | null;
+  serverName: string | null;
+  healthy: boolean | null;
+  measuredAt: string | null;
+}
+
+export interface SpeedtestConnection {
+  success: boolean;
+  configured: boolean;
+  url: string | null;
+  lastValidatedAt: string | null;
+  credentialUnreadable: boolean;
+}
+
+export interface SpeedtestLatestResponse {
+  success: boolean;
+  configured: boolean;
+  reading: SpeedtestReading | null;
+  /** Why the reading is missing, when it is. Never contains the token. */
+  error: string | null;
+}
