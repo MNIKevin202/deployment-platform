@@ -106,6 +106,7 @@ import {
   createImageUpdateChecker,
   createImageUpdateCheckDockerOps
 } from "./services/image-update-check-service.js";
+import { createDockerUsageProvider } from "./services/docker-usage-service.js";
 import type { RevertDependencies } from "./services/revert-service.js";
 import { verifyGitAvailable } from "./services/github-clone-service.js";
 import { createRealHttpProbeClient } from "./services/performance-diagnostics-service.js";
@@ -467,10 +468,16 @@ const imageUpdateChecker = createImageUpdateChecker({
   tickIntervalMs: IMAGE_UPDATE_CHECK_INTERVAL_MS
 });
 
+// One provider per process: its cache and single-flight de-dup must be
+// shared across every request, or they provide no protection at all against
+// a slow `docker system df()` under repeated Maintenance-page polling — see
+// docker-usage-service.ts for why this matters.
+const dockerUsageProvider = createDockerUsageProvider(docker);
+
 await registerPlatformSettingsRoutes(app, {
   appDatabase,
   backupsDir: BACKUPS_DIR,
-  docker,
+  dockerUsageProvider,
   runBackupNow: () => runScheduledBackupNow(),
   runRetentionSweep
 });
