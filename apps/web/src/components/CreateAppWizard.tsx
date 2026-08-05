@@ -413,7 +413,10 @@ export default function CreateAppWizard({
         rowId: nextRowId++,
         containerPath,
         volumeName: "",
-        readOnly: false
+        readOnly: false,
+        // Declared by a curated template, so a reserved path it genuinely
+        // needs (e.g. RustDesk's /root) is allowed here but still not typeable.
+        fromTemplate: true
       }))
     );
     setPortRows(

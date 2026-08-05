@@ -97,6 +97,31 @@ export function isValidCustomDomain(raw: string): boolean {
   return SAFE_DOMAIN_PATTERN.test(withoutTrailingDot);
 }
 
+/**
+ * Reserved roots a *curated template* may still mount, because they hold an
+ * image's own state rather than a system tree. Only /root qualifies today:
+ * it's the root user's home (RustDesk's server keeps its generated keypair
+ * there), not a kernel/OS directory. Genuine system trees — /etc, /usr,
+ * /bin, … — stay blocked for templates too.
+ */
+const TEMPLATE_ALLOWED_RESERVED_ROOTS = ["/root"];
+
+function isTemplateAllowedReservedPath(path: string): boolean {
+  return TEMPLATE_ALLOWED_RESERVED_ROOTS.some(
+    (root) => path === root || path.startsWith(`${root}/`)
+  );
+}
+
+export interface ContainerPathOptions {
+  /**
+   * Set only for a path a curated template declared itself. Hand-entered
+   * paths never pass this, so the reserved-path guard still applies to
+   * everything an operator types — and even a template only gets the
+   * narrow set in TEMPLATE_ALLOWED_RESERVED_ROOTS.
+   */
+  allowReserved?: boolean;
+}
+
 export function isReservedContainerPath(path: string): boolean {
   if (RESERVED_EXACT_PATHS.has(path)) {
     return true;
@@ -107,7 +132,7 @@ export function isReservedContainerPath(path: string): boolean {
   );
 }
 
-export function isValidContainerPath(path: string): boolean {
+export function isValidContainerPath(path: string, options: ContainerPathOptions = {}): boolean {
   if (path.length < 2 || path.length > 255) {
     return false;
   }
@@ -120,7 +145,14 @@ export function isValidContainerPath(path: string): boolean {
     return false;
   }
 
-  return !isReservedContainerPath(path);
+  if (!isReservedContainerPath(path)) {
+    return true;
+  }
+
+  // Reserved. A curated template may still use the narrow set of reserved
+  // roots that hold an image's own state (see TEMPLATE_ALLOWED_RESERVED_ROOTS)
+  // — never a system tree like /etc, and never a hand-typed path.
+  return Boolean(options.allowReserved) && isTemplateAllowedReservedPath(path);
 }
 
 /** Returns an error message, or null if every variable is valid and no key repeats. */
@@ -148,7 +180,7 @@ export function validateStorageMounts(mounts: WizardVolumeInput[]): string | nul
   const seenVolumeNames = new Set<string>();
 
   for (const mount of mounts) {
-    if (!isValidContainerPath(mount.containerPath)) {
+    if (!isValidContainerPath(mount.containerPath, { allowReserved: mount.fromTemplate })) {
       return `"${mount.containerPath || "(empty)"}" is not a usable container path.`;
     }
 

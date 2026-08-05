@@ -234,6 +234,13 @@ export interface WizardVolumeInput {
   /** Empty string means "let the platform generate one". */
   volumeName: string;
   readOnly: boolean;
+  /**
+   * True when this mount came from a curated template's own `volumes` list
+   * rather than being typed by the operator. Only such mounts may use a
+   * path the reserved-path guard would otherwise block (see
+   * isValidContainerPath).
+   */
+  fromTemplate?: boolean;
 }
 
 export interface CreateAppWizardPayload {

@@ -26,10 +26,24 @@ const RESERVED_ROOT_PATHS = [
   "/usr",
   "/lib",
   "/lib64",
-  "/root",
   "/run",
   "/var/run"
 ];
+
+/*
+ * `/root` is deliberately NOT in the list above. It is the root user's home
+ * directory, not a system/kernel tree, and several self-hosted images keep
+ * their generated state there — RustDesk's server writes its signing keypair
+ * to /root and would lose every client's trust on each redeploy without a
+ * volume there.
+ *
+ * The panel still refuses a hand-typed /root (see isValidContainerPath in
+ * apps/web/src/lib/wizardValidation.ts); only a curated template's own
+ * declared volume may use it. That distinction can't be re-checked here,
+ * since a template install arrives as an ordinary wizard request and the API
+ * has no copy of the template catalog — so this endpoint accepts /root and
+ * the vetting lives in the panel.
+ */
 
 /**
  * Named volumes can't reach arbitrary host files (there is no host bind
