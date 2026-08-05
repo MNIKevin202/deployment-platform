@@ -1964,10 +1964,46 @@ process.exit(0);
   info "CREDENTIAL_ENCRYPTION_KEY present and valid (32 bytes)."
 fi
 
+# The containers were recreated moments ago, so the edge can legitimately
+# refuse a connection for a few seconds while the proxy re-resolves its
+# upstream. That is part of a normal swap, not a failed release, so a URL is
+# polled until it answers rather than judged on a single attempt.
+URL_CHECK_ATTEMPTS=10
+URL_CHECK_DELAY_SECONDS=3
+
 check_public_url() {
   local url="$1"
-  local code
-  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --retry 3 --retry-delay 2 "${url}" || printf '000')"
+  local code="000"
+  local attempt=1
+
+  while [ "${attempt}" -le "${URL_CHECK_ATTEMPTS}" ]; do
+    # Deliberately ONE transfer per attempt, with curl's own --retry unused:
+    # curl writes %{http_code} once per transfer, so a retried-then-successful
+    # check returns the concatenation "000200", which compares unequal to
+    # "200" and rolls back a perfectly healthy release. Retrying in the shell
+    # keeps one code per attempt.
+    #
+    # curl also does not retry exit code 7 (could not connect) without
+    # --retry-connrefused — and that is precisely the error a just-swapped
+    # container produces, so its --retry would not have fired here anyway.
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${url}" 2>/dev/null)" || code="000"
+    [ -n "${code}" ] || code="000"
+
+    if [ "${code}" = "200" ]; then
+      if [ "${attempt}" -gt 1 ]; then
+        printf '  %s answered 200 on attempt %s.\n' "${url}" "${attempt}" >&2
+      fi
+      printf '%s' "${code}"
+      return 0
+    fi
+
+    printf '  %s -> HTTP %s (attempt %s/%s)\n' "${url}" "${code}" "${attempt}" "${URL_CHECK_ATTEMPTS}" >&2
+    if [ "${attempt}" -lt "${URL_CHECK_ATTEMPTS}" ]; then
+      sleep "${URL_CHECK_DELAY_SECONDS}"
+    fi
+    attempt=$((attempt + 1))
+  done
+
   printf '%s' "${code}"
 }
 
