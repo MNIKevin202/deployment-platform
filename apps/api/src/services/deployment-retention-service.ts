@@ -754,6 +754,10 @@ export async function runGlobalSweep(deps: RetentionDeps): Promise<RetentionClea
 
 export const RETENTION_LAST_CLEANUP_KEY = "deployment_retention_last_cleanup";
 export const RETENTION_LIFETIME_STATS_KEY = "deployment_retention_lifetime_stats";
+export const RETENTION_HISTORY_KEY = "deployment_retention_history";
+
+/** How many recent cleanup runs the Maintenance page's history table keeps. */
+export const RETENTION_HISTORY_LIMIT = 20;
 
 export interface RetentionLastCleanup extends RetentionCleanupResult {
   /** Epoch ms this cleanup completed. */
@@ -766,6 +770,8 @@ export interface RetentionLifetimeStats {
   totalContainersRemoved: number;
   totalVersionsPruned: number;
   totalBytesReclaimed: number;
+  /** The single largest bytesReclaimed seen across every recorded cleanup. */
+  largestCleanupBytes: number;
 }
 
 const EMPTY_LIFETIME_STATS: RetentionLifetimeStats = {
@@ -773,14 +779,16 @@ const EMPTY_LIFETIME_STATS: RetentionLifetimeStats = {
   totalImagesDeleted: 0,
   totalContainersRemoved: 0,
   totalVersionsPruned: 0,
-  totalBytesReclaimed: 0
+  totalBytesReclaimed: 0,
+  largestCleanupBytes: 0
 };
 
 /**
- * Persists the outcome of a completed cleanup as both "last cleanup" (for the
- * Maintenance page's live stat cards) and running lifetime totals. Called
- * exactly once per external trigger (a deploy's cleanup, a revert's cleanup,
- * or one sweep run — manual or scheduled) by the server-side wrappers around
+ * Persists the outcome of a completed cleanup as "last cleanup" (for the
+ * Maintenance page's live stat cards), a bounded recent-history list (for its
+ * history table), and running lifetime totals. Called exactly once per
+ * external trigger (a deploy's cleanup, a revert's cleanup, or one sweep run —
+ * manual or scheduled) by the server-side wrappers around
  * cleanupAppRetention/cleanupAppRetentionLocked/runGlobalSweep, never by
  * those functions themselves — so a daily sweep's per-app sub-cleanups are
  * counted once, as the aggregated sweep, not once per app. A skipped result
@@ -795,8 +803,12 @@ export function recordRetentionStats(
     return;
   }
 
-  const lastCleanup: RetentionLastCleanup = { ...result, at };
-  appDatabase.setJsonSetting(RETENTION_LAST_CLEANUP_KEY, lastCleanup);
+  const entry: RetentionLastCleanup = { ...result, at };
+  appDatabase.setJsonSetting(RETENTION_LAST_CLEANUP_KEY, entry);
+
+  const previousHistory = appDatabase.getJsonSetting<RetentionLastCleanup[]>(RETENTION_HISTORY_KEY) ?? [];
+  const nextHistory = [entry, ...previousHistory].slice(0, RETENTION_HISTORY_LIMIT);
+  appDatabase.setJsonSetting(RETENTION_HISTORY_KEY, nextHistory);
 
   const previous =
     appDatabase.getJsonSetting<RetentionLifetimeStats>(RETENTION_LIFETIME_STATS_KEY) ?? EMPTY_LIFETIME_STATS;
@@ -806,7 +818,8 @@ export function recordRetentionStats(
     totalImagesDeleted: previous.totalImagesDeleted + result.imagesDeleted,
     totalContainersRemoved: previous.totalContainersRemoved + result.containersRemoved,
     totalVersionsPruned: previous.totalVersionsPruned + result.versionsPruned,
-    totalBytesReclaimed: previous.totalBytesReclaimed + result.bytesReclaimed
+    totalBytesReclaimed: previous.totalBytesReclaimed + result.bytesReclaimed,
+    largestCleanupBytes: Math.max(previous.largestCleanupBytes, result.bytesReclaimed)
   };
 
   appDatabase.setJsonSetting(RETENTION_LIFETIME_STATS_KEY, next);
@@ -818,4 +831,9 @@ export function readLastCleanup(appDatabase: AppDatabase): RetentionLastCleanup 
 
 export function readRetentionLifetimeStats(appDatabase: AppDatabase): RetentionLifetimeStats {
   return appDatabase.getJsonSetting<RetentionLifetimeStats>(RETENTION_LIFETIME_STATS_KEY) ?? EMPTY_LIFETIME_STATS;
+}
+
+/** The most recent cleanup runs, newest first, capped at RETENTION_HISTORY_LIMIT. */
+export function readRetentionHistory(appDatabase: AppDatabase): RetentionLastCleanup[] {
+  return appDatabase.getJsonSetting<RetentionLastCleanup[]>(RETENTION_HISTORY_KEY) ?? [];
 }

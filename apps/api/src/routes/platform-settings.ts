@@ -11,6 +11,7 @@ import {
   DEFAULT_RETENTION_CONFIG,
   readLastCleanup,
   readRetentionLifetimeStats,
+  readRetentionHistory,
   type RetentionConfig,
   type RetentionCleanupResult
 } from "../services/deployment-retention-service.js";
@@ -137,7 +138,8 @@ export async function registerPlatformSettingsRoutes(
       usage: usage && diskUsage ? { ...usage, ...diskUsage } : null,
       usageError,
       lastCleanup: readLastCleanup(appDatabase),
-      lifetimeStats: readRetentionLifetimeStats(appDatabase)
+      lifetimeStats: readRetentionLifetimeStats(appDatabase),
+      history: readRetentionHistory(appDatabase)
     };
   });
 
