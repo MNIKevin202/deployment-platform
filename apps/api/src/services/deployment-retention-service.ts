@@ -195,7 +195,10 @@ export interface SelectSweepableInput {
  *    from a deploy that failed after building but before recording a version —
  *    the "deployment failed midway" case);
  *  - `deployment-platform-(api|web):*` images beyond the newest `platformKeep`
- *    per repo (the platform's own self-update history).
+ *    per repo (the platform's own self-update history). `platformKeep` counts
+ *    every image toward that budget, including the currently-live one, so
+ *    e.g. platformKeep=3 leaves exactly 3 platform images total per repo on
+ *    disk — not 3 in addition to whatever's running.
  *
  * An image used by any container, or whose tag is still referenced, is never
  * selected. Base images (nginx, postgres, …) are always left alone. Pure and
@@ -211,7 +214,14 @@ export function selectSweepableImages(input: SelectSweepableInput): PruneImage[]
   const seen = new Set<string>();
   const platformByRepo = new Map<string, PruneImage[]>();
 
+  // The final, absolute guard: an in-use image is NEVER actually removed, no
+  // matter what earlier logic decided — including the platform "keep N"
+  // bucketing below, which deliberately counts an in-use image toward its
+  // budget (see the loop after this) rather than skipping it outright.
   function select(image: PruneImage): void {
+    if (inUseImageIds.has(image.id)) {
+      return;
+    }
     if (!seen.has(image.id)) {
       seen.add(image.id);
       selected.push(image);
@@ -219,12 +229,8 @@ export function selectSweepableImages(input: SelectSweepableInput): PruneImage[]
   }
 
   for (const image of images) {
-    if (inUseImageIds.has(image.id)) {
-      continue;
-    }
-
     // A tag still referenced by the ledger (or an app's current image) pins the
-    // whole image, regardless of its other tags.
+    // whole image, regardless of its other tags or in-use status.
     if (image.repoTags.some((tag) => referencedTags.has(tag))) {
       continue;
     }
@@ -256,6 +262,13 @@ export function selectSweepableImages(input: SelectSweepableInput): PruneImage[]
   }
 
   for (const list of platformByRepo.values()) {
+    // Newest first, counting EVERY platform image toward the keep budget —
+    // including whichever one is currently running. This is what makes
+    // platformKeep=N mean "N total remain" (matching what an operator sees
+    // in `docker images`), rather than "N beyond whatever's live." An in-use
+    // image that falls outside the keep window is still never physically
+    // removed (select() refuses it above) — it just doesn't occupy one of
+    // the N intentionally-retained slots.
     list.sort((a, b) => b.created - a.created);
     for (const image of list.slice(platformKeep)) {
       select(image);
@@ -276,6 +289,8 @@ export interface RetentionContainer {
   imageId: string;
   managed: boolean;
   running: boolean;
+  /** Unix seconds the container was created. Used to age-gate leftover sweeps. */
+  created: number;
 }
 
 export interface RetentionDockerOps {
@@ -296,7 +311,8 @@ export function createRetentionDockerOps(docker: Docker): RetentionDockerOps {
         names: (container.Names ?? []).map((name) => name.replace(/^\//, "")),
         imageId: container.ImageID,
         managed: (container.Labels ?? {})["com.deployment-platform.managed"] === "true",
-        running: container.State === "running"
+        running: container.State === "running",
+        created: container.Created ?? 0
       }));
     },
     async listImages() {
@@ -355,11 +371,84 @@ export interface RetentionCleanupResult {
 }
 
 const LEFTOVER_CONTAINER_SUFFIX = /-(rollback|github-deploy|redeploy)-/;
-/** Freshly-built images are protected from the daily sweep for this long (1 hour). */
-const SWEEP_MIN_IMAGE_AGE_SECONDS = 60 * 60;
+/**
+ * A leftover container or image younger than this is protected from every
+ * sweep (1 hour) — it may belong to a deploy that is still mid-flight (its
+ * ledger row not recorded yet), or a release.sh rollback that just failed to
+ * restore and is awaiting manual attention. Applies uniformly to the daily
+ * image sweep, the per-app leftover-container sweep, and the platform
+ * rollback-container sweep.
+ */
+const MIN_LEFTOVER_AGE_SECONDS = 60 * 60;
+
+/**
+ * The platform's own transient rollback containers, created by release.sh
+ * around every self-update (`deployment-platform-{api,web}-rollback-<version>-
+ * <timestamp>`) — never a rollback POINT, just release.sh's brief safety copy
+ * of the previous container, exactly like a managed app's own `-rollback-`
+ * container. Unlike managed-app containers these carry no
+ * com.deployment-platform.managed label, so they are matched by name alone.
+ */
+const PLATFORM_ROLLBACK_PATTERN = /^deployment-platform-(api|web)-rollback-/;
+const PLATFORM_LIVE_CONTAINER_NAMES = new Set(["deployment-platform-api", "deployment-platform-web"]);
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * True when a container is a safe-to-remove leftover: not running, never the
+ * live container itself (defence in depth beyond the name pattern), matches
+ * the given leftover-name pattern, and is old enough that it can't be an
+ * in-flight or just-failed operation still awaiting attention. A container
+ * with an unknown (non-positive) creation time is never removed — better to
+ * leave a leftover than guess at its age.
+ */
+function isLeftoverContainerRemovable(
+  container: RetentionContainer,
+  pattern: RegExp,
+  liveNames: ReadonlySet<string>,
+  nowSeconds: number,
+  minAgeSeconds: number
+): boolean {
+  if (container.running) {
+    return false;
+  }
+  if (container.names.some((name) => liveNames.has(name))) {
+    return false;
+  }
+  if (!container.names.some((name) => pattern.test(name))) {
+    return false;
+  }
+  if (minAgeSeconds > 0) {
+    if (container.created <= 0) {
+      return false;
+    }
+    if (nowSeconds - container.created < minAgeSeconds) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The daily/manual sweep's selector for the platform's own leftover rollback
+ * containers — pure and unit-testable, mirroring selectSweepableImages.
+ */
+export function selectSweepablePlatformRollbackContainers(
+  containers: RetentionContainer[],
+  nowSeconds: number,
+  minAgeSeconds: number = MIN_LEFTOVER_AGE_SECONDS
+): RetentionContainer[] {
+  return containers.filter((container) =>
+    isLeftoverContainerRemovable(
+      container,
+      PLATFORM_ROLLBACK_PATTERN,
+      PLATFORM_LIVE_CONTAINER_NAMES,
+      nowSeconds,
+      minAgeSeconds
+    )
+  );
 }
 
 function emptyResult(scope: "app" | "global", appId: number | null): RetentionCleanupResult {
@@ -495,17 +584,24 @@ export async function cleanupAppRetention(
     }
 
     // Sweep leftover rollback/temp containers for this app. The live container
-    // (named exactly app.containerName) and anything still running are never
-    // touched, so a concurrent deploy's running replacement is safe.
+    // (named exactly app.containerName), anything still running, and anything
+    // too fresh to be sure it isn't an in-flight or just-failed operation are
+    // never touched.
     const leftoverPattern = new RegExp(`^${escapeRegExp(app.containerName)}${LEFTOVER_CONTAINER_SUFFIX.source}`);
+    const nowSeconds = Math.floor(now() / 1000);
     for (const container of containers) {
-      if (!container.managed || container.running) {
+      if (!container.managed) {
         continue;
       }
-      if (container.names.includes(app.containerName)) {
-        continue;
-      }
-      if (!container.names.some((name) => leftoverPattern.test(name))) {
+      if (
+        !isLeftoverContainerRemovable(
+          container,
+          leftoverPattern,
+          new Set([app.containerName]),
+          nowSeconds,
+          MIN_LEFTOVER_AGE_SECONDS
+        )
+      ) {
         continue;
       }
       try {
@@ -564,7 +660,34 @@ export async function runGlobalSweep(deps: RetentionDeps): Promise<RetentionClea
       }
     }
 
-    // Global image sweep, computed against the ledger AFTER per-app cleanup.
+    const nowSeconds = Math.floor(now() / 1000);
+
+    // Sweep the platform's own leftover rollback containers BEFORE the image
+    // sweep below — each one pins its version's deployment-platform-{api,web}
+    // image as "in use", which is exactly why old platform images were
+    // surviving despite platformImageKeep. Age-gated the same as everything
+    // else: a container from the last hour is left alone (it may be an
+    // active release.sh in-flight release, or a rollback awaiting manual
+    // attention after a failed restore).
+    const containersBeforeSweep = await deps.dockerOps.listContainers();
+    const removablePlatformContainers = selectSweepablePlatformRollbackContainers(
+      containersBeforeSweep,
+      nowSeconds
+    );
+    for (const container of removablePlatformContainers) {
+      try {
+        await deps.dockerOps.removeContainer(container.id);
+        result.containersRemoved += 1;
+      } catch (error) {
+        result.failures.push(
+          `remove platform rollback container ${container.names[0] ?? container.id}: ${errorText(error)}`
+        );
+      }
+    }
+
+    // Global image sweep, computed against the ledger AFTER per-app cleanup
+    // AND after the platform rollback-container sweep above, so a
+    // now-unreferenced platform image is actually seen as prunable.
     const [images, containers] = await Promise.all([
       deps.dockerOps.listImages(),
       deps.dockerOps.listContainers()
@@ -585,8 +708,8 @@ export async function runGlobalSweep(deps: RetentionDeps): Promise<RetentionClea
       platformKeep: clampPlatformImageKeep(deps.config.platformImageKeep),
       // Never reclaim an image built in the last hour — it may belong to a
       // deploy that is mid-flight and hasn't recorded its ledger row yet.
-      now: Math.floor(now() / 1000),
-      minAgeSeconds: SWEEP_MIN_IMAGE_AGE_SECONDS
+      now: nowSeconds,
+      minAgeSeconds: MIN_LEFTOVER_AGE_SECONDS
     });
 
     const reclaimedIds = new Set<string>();
@@ -623,4 +746,76 @@ export async function runGlobalSweep(deps: RetentionDeps): Promise<RetentionClea
   );
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Stats persistence — surfaced by the Maintenance page (last cleanup + lifetime totals)
+// ---------------------------------------------------------------------------
+
+export const RETENTION_LAST_CLEANUP_KEY = "deployment_retention_last_cleanup";
+export const RETENTION_LIFETIME_STATS_KEY = "deployment_retention_lifetime_stats";
+
+export interface RetentionLastCleanup extends RetentionCleanupResult {
+  /** Epoch ms this cleanup completed. */
+  at: number;
+}
+
+export interface RetentionLifetimeStats {
+  totalRuns: number;
+  totalImagesDeleted: number;
+  totalContainersRemoved: number;
+  totalVersionsPruned: number;
+  totalBytesReclaimed: number;
+}
+
+const EMPTY_LIFETIME_STATS: RetentionLifetimeStats = {
+  totalRuns: 0,
+  totalImagesDeleted: 0,
+  totalContainersRemoved: 0,
+  totalVersionsPruned: 0,
+  totalBytesReclaimed: 0
+};
+
+/**
+ * Persists the outcome of a completed cleanup as both "last cleanup" (for the
+ * Maintenance page's live stat cards) and running lifetime totals. Called
+ * exactly once per external trigger (a deploy's cleanup, a revert's cleanup,
+ * or one sweep run — manual or scheduled) by the server-side wrappers around
+ * cleanupAppRetention/cleanupAppRetentionLocked/runGlobalSweep, never by
+ * those functions themselves — so a daily sweep's per-app sub-cleanups are
+ * counted once, as the aggregated sweep, not once per app. A skipped result
+ * (lock held) records nothing, since no cleanup actually ran.
+ */
+export function recordRetentionStats(
+  appDatabase: AppDatabase,
+  result: RetentionCleanupResult,
+  at: number = Date.now()
+): void {
+  if (result.skipped) {
+    return;
+  }
+
+  const lastCleanup: RetentionLastCleanup = { ...result, at };
+  appDatabase.setJsonSetting(RETENTION_LAST_CLEANUP_KEY, lastCleanup);
+
+  const previous =
+    appDatabase.getJsonSetting<RetentionLifetimeStats>(RETENTION_LIFETIME_STATS_KEY) ?? EMPTY_LIFETIME_STATS;
+
+  const next: RetentionLifetimeStats = {
+    totalRuns: previous.totalRuns + 1,
+    totalImagesDeleted: previous.totalImagesDeleted + result.imagesDeleted,
+    totalContainersRemoved: previous.totalContainersRemoved + result.containersRemoved,
+    totalVersionsPruned: previous.totalVersionsPruned + result.versionsPruned,
+    totalBytesReclaimed: previous.totalBytesReclaimed + result.bytesReclaimed
+  };
+
+  appDatabase.setJsonSetting(RETENTION_LIFETIME_STATS_KEY, next);
+}
+
+export function readLastCleanup(appDatabase: AppDatabase): RetentionLastCleanup | null {
+  return appDatabase.getJsonSetting<RetentionLastCleanup>(RETENTION_LAST_CLEANUP_KEY);
+}
+
+export function readRetentionLifetimeStats(appDatabase: AppDatabase): RetentionLifetimeStats {
+  return appDatabase.getJsonSetting<RetentionLifetimeStats>(RETENTION_LIFETIME_STATS_KEY) ?? EMPTY_LIFETIME_STATS;
 }

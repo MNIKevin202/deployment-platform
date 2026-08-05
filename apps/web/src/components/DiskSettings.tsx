@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApiError, RetentionInfo, RetentionRunResult, RetentionSummary } from "../types/api";
+import StatCard from "./StatCard";
+
+/** How often the live Docker usage card quietly refreshes itself in the background. */
+const USAGE_POLL_INTERVAL_MS = 20_000;
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) {
@@ -10,6 +14,27 @@ function formatBytes(bytes: number): string {
     return `${(mb / 1024).toFixed(2)} GB`;
   }
   return `${mb.toFixed(1)} MB`;
+}
+
+function formatBytesGb(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
+function formatRelativeTime(ms: number): string {
+  const diffSeconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (diffSeconds < 60) {
+    return "just now";
+  }
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  if (diffMinutes < 60) {
+    return `${diffMinutes} minute${diffMinutes === 1 ? "" : "s"} ago`;
+  }
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours} hour${diffHours === 1 ? "" : "s"} ago`;
+  }
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
 }
 
 function describeSummary(summary: RetentionSummary): string {
@@ -34,10 +59,15 @@ export default function DiskSettings() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  // Tracks whether a fetch is the very first one (shows the loading state) or
+  // a quiet background poll (must not flash "Checking..." over live numbers).
+  const hasLoadedOnce = useRef(false);
 
   const load = useCallback(async () => {
     try {
-      setLoading(true);
+      if (!hasLoadedOnce.current) {
+        setLoading(true);
+      }
       setError("");
       const response = await fetch("/api/settings/retention");
       const result = (await response.json().catch(() => null)) as (RetentionInfo & ApiError) | null;
@@ -45,8 +75,13 @@ export default function DiskSettings() {
         throw new Error(result?.message || "Unable to load retention settings.");
       }
       setInfo(result);
-      setCountInput(String(result.config.count));
-      setPlatformInput(String(result.config.platformImageKeep));
+      // Only seed the editable inputs on the very first load — a background
+      // poll must never clobber text the operator is mid-edit on.
+      if (!hasLoadedOnce.current) {
+        setCountInput(String(result.config.count));
+        setPlatformInput(String(result.config.platformImageKeep));
+      }
+      hasLoadedOnce.current = true;
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Unable to load retention settings.");
     } finally {
@@ -56,6 +91,8 @@ export default function DiskSettings() {
 
   useEffect(() => {
     void load();
+    const interval = window.setInterval(() => void load(), USAGE_POLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
   }, [load]);
 
   const save = async () => {
@@ -99,6 +136,12 @@ export default function DiskSettings() {
     }
   };
 
+  const usage = info?.usage ?? null;
+  const lastCleanup = info?.lastCleanup ?? null;
+  const lifetime = info?.lifetimeStats ?? null;
+  const averageBytes =
+    lifetime && lifetime.totalRuns > 0 ? lifetime.totalBytesReclaimed / lifetime.totalRuns : 0;
+
   return (
     <section className="page-section">
       <div className="section-heading">
@@ -117,6 +160,41 @@ export default function DiskSettings() {
 
       {error && <div className="error-banner">{error}</div>}
       {notice && <div className="notice-banner">{notice}</div>}
+
+      <h3>Current Docker usage</h3>
+      {info?.usageError ? (
+        <p className="text-faint">Unable to read live Docker usage: {info.usageError}</p>
+      ) : (
+        <section className="stats-grid">
+          <StatCard label="Images" value={usage ? String(usage.images) : "—"} />
+          <StatCard label="Containers" value={usage ? String(usage.containers) : "—"} />
+          <StatCard label="Volumes" value={usage ? String(usage.volumes) : "—"} />
+          <StatCard
+            label="Docker images size"
+            value={usage ? formatBytesGb(usage.imagesSizeBytes) : "—"}
+          />
+          <StatCard
+            label="Disk used"
+            value={usage ? `${formatBytesGb(usage.usedBytes)} / ${formatBytesGb(usage.totalBytes)}` : "—"}
+          />
+          <StatCard
+            label="Last cleanup"
+            value={lastCleanup ? formatRelativeTime(lastCleanup.at) : "Never"}
+            hint={lastCleanup ? `Reclaimed ${formatBytes(lastCleanup.bytesReclaimed)}` : undefined}
+          />
+        </section>
+      )}
+
+      <h3>Cleanup statistics</h3>
+      <section className="stats-grid">
+        <StatCard label="Images removed" value={lifetime ? lifetime.totalImagesDeleted.toLocaleString() : "—"} />
+        <StatCard
+          label="Containers removed"
+          value={lifetime ? lifetime.totalContainersRemoved.toLocaleString() : "—"}
+        />
+        <StatCard label="Space reclaimed" value={lifetime ? formatBytes(lifetime.totalBytesReclaimed) : "—"} />
+        <StatCard label="Average cleanup" value={lifetime ? formatBytes(averageBytes) : "—"} />
+      </section>
 
       <div className="settings-form">
         <label>
@@ -154,10 +232,6 @@ export default function DiskSettings() {
           </button>
         </div>
 
-        {info?.lastRunAt && (
-          <p className="text-faint">Last full cleanup: {new Date(info.lastRunAt).toLocaleString()}.</p>
-        )}
-
         <div className="form-actions form-actions-start">
           <button
             className="primary-button"
@@ -165,7 +239,7 @@ export default function DiskSettings() {
             onClick={() => void runCleanup()}
             disabled={running || loading}
           >
-            {running ? "Cleaning up…" : "Clean up now"}
+            {running ? "Running cleanup…" : "Run Cleanup Now"}
           </button>
           <button className="secondary-button" type="button" onClick={() => void load()} disabled={loading}>
             Refresh

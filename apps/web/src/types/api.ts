@@ -800,11 +800,13 @@ export interface RetentionConfig {
   platformImageKeep: number;
 }
 
-export interface RetentionInfo {
-  success: boolean;
-  config: RetentionConfig;
-  defaults: RetentionConfig;
-  lastRunAt: number | null;
+export interface DockerUsageInfo {
+  images: number;
+  containers: number;
+  volumes: number;
+  imagesSizeBytes: number;
+  usedBytes: number;
+  totalBytes: number;
 }
 
 export interface RetentionSummary {
@@ -818,6 +820,30 @@ export interface RetentionSummary {
   bytesReclaimed: number;
   durationMs: number;
   failures: string[];
+}
+
+export interface RetentionLastCleanup extends RetentionSummary {
+  /** Epoch ms this cleanup completed. */
+  at: number;
+}
+
+export interface RetentionLifetimeStats {
+  totalRuns: number;
+  totalImagesDeleted: number;
+  totalContainersRemoved: number;
+  totalVersionsPruned: number;
+  totalBytesReclaimed: number;
+}
+
+export interface RetentionInfo {
+  success: boolean;
+  config: RetentionConfig;
+  defaults: RetentionConfig;
+  lastRunAt: number | null;
+  usage: DockerUsageInfo | null;
+  usageError: string | null;
+  lastCleanup: RetentionLastCleanup | null;
+  lifetimeStats: RetentionLifetimeStats;
 }
 
 export interface RetentionRunResult {
