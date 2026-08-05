@@ -45,16 +45,22 @@ function createManualTimers() {
 
 function fakeUsage(): CombinedUsage {
   return {
-    usage: { images: 1, containers: 1, volumes: 1, imagesSizeBytes: 100 },
+    usage: { images: 1, containers: 1, runningContainers: 1, volumes: 1, imagesSizeBytes: 100 },
     disk: { usedBytes: 200, totalBytes: 400 }
   };
 }
 
 describe("getDockerUsageSnapshot", () => {
-  test("reports raw counts and LayersSize as the images size", async () => {
+  test("reports raw counts, running-container count, and LayersSize as the images size", async () => {
     const fakeDocker: DockerUsageOps = {
       listImages: async () => [{}, {}, {}],
-      listContainers: async () => [{}, {}, {}, {}, {}],
+      listContainers: async () => [
+        { State: "running" },
+        { State: "running" },
+        { State: "exited" },
+        { State: "exited" },
+        { State: "exited" }
+      ],
       listVolumes: async () => ({ Volumes: [{}, {}] }),
       df: async () => ({ LayersSize: 123_456 })
     };
@@ -63,6 +69,7 @@ describe("getDockerUsageSnapshot", () => {
     assert.deepEqual(snapshot, {
       images: 3,
       containers: 5,
+      runningContainers: 2,
       volumes: 2,
       imagesSizeBytes: 123_456
     });
@@ -77,7 +84,13 @@ describe("getDockerUsageSnapshot", () => {
     };
 
     const snapshot = await getDockerUsageSnapshot(fakeDocker as never);
-    assert.deepEqual(snapshot, { images: 0, containers: 0, volumes: 0, imagesSizeBytes: 0 });
+    assert.deepEqual(snapshot, {
+      images: 0,
+      containers: 0,
+      runningContainers: 0,
+      volumes: 0,
+      imagesSizeBytes: 0
+    });
   });
 });
 
@@ -229,5 +242,47 @@ describe("createDockerUsageProvider", () => {
     gates[0].resolve(fakeUsage());
     gates[1].resolve(fakeUsage());
     await secondAttempt;
+  });
+
+  test("invalidate() clears the cache so the very next call re-fetches, even within the TTL", async () => {
+    let calls = 0;
+    let clock = 0;
+    const provider = createDockerUsageProvider({} as never, {
+      ttlMs: 30_000,
+      now: () => clock,
+      fetchUsage: async () => {
+        calls += 1;
+        return fakeUsage();
+      }
+    });
+
+    await provider.getUsage();
+    clock += 1_000; // still well within the TTL.
+    provider.invalidate();
+    await provider.getUsage();
+
+    assert.equal(calls, 2);
+  });
+
+  test("invalidate() while a fetch is in flight doesn't affect that fetch — it still populates a fresh cache", async () => {
+    let clock = 0;
+    const gate = deferred<CombinedUsage>();
+    let calls = 0;
+    const provider = createDockerUsageProvider({} as never, {
+      now: () => clock,
+      fetchUsage: async () => {
+        calls += 1;
+        return gate.promise;
+      }
+    });
+
+    const inFlight = provider.getUsage();
+    provider.invalidate(); // no cache exists yet — this is a no-op, not an error.
+    gate.resolve(fakeUsage());
+    await inFlight;
+
+    // The completed fetch's result is now cached; a call right after reuses it.
+    await provider.getUsage();
+    assert.equal(calls, 1);
   });
 });

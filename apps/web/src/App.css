@@ -178,6 +178,48 @@ code {
   color: var(--color-text-muted);
 }
 
+.notice-banner-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.notice-banner-dismiss {
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 2px 4px;
+  flex-shrink: 0;
+}
+
+.notice-banner-dismiss:hover {
+  opacity: 1;
+}
+
+.notice-banner-link {
+  color: inherit;
+  text-decoration: underline;
+  font-weight: 600;
+}
+
+.inline-spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  opacity: 0.85;
+  animation: deploy-spin 0.8s linear infinite;
+  flex: none;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
 .app-empty-state {
   display: grid;
   justify-items: start;

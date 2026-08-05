@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ApiError, RetentionInfo, RetentionRunResult, RetentionSummary } from "../types/api";
+import type { ApiError, RetentionInfo, RetentionLastCleanup, RetentionRunResult, RetentionSummary } from "../types/api";
 import StatCard from "./StatCard";
 
 /**
@@ -44,6 +44,11 @@ function formatBytesGb(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
+function formatDiskUsage(usedBytes: number, totalBytes: number): string {
+  const percent = totalBytes > 0 ? Math.round((usedBytes / totalBytes) * 100) : 0;
+  return `${formatBytesGb(usedBytes)} / ${formatBytesGb(totalBytes)} (${percent}%)`;
+}
+
 function formatRelativeTime(ms: number): string {
   const diffSeconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
   if (diffSeconds < 60) {
@@ -61,6 +66,22 @@ function formatRelativeTime(ms: number): string {
   return `${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
 }
 
+function formatAbsoluteTime(ms: number): string {
+  return new Date(ms).toLocaleString();
+}
+
+function formatDuration(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+/**
+ * "Docker data reclaimed" rather than "space reclaimed" — Docker shares image
+ * layers across builds, so removing one image doesn't always free that
+ * image's own full size on disk. This number is what Docker itself freed for
+ * those specific images; actual host disk space may improve by less, since a
+ * shared base layer only truly leaves disk once every image referencing it
+ * is gone (never claim more than what actually happened).
+ */
 function describeSummary(summary: RetentionSummary): string {
   if (summary.imagesDeleted === 0 && summary.containersRemoved === 0 && summary.versionsPruned === 0) {
     return "Nothing to reclaim — disk usage is already within your retention limits.";
@@ -69,20 +90,27 @@ function describeSummary(summary: RetentionSummary): string {
   return (
     `Removed ${summary.imagesDeleted} image${summary.imagesDeleted === 1 ? "" : "s"} and ` +
     `${summary.containersRemoved} container${summary.containersRemoved === 1 ? "" : "s"}, pruned ` +
-    `${summary.versionsPruned} old version${summary.versionsPruned === 1 ? "" : "s"}, reclaiming ` +
-    `${formatBytes(summary.bytesReclaimed)} in ${(summary.durationMs / 1000).toFixed(1)}s${failed}.`
+    `${summary.versionsPruned} old version${summary.versionsPruned === 1 ? "" : "s"} — ` +
+    `${formatBytes(summary.bytesReclaimed)} of Docker data reclaimed in ${formatDuration(summary.durationMs)}${failed}.`
   );
 }
+
+const HISTORY_ANCHOR_ID = "cleanup-history";
 
 export default function DiskSettings() {
   const [info, setInfo] = useState<RetentionInfo | null>(null);
   const [countInput, setCountInput] = useState("3");
   const [platformInput, setPlatformInput] = useState("3");
   const [loading, setLoading] = useState(true);
+  // True for the whole duration of any load() call (first load, poll, or
+  // post-cleanup refresh) — used only to soften the usage card's error
+  // state, distinct from `loading`, which is exclusively the very-first load.
+  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState<{ message: string; at: number } | null>(null);
+  const [dismissedNoticeAt, setDismissedNoticeAt] = useState<number | null>(null);
   // Tracks whether a fetch is the very first one (shows the loading state) or
   // a quiet background poll (must not flash "Checking..." over live numbers).
   const hasLoadedOnce = useRef(false);
@@ -95,6 +123,7 @@ export default function DiskSettings() {
       return;
     }
     isFetching.current = true;
+    setRefreshing(true);
 
     try {
       if (!hasLoadedOnce.current) {
@@ -124,6 +153,7 @@ export default function DiskSettings() {
       setError(message);
     } finally {
       setLoading(false);
+      setRefreshing(false);
       isFetching.current = false;
     }
   }, []);
@@ -138,7 +168,6 @@ export default function DiskSettings() {
     try {
       setSaving(true);
       setError("");
-      setNotice("");
       const response = await fetch("/api/settings/retention", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -160,13 +189,17 @@ export default function DiskSettings() {
     try {
       setRunning(true);
       setError("");
-      setNotice("");
       const response = await fetch("/api/settings/retention/run", { method: "POST" });
       const result = (await response.json().catch(() => null)) as (RetentionRunResult & ApiError) | null;
       if (!response.ok || !result?.success) {
         throw new Error(result?.message || "Cleanup failed.");
       }
-      setNotice(describeSummary(result.summary));
+      const at = Date.now();
+      setNotice({ message: describeSummary(result.summary), at });
+      setDismissedNoticeAt(null);
+      // The server invalidates its Docker-usage cache as part of a
+      // successful cleanup, so this reload gets fresh post-cleanup counts
+      // immediately rather than whatever was cached before the cleanup ran.
       await load();
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : "Cleanup failed.");
@@ -175,11 +208,21 @@ export default function DiskSettings() {
     }
   };
 
+  const scrollToHistory = () => {
+    document.getElementById(HISTORY_ANCHOR_ID)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   const usage = info?.usage ?? null;
   const lastCleanup = info?.lastCleanup ?? null;
   const lifetime = info?.lifetimeStats ?? null;
+  const history = info?.history ?? [];
   const averageBytes =
     lifetime && lifetime.totalRuns > 0 ? lifetime.totalBytesReclaimed / lifetime.totalRuns : 0;
+  // Suppress a stale usage error while something that will resolve it is
+  // already in flight (a cleanup, or any refresh) — showing "Unable to read
+  // Docker usage" during a normal poll or an active cleanup reads as a false
+  // alarm rather than the transient state it actually is.
+  const showUsageError = Boolean(info?.usageError) && !running && !refreshing;
 
   return (
     <section className="page-section">
@@ -198,42 +241,104 @@ export default function DiskSettings() {
       </p>
 
       {error && <div className="error-banner">{error}</div>}
-      {notice && <div className="notice-banner">{notice}</div>}
+      {notice && notice.at !== dismissedNoticeAt && (
+        <div className="notice-banner notice-banner-row">
+          <span>
+            <strong>{formatAbsoluteTime(notice.at)}</strong> — {notice.message}{" "}
+            {history.length > 0 && (
+              <button type="button" className="notice-banner-link" onClick={scrollToHistory}>
+                View details
+              </button>
+            )}
+          </span>
+          <button
+            type="button"
+            className="notice-banner-dismiss"
+            aria-label="Dismiss"
+            onClick={() => setDismissedNoticeAt(notice.at)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
-      <h3>Current Docker usage</h3>
-      {info?.usageError ? (
-        <p className="text-faint">Unable to read live Docker usage: {info.usageError}</p>
+      <h3>
+        Current Docker usage
+        {(running || (refreshing && hasLoadedOnce.current)) && (
+          <span className="text-faint" style={{ fontWeight: 400, fontSize: "0.8rem", marginLeft: 8 }}>
+            <span className="inline-spinner" aria-hidden="true" />
+            {running ? "Cleaning up…" : "Refreshing…"}
+          </span>
+        )}
+      </h3>
+      {showUsageError ? (
+        <p className="text-faint">Unable to read live Docker usage: {info?.usageError}</p>
       ) : (
         <section className="stats-grid">
-          <StatCard label="Images" value={usage ? String(usage.images) : "—"} />
-          <StatCard label="Containers" value={usage ? String(usage.containers) : "—"} />
-          <StatCard label="Volumes" value={usage ? String(usage.volumes) : "—"} />
-          <StatCard
-            label="Docker images size"
-            value={usage ? formatBytesGb(usage.imagesSizeBytes) : "—"}
-          />
           <StatCard
             label="Disk used"
-            value={usage ? `${formatBytesGb(usage.usedBytes)} / ${formatBytesGb(usage.totalBytes)}` : "—"}
+            value={usage ? formatDiskUsage(usage.usedBytes, usage.totalBytes) : "—"}
+          />
+          <StatCard label="Docker images" value={usage ? String(usage.images) : "—"} />
+          <StatCard label="Running containers" value={usage ? String(usage.runningContainers) : "—"} />
+          <StatCard label="Total containers" value={usage ? String(usage.containers) : "—"} />
+          <StatCard label="Volumes" value={usage ? String(usage.volumes) : "—"} />
+          <StatCard
+            label="Docker image size"
+            value={usage ? formatBytesGb(usage.imagesSizeBytes) : "—"}
           />
           <StatCard
             label="Last cleanup"
             value={lastCleanup ? formatRelativeTime(lastCleanup.at) : "Never"}
-            hint={lastCleanup ? `Reclaimed ${formatBytes(lastCleanup.bytesReclaimed)}` : undefined}
+            hint={lastCleanup ? formatAbsoluteTime(lastCleanup.at) : undefined}
           />
         </section>
       )}
 
-      <h3>Cleanup statistics</h3>
+      <h3>Lifetime Cleanup Statistics</h3>
       <section className="stats-grid">
         <StatCard label="Images removed" value={lifetime ? lifetime.totalImagesDeleted.toLocaleString() : "—"} />
         <StatCard
           label="Containers removed"
           value={lifetime ? lifetime.totalContainersRemoved.toLocaleString() : "—"}
         />
-        <StatCard label="Space reclaimed" value={lifetime ? formatBytes(lifetime.totalBytesReclaimed) : "—"} />
-        <StatCard label="Average cleanup" value={lifetime ? formatBytes(averageBytes) : "—"} />
+        <StatCard label="Docker data reclaimed" value={lifetime ? formatBytes(lifetime.totalBytesReclaimed) : "—"} />
+        <StatCard label="Average cleanup size" value={lifetime ? formatBytes(averageBytes) : "—"} />
+        <StatCard label="Largest cleanup" value={lifetime ? formatBytes(lifetime.largestCleanupBytes) : "—"} />
+        <StatCard label="Total cleanup runs" value={lifetime ? lifetime.totalRuns.toLocaleString() : "—"} />
       </section>
+
+      <div id={HISTORY_ANCHOR_ID} className="env-scope-heading">
+        <h3>Cleanup history</h3>
+      </div>
+      {history.length === 0 ? (
+        <div className="empty-state">No cleanups recorded yet.</div>
+      ) : (
+        <div className="table-wrap">
+          <table className="env-table history-table">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Images Removed</th>
+                <th>Containers Removed</th>
+                <th>Docker Data Reclaimed</th>
+                <th>Duration</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((entry: RetentionLastCleanup) => (
+                <tr key={entry.at}>
+                  <td className="text-faint">{formatAbsoluteTime(entry.at)}</td>
+                  <td>{entry.imagesDeleted.toLocaleString()}</td>
+                  <td>{entry.containersRemoved.toLocaleString()}</td>
+                  <td>{formatBytes(entry.bytesReclaimed)}</td>
+                  <td className="text-faint">{formatDuration(entry.durationMs)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div className="settings-form">
         <label>
@@ -278,6 +383,7 @@ export default function DiskSettings() {
             onClick={() => void runCleanup()}
             disabled={running || loading}
           >
+            {running && <span className="inline-spinner" aria-hidden="true" />}
             {running ? "Running cleanup…" : "Run Cleanup Now"}
           </button>
           <button className="secondary-button" type="button" onClick={() => void load()} disabled={loading}>

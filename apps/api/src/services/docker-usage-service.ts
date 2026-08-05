@@ -12,6 +12,7 @@ import type Docker from "dockerode";
 export interface DockerUsageSnapshot {
   images: number;
   containers: number;
+  runningContainers: number;
   volumes: number;
   /** Docker's own accounting of total image disk usage (shared-layer aware — not a naive sum of each image's Size). */
   imagesSizeBytes: number;
@@ -25,7 +26,7 @@ export interface HostDiskUsage {
 /** The narrow slice of dockerode this snapshot needs — kept small so it's fake-able in tests without a real Docker daemon. */
 export interface DockerUsageOps {
   listImages(): Promise<unknown[]>;
-  listContainers(options: { all: boolean }): Promise<unknown[]>;
+  listContainers(options: { all: boolean }): Promise<{ State?: string }[]>;
   listVolumes(): Promise<{ Volumes?: unknown[] | null }>;
   df(): Promise<{ LayersSize?: number }>;
 }
@@ -37,6 +38,9 @@ export interface DockerUsageOps {
  * each image's own `Size` field would double-count layers shared across
  * builds and wildly overstate real usage (this is exactly why the old
  * "candidates * their size" preview overestimated reclaimable space).
+ * `runningContainers` is derived from the same `all: true` listing (each
+ * entry's own `State`), rather than a second call, so a running vs. total
+ * count is always consistent with itself.
  */
 export async function getDockerUsageSnapshot(docker: Docker | DockerUsageOps): Promise<DockerUsageSnapshot> {
   const ops = docker as DockerUsageOps;
@@ -50,6 +54,7 @@ export async function getDockerUsageSnapshot(docker: Docker | DockerUsageOps): P
   return {
     images: images.length,
     containers: containers.length,
+    runningContainers: containers.filter((container) => container.State === "running").length,
     volumes: (volumes.Volumes ?? []).length,
     imagesSizeBytes: typeof df?.LayersSize === "number" ? df.LayersSize : 0
   };
@@ -101,6 +106,15 @@ export interface DockerUsageProviderOptions {
 
 export interface DockerUsageProvider {
   getUsage(): Promise<CombinedUsage>;
+  /**
+   * Drops any cached result so the next getUsage() call fetches fresh data
+   * instead of serving a stale snapshot. Called after a cleanup actually
+   * changes Docker's state — without it, the Maintenance page could keep
+   * showing pre-cleanup counts for up to the full cache TTL after a cleanup
+   * the operator just watched finish. Never cancels an in-flight fetch;
+   * that attempt still populates a fresh cache entry when it resolves.
+   */
+  invalidate(): void;
 }
 
 /**
@@ -189,6 +203,9 @@ export function createDockerUsageProvider(
           inFlight = null;
         }
       }
+    },
+    invalidate(): void {
+      cached = null;
     }
   };
 }

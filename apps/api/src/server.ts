@@ -345,6 +345,14 @@ const BUILD_TIMEOUT_MS = Math.max(
 // effect immediately without a restart.
 const retentionDockerOps = createRetentionDockerOps(docker);
 
+// One provider per process: its cache and single-flight de-dup must be
+// shared across every request, or they provide no protection at all against
+// a slow `docker system df()` under repeated Maintenance-page polling — see
+// docker-usage-service.ts for why this matters. Created here (rather than
+// down by its route registration) so withRetentionStats below can invalidate
+// it after every cleanup.
+const dockerUsageProvider = createDockerUsageProvider(docker);
+
 function buildRetentionDeps(): RetentionDeps {
   return {
     appDatabase,
@@ -358,13 +366,20 @@ function buildRetentionDeps(): RetentionDeps {
  * Persists the Maintenance page's "last cleanup" + lifetime stats exactly
  * once per external trigger (one deploy's cleanup, one revert's cleanup, or
  * one sweep run — manual or scheduled), never once per app inside a sweep.
- * A skipped result (lock held) records nothing.
+ * A skipped result (lock held) records nothing. Also invalidates the cached
+ * Docker usage snapshot, since a cleanup that actually removed anything
+ * makes that cache stale — without this, the Maintenance page could show
+ * pre-cleanup counts for up to the cache's full TTL after a cleanup the
+ * operator just watched finish.
  */
 function withRetentionStats(
   resultPromise: Promise<RetentionCleanupResult>
 ): Promise<RetentionCleanupResult> {
   return resultPromise.then((result) => {
     recordRetentionStats(appDatabase, result);
+    if (!result.skipped) {
+      dockerUsageProvider.invalidate();
+    }
     return result;
   });
 }
@@ -467,12 +482,6 @@ const imageUpdateChecker = createImageUpdateChecker({
   logger: app.log,
   tickIntervalMs: IMAGE_UPDATE_CHECK_INTERVAL_MS
 });
-
-// One provider per process: its cache and single-flight de-dup must be
-// shared across every request, or they provide no protection at all against
-// a slow `docker system df()` under repeated Maintenance-page polling — see
-// docker-usage-service.ts for why this matters.
-const dockerUsageProvider = createDockerUsageProvider(docker);
 
 await registerPlatformSettingsRoutes(app, {
   appDatabase,

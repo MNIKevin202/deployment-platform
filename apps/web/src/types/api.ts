@@ -803,6 +803,7 @@ export interface RetentionConfig {
 export interface DockerUsageInfo {
   images: number;
   containers: number;
+  runningContainers: number;
   volumes: number;
   imagesSizeBytes: number;
   usedBytes: number;
@@ -833,6 +834,7 @@ export interface RetentionLifetimeStats {
   totalContainersRemoved: number;
   totalVersionsPruned: number;
   totalBytesReclaimed: number;
+  largestCleanupBytes: number;
 }
 
 export interface RetentionInfo {
@@ -844,6 +846,7 @@ export interface RetentionInfo {
   usageError: string | null;
   lastCleanup: RetentionLastCleanup | null;
   lifetimeStats: RetentionLifetimeStats;
+  history: RetentionLastCleanup[];
 }
 
 export interface RetentionRunResult {

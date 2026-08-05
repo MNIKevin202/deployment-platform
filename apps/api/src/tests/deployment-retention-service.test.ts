@@ -10,6 +10,8 @@ import {
   recordRetentionStats,
   readLastCleanup,
   readRetentionLifetimeStats,
+  readRetentionHistory,
+  RETENTION_HISTORY_LIMIT,
   clampRetentionCount,
   resolveRetentionCount,
   normalizeRetentionConfig,
@@ -632,7 +634,8 @@ describe("retention stats persistence", () => {
       totalImagesDeleted: 6,
       totalContainersRemoved: 1,
       totalVersionsPruned: 4,
-      totalBytesReclaimed: 3000
+      totalBytesReclaimed: 3000,
+      largestCleanupBytes: 2000
     });
   });
 
@@ -645,7 +648,46 @@ describe("retention stats persistence", () => {
       totalImagesDeleted: 0,
       totalContainersRemoved: 0,
       totalVersionsPruned: 0,
-      totalBytesReclaimed: 0
+      totalBytesReclaimed: 0,
+      largestCleanupBytes: 0
     });
+    assert.deepEqual(readRetentionHistory(db), []);
+  });
+
+  test("largestCleanupBytes tracks the single biggest run, not a running sum", () => {
+    const db = createAppDatabase(":memory:");
+    recordRetentionStats(db, summary({ bytesReclaimed: 5000 }), 1000);
+    recordRetentionStats(db, summary({ bytesReclaimed: 1000 }), 2000);
+    recordRetentionStats(db, summary({ bytesReclaimed: 9000 }), 3000);
+    recordRetentionStats(db, summary({ bytesReclaimed: 500 }), 4000);
+
+    assert.equal(readRetentionLifetimeStats(db).largestCleanupBytes, 9000);
+  });
+
+  test("keeps recent cleanup history newest-first, capped at RETENTION_HISTORY_LIMIT", () => {
+    const db = createAppDatabase(":memory:");
+
+    for (let i = 0; i < RETENTION_HISTORY_LIMIT + 5; i += 1) {
+      recordRetentionStats(db, summary({ imagesDeleted: i }), 1000 + i);
+    }
+
+    const history = readRetentionHistory(db);
+    assert.equal(history.length, RETENTION_HISTORY_LIMIT);
+    // Newest first: the very last recorded run leads.
+    assert.equal(history[0].imagesDeleted, RETENTION_HISTORY_LIMIT + 4);
+    assert.equal(history[0].at, 1000 + RETENTION_HISTORY_LIMIT + 4);
+    // The oldest entries beyond the cap were dropped.
+    assert.ok(!history.some((entry) => entry.imagesDeleted < 5));
+  });
+
+  test("a skipped result never appears in history", () => {
+    const db = createAppDatabase(":memory:");
+    recordRetentionStats(db, summary({ imagesDeleted: 1 }));
+    recordRetentionStats(db, { ...summary(), skipped: true, imagesDeleted: 999 });
+    recordRetentionStats(db, summary({ imagesDeleted: 2 }));
+
+    const history = readRetentionHistory(db);
+    assert.equal(history.length, 2);
+    assert.ok(!history.some((entry) => entry.imagesDeleted === 999));
   });
 });
