@@ -315,6 +315,12 @@ BACKUP_PATH=""
 ROLLBACK_TRIGGERED=0
 ANY_SWAP_PERFORMED=0
 
+# Set to 1 the moment THIS run finishes building each image. Only an image
+# this run created may be discarded on rollback — one that was already on
+# the host is never this script's to remove.
+API_IMAGE_BUILT_HERE=0
+WEB_IMAGE_BUILT_HERE=0
+
 # Set to 1 only once every required success action (container/migration/
 # key/public-URL verification AND the current-source-pointer update) has
 # completed. The ERR trap checks this before ever triggering a rollback,
@@ -392,6 +398,37 @@ rollback_component() {
 #                     successfully restored.
 #   ROLLBACK_FAILED — a swap began AND restoration itself did not fully
 #                     succeed; do not assume either app is healthy.
+# An image built by THIS release is unreferenced once the containers are
+# back on the previous version — and leaving it behind is not harmless: the
+# next attempt computes the same version number from the (unchanged) live
+# image and then fails its own "image tag already exists" guard, so a
+# release that never shipped blocks every retry until someone deletes the
+# tag by hand.
+#
+# Plain `docker rmi` — never `-f` — so Docker itself refuses if anything
+# still references the tag. A failure to remove is reported and tolerated:
+# rollback has already happened, and the platform is running.
+discard_image_built_here() {
+  local label="$1"
+  local image="$2"
+  local built_here="$3"
+  local restored_ok="$4"
+
+  [ "${built_here}" -eq 1 ] || return 0
+
+  if [ "${restored_ok}" -ne 1 ]; then
+    info "${label} image kept (container not fully restored, so it may still be in use): ${image}"
+    return 0
+  fi
+
+  if docker rmi "${image}" >/dev/null 2>&1; then
+    info "Removed the ${label} image built by this release: ${image}"
+  else
+    info "Could not remove the ${label} image built by this release: ${image}"
+    info "  Remove it manually before retrying, or the next release will refuse the same tag."
+  fi
+}
+
 trigger_rollback() {
   local reason="$1"
 
@@ -426,6 +463,9 @@ trigger_rollback() {
     web_rollback_ok=0
     info "Web rollback encountered an error — see above. Do not assume the web container is healthy."
   fi
+
+  discard_image_built_here "API" "${API_IMAGE_REPO}:${API_VERSION}" "${API_IMAGE_BUILT_HERE}" "${api_rollback_ok}"
+  discard_image_built_here "web" "${WEB_IMAGE_REPO}:${WEB_VERSION}" "${WEB_IMAGE_BUILT_HERE}" "${web_rollback_ok}"
 
   if [ -n "${BACKUP_PATH}" ]; then
     info "Database backup preserved at: ${BACKUP_PATH}"
@@ -593,6 +633,7 @@ if [ "${MODE}" = "api" ] || [ "${MODE}" = "both" ]; then
   if ! docker build -f "${SOURCE_DIR}/apps/api/Dockerfile" -t "${API_IMAGE_REPO}:${API_VERSION}" "${SOURCE_DIR}"; then
     fail "API image build failed."
   fi
+  API_IMAGE_BUILT_HERE=1
   info "API image built: ${API_IMAGE_REPO}:${API_VERSION}"
 fi
 
@@ -601,6 +642,7 @@ if [ "${MODE}" = "web" ] || [ "${MODE}" = "both" ]; then
   if ! docker build -f "${SOURCE_DIR}/apps/web/Dockerfile" -t "${WEB_IMAGE_REPO}:${WEB_VERSION}" "${SOURCE_DIR}"; then
     fail "Web image build failed."
   fi
+  WEB_IMAGE_BUILT_HERE=1
   info "Web image built: ${WEB_IMAGE_REPO}:${WEB_VERSION}"
 fi
 
