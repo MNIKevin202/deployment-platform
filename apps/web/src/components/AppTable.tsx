@@ -69,7 +69,13 @@ function CopyButton({ value, label }: { value: string; label: string }) {
   );
 }
 
-function appCategoryCell(name: string, image: string, internalOnly: boolean, hasDomain: boolean) {
+function appCategoryCell(
+  name: string,
+  image: string,
+  internalOnly: boolean,
+  hasDomain: boolean,
+  updateAvailable = false
+) {
   const category = inferAppCategory(image);
   return (
     <div className="apps-table-app-cell">
@@ -77,13 +83,24 @@ function appCategoryCell(name: string, image: string, internalOnly: boolean, has
         {category.icon}
       </span>
       <div className="apps-table-app-meta">
-        <span className="apps-table-app-name">{name}</span>
+        {/* title carries the full name, since the cell truncates it. */}
+        <span className="apps-table-app-name" title={name}>
+          {name}
+        </span>
         <span className="apps-table-app-subtitle">
           {category.label}
           {internalOnly ? (
             <span className="status-badge compact neutral">Internal</span>
           ) : (
             hasDomain && <span className="status-badge compact positive">Public</span>
+          )}
+          {updateAvailable && (
+            <span
+              className="status-badge compact warning"
+              title="A newer image is available in the registry — redeploy to update"
+            >
+              Update Available
+            </span>
           )}
         </span>
       </div>
@@ -134,7 +151,6 @@ export default function AppTable({
             <th>Version</th>
             <th>Last Deployed</th>
             <th>Domain</th>
-            <th>Update</th>
             <th aria-label="Actions" />
           </tr>
         </thead>
@@ -153,7 +169,13 @@ export default function AppTable({
                 <td>
                   {storedApp ? (
                     <button className="table-name-button apps-table-app-button" type="button" onClick={() => onViewApp(storedApp)}>
-                      {appCategoryCell(name, container.image, storedApp.internalOnly, Boolean(storedApp.domain))}
+                      {appCategoryCell(
+                        name,
+                        container.image,
+                        storedApp.internalOnly,
+                        Boolean(storedApp.domain),
+                        Boolean(storedApp.imageUpdateAvailable)
+                      )}
                     </button>
                   ) : (
                     appCategoryCell(name, container.image, false, false)
@@ -173,7 +195,9 @@ export default function AppTable({
                 </td>
                 <td>
                   <div className="apps-table-image-cell">
-                    <code className="inline-code">{container.image}</code>
+                    <code className="inline-code" title={container.image}>
+                      {container.image}
+                    </code>
                     <span className="apps-table-subtext apps-table-id-row">
                       {container.shortId}
                       <CopyButton value={container.image} label="image name" />
@@ -197,24 +221,10 @@ export default function AppTable({
                 </td>
                 <td>{domainCell(storedApp, canOpen)}</td>
                 <td>
-                  {storedApp?.imageUpdateAvailable ? (
-                    <span className="status-badge compact warning">Update Available</span>
-                  ) : (
-                    <span className="text-faint">—</span>
-                  )}
-                </td>
-                <td>
                   <div className="apps-table-actions">
-                    {canOpen && (
-                      <a
-                        className="primary-button compact"
-                        href={`https://${storedApp?.domain}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open
-                      </a>
-                    )}
+                    {/* No separate "Open" button here — the Domain cell beside
+                        it is already a link that opens the app, and the extra
+                        button crowded the row enough to clip itself. */}
                     {isRunning ? (
                       <button
                         className="secondary-button compact"
@@ -226,7 +236,7 @@ export default function AppTable({
                       </button>
                     ) : (
                       <button
-                        className={canOpen ? "secondary-button compact" : "primary-button compact"}
+                        className="primary-button compact"
                         type="button"
                         onClick={() => onAction(container, "start")}
                         disabled={actionLoading === `${container.id}:start`}
@@ -281,7 +291,11 @@ export default function AppTable({
                 <span className="status-pill stopped">missing</span>
               </td>
               <td>
-                <code className="inline-code">{storedApp.image}</code>
+                <div className="apps-table-image-cell">
+                  <code className="inline-code" title={storedApp.image}>
+                    {storedApp.image}
+                  </code>
+                </div>
               </td>
               <td>
                 {storedApp.currentVersion != null ? (
@@ -292,9 +306,6 @@ export default function AppTable({
               </td>
               <td className="text-faint">{formatRelativeTimeFromIso(storedApp.lastDeployedAt) ?? "—"}</td>
               <td>{domainCell(storedApp, false)}</td>
-              <td>
-                <span className="text-faint">—</span>
-              </td>
               <td>
                 <div className="apps-table-actions">
                   <button className="secondary-button compact" type="button" onClick={() => onViewApp(storedApp)}>
