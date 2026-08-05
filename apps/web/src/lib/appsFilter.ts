@@ -1,4 +1,5 @@
 import { DEPLOY_FAILURE_EVENT_TYPES } from "./platformHealth";
+import { displayAppName } from "./appName";
 import type { ContainerSummary, StoredApp } from "../types/api";
 
 export type AppFilterKey =
@@ -23,7 +24,9 @@ export interface AppListEntry {
 const RECENT_DEPLOY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function entryName(entry: AppListEntry): string {
-  return entry.app?.name ?? entry.container?.names[0]?.replace(/^\//, "") ?? "";
+  // Matches what the row actually displays, so searching/sorting by name
+  // lines up with what the operator sees.
+  return displayAppName(entry.app?.name, entry.container?.names[0]);
 }
 
 function entryImage(entry: AppListEntry): string {

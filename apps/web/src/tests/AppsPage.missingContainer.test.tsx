@@ -53,7 +53,7 @@ describe("AppsPage — missing-container app visibility", () => {
   test("a database-managed app with no container stays listed in a recovery state, not hidden", () => {
     renderPage();
 
-    expect(screen.getByText("app-roadmapstudio-web")).toBeInTheDocument();
+    expect(screen.getByText("roadmapstudio-web")).toBeInTheDocument();
     expect(screen.getByText("Recovery required")).toBeInTheDocument();
     expect(screen.getByText("missing")).toBeInTheDocument();
   });

@@ -9,6 +9,8 @@ import type {
   StoredApp
 } from "../types/api";
 import ConfirmationDialog from "../components/ConfirmationDialog";
+import CopyButton from "../components/CopyButton";
+import StatCard from "../components/StatCard";
 
 interface CronPageProps {
   /** Apps the operator can target — the command runs in the app's container. */
@@ -72,6 +74,33 @@ function statusTone(status: CronJob["lastStatus"] | CronJobRun["status"]): strin
   }
 }
 
+/**
+ * A glyph hinting at what a job does, inferred from its name — purely
+ * decorative (the name beside it is always the real identifier), so an
+ * unrecognized job just gets a neutral clock.
+ */
+function jobIcon(name: string): string {
+  const text = name.toLowerCase();
+  if (/mail|email|smtp|inbox|ingest/.test(text)) return "✉️";
+  if (/track|report|stat|metric|analytic/.test(text)) return "📈";
+  if (/package|ship|deliver|order/.test(text)) return "📦";
+  if (/backup|snapshot|dump/.test(text)) return "💾";
+  if (/clean|prune|purge|vacuum|sweep/.test(text)) return "🧹";
+  if (/sync|import|export|fetch/.test(text)) return "🔄";
+  return "⏰";
+}
+
+/** A compact "2m 14s ago"-style string for a past timestamp. */
+function timeAgo(iso: string): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
 export default function CronPage({ apps }: CronPageProps) {
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [loading, setLoading] = useState(true);
@@ -89,6 +118,8 @@ export default function CronPage({ apps }: CronPageProps) {
 
   const [deleteTarget, setDeleteTarget] = useState<CronJob | null>(null);
   const [runningId, setRunningId] = useState<number | null>(null);
+  /** Which job's command is expanded past its 3-line clamp, if any. */
+  const [expandedCommandId, setExpandedCommandId] = useState<number | null>(null);
 
   // Run-history modal: the job whose history is open, its loaded runs, and
   // which run's output is currently shown.
@@ -310,6 +341,13 @@ export default function CronPage({ apps }: CronPageProps) {
     }
   };
 
+  const enabledCount = jobs.filter((job) => job.enabled).length;
+  const mostRecentRunAt = jobs
+    .map((job) => job.lastRunAt)
+    .filter((at): at is string => at !== null)
+    .sort()
+    .at(-1);
+
   return (
     <div className="page">
       <section className="page-section">
@@ -327,6 +365,30 @@ export default function CronPage({ apps }: CronPageProps) {
           </button>
         </div>
 
+        {!loading && jobs.length > 0 && (
+          <section className="stats-grid cron-stats">
+            <StatCard label="Total Jobs" value={String(jobs.length)} hint="All cron jobs" />
+            <StatCard
+              label="Enabled"
+              value={String(enabledCount)}
+              tone={enabledCount > 0 ? "positive" : "neutral"}
+              hint="Currently enabled"
+            />
+            <StatCard
+              label="Disabled"
+              value={String(jobs.length - enabledCount)}
+              tone={jobs.length - enabledCount > 0 ? "warning" : "neutral"}
+              hint="Currently disabled"
+            />
+            <StatCard
+              label="Last Run (All)"
+              value={mostRecentRunAt ? timeAgo(mostRecentRunAt) : "Never"}
+              tone={mostRecentRunAt ? "positive" : "neutral"}
+              hint="Most recent execution"
+            />
+          </section>
+        )}
+
         {apps.length === 0 && (
           <div className="warning-banner">
             Create an app first — a cron job runs a command inside an app's container.
@@ -340,91 +402,162 @@ export default function CronPage({ apps }: CronPageProps) {
         ) : jobs.length === 0 ? (
           <div className="empty-state">No cron jobs yet.</div>
         ) : (
-          <div className="table-wrap">
-            <table className="env-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>App</th>
-                  <th>Schedule</th>
-                  <th>Last run</th>
-                  <th>Enabled</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.map((job) => (
-                  <tr key={job.id}>
-                    <td>
-                      <strong>{job.name}</strong>
-                      <div className="text-faint cron-command">{job.command}</div>
-                    </td>
-                    <td>
-                      <code>{job.appName}</code>
-                    </td>
-                    <td>
-                      <code>{job.cronExpression}</code>
-                    </td>
-                    <td>
-                      {job.lastRunAt ? (
+          <>
+            <div className="table-wrap">
+              <table className="env-table cron-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>App</th>
+                    <th>Schedule</th>
+                    <th>Last Run</th>
+                    <th>Enabled</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {jobs.map((job) => (
+                    <tr key={job.id}>
+                      <td>
+                        <div className="cron-name-cell">
+                          <span className="cron-job-icon" aria-hidden="true">
+                            {jobIcon(job.name)}
+                          </span>
+                          <div className="cron-name-meta">
+                            <strong className="cron-job-name">{job.name}</strong>
+                            <div className="cron-command-box">
+                              <code
+                                className={expandedCommandId === job.id ? "" : "cron-command-clamped"}
+                              >
+                                {job.command}
+                              </code>
+                              <div className="cron-command-tools">
+                                <button
+                                  type="button"
+                                  className="copy-button"
+                                  aria-label={
+                                    expandedCommandId === job.id
+                                      ? "Collapse command"
+                                      : "Show full command"
+                                  }
+                                  aria-expanded={expandedCommandId === job.id}
+                                  title={
+                                    expandedCommandId === job.id
+                                      ? "Collapse command"
+                                      : "Show full command"
+                                  }
+                                  onClick={() =>
+                                    setExpandedCommandId(expandedCommandId === job.id ? null : job.id)
+                                  }
+                                >
+                                  👁
+                                </button>
+                                <CopyButton value={job.command} label="command" />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="cron-app-cell">
+                          <span className="cron-app-avatar" aria-hidden="true">
+                            {job.appName.charAt(0).toUpperCase()}
+                          </span>
+                          <span className="cron-app-name">{job.appName}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="cron-schedule-cell">
+                          <code className="cron-schedule-expr">{job.cronExpression}</code>
+                          {job.scheduleDescription && (
+                            <span className="cron-subtext">{job.scheduleDescription}</span>
+                          )}
+                        </div>
+                      </td>
+                      <td>
+                        {job.lastRunAt ? (
+                          <button
+                            type="button"
+                            className="cron-status-button"
+                            onClick={() => void openHistory(job)}
+                            title="View run history"
+                          >
+                            <span className={`status-badge ${statusTone(job.lastStatus)} compact`}>
+                              {job.lastStatus}
+                              {job.lastExitCode !== null ? ` (${job.lastExitCode})` : ""}
+                            </span>
+                            <span className="cron-subtext">
+                              {new Date(job.lastRunAt).toLocaleString()}
+                            </span>
+                            {job.lastDurationMs !== null && (
+                              <span className="cron-subtext">
+                                <span aria-hidden="true">🕒</span> {formatDuration(job.lastDurationMs)}
+                              </span>
+                            )}
+                          </button>
+                        ) : (
+                          <span className="text-faint">Never</span>
+                        )}
+                      </td>
+                      <td>
                         <button
                           type="button"
-                          className="cron-status-button"
-                          onClick={() => void openHistory(job)}
-                          title="View run history"
+                          role="switch"
+                          aria-checked={job.enabled}
+                          aria-label={`${job.enabled ? "Disable" : "Enable"} ${job.name}`}
+                          className={`cron-toggle ${job.enabled ? "on" : ""}`}
+                          onClick={() => void toggleEnabled(job)}
                         >
-                          <span className={`status-badge ${statusTone(job.lastStatus)} compact`}>
-                            {job.lastStatus}
-                            {job.lastExitCode !== null ? ` (${job.lastExitCode})` : ""}
-                          </span>
-                          <span className="text-faint">
-                            {" "}
-                            {new Date(job.lastRunAt).toLocaleString()}
-                          </span>
+                          <span className="cron-toggle-knob" />
                         </button>
-                      ) : (
-                        <span className="text-faint">Never</span>
-                      )}
-                    </td>
-                    <td>
-                      <label className="checkbox-field">
-                        <input
-                          type="checkbox"
-                          checked={job.enabled}
-                          onChange={() => void toggleEnabled(job)}
-                        />
-                        <span className="sr-only">Enabled</span>
-                      </label>
-                    </td>
-                    <td className="cron-row-actions">
-                      <button
-                        className="secondary-button compact"
-                        type="button"
-                        onClick={() => void runNow(job)}
-                        disabled={runningId === job.id}
-                      >
-                        {runningId === job.id ? "Running…" : "Run now"}
-                      </button>
-                      <button
-                        className="secondary-button compact"
-                        type="button"
-                        onClick={() => openEdit(job)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="danger-button compact"
-                        type="button"
-                        onClick={() => setDeleteTarget(job)}
-                      >
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      </td>
+                      <td>
+                        <div className="cron-row-actions">
+                          <button
+                            className="secondary-button compact"
+                            type="button"
+                            onClick={() => void runNow(job)}
+                            disabled={runningId === job.id}
+                          >
+                            {runningId === job.id ? (
+                              "Running…"
+                            ) : (
+                              <>
+                                {/* aria-hidden so the accessible name stays exactly "Run now". */}
+                                <span aria-hidden="true">▷</span> Run now
+                              </>
+                            )}
+                          </button>
+                          <button
+                            className="icon-button compact"
+                            type="button"
+                            aria-label="Edit"
+                            title="Edit"
+                            onClick={() => openEdit(job)}
+                          >
+                            ✎
+                          </button>
+                          <button
+                            className="icon-button compact danger"
+                            type="button"
+                            aria-label="Delete"
+                            title="Delete"
+                            onClick={() => setDeleteTarget(job)}
+                          >
+                            🗑
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <p className="cron-table-footer text-faint">
+              Showing {jobs.length} of {jobs.length} cron job{jobs.length === 1 ? "" : "s"}
+            </p>
+          </>
         )}
       </section>
 

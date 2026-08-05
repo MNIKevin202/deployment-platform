@@ -1,9 +1,10 @@
-import { useState } from "react";
 import type { ContainerAction, ContainerSummary, StoredApp } from "../types/api";
 import { useDeployProgress } from "../lib/deployProgress";
 import { InlineDeployProgress } from "./DeployProgressIndicator";
 import { formatRelativeTimeFromIso } from "../lib/formatTime";
 import { inferAppCategory } from "../lib/appKind";
+import { displayAppName } from "../lib/appName";
+import CopyButton from "./CopyButton";
 
 interface AppTableProps {
   managedApps: ContainerSummary[];
@@ -39,32 +40,6 @@ function favoriteButton(
       }}
     >
       {isFavorite ? "★" : "☆"}
-    </button>
-  );
-}
-
-/** A small "copy to clipboard" affordance for the image/container-id line — non-fatal if the browser denies clipboard access. */
-function CopyButton({ value, label }: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-
-  return (
-    <button
-      type="button"
-      className="copy-button"
-      aria-label={`Copy ${label}`}
-      title={copied ? "Copied!" : `Copy ${label}`}
-      onClick={async (event) => {
-        event.stopPropagation();
-        try {
-          await navigator.clipboard.writeText(value);
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 1500);
-        } catch {
-          // Clipboard access denied/unavailable — silently do nothing.
-        }
-      }}
-    >
-      {copied ? "✓" : "⧉"}
     </button>
   );
 }
@@ -160,7 +135,7 @@ export default function AppTable({
             const storedApp = appName ? storedAppsByName.get(appName) : undefined;
             const isRunning = container.state === "running";
             const canOpen = Boolean(storedApp?.domain && storedApp.routingReady);
-            const name = container.names[0]?.replace(/^\//, "") ?? container.shortId;
+            const name = displayAppName(storedApp?.name, container.names[0], container.shortId);
             const deploying = storedApp ? deployProgress.get(storedApp.id) : undefined;
 
             return (
@@ -284,7 +259,7 @@ export default function AppTable({
               <td>{favoriteButton(storedApp.id, Boolean(favoriteAppIds?.has(storedApp.id)), onToggleFavorite)}</td>
               <td>
                 <button className="table-name-button apps-table-app-button" type="button" onClick={() => onViewApp(storedApp)}>
-                  {appCategoryCell(storedApp.containerName ?? storedApp.name, storedApp.image, storedApp.internalOnly, Boolean(storedApp.domain))}
+                  {appCategoryCell(displayAppName(storedApp.name, storedApp.containerName), storedApp.image, storedApp.internalOnly, Boolean(storedApp.domain))}
                 </button>
               </td>
               <td>

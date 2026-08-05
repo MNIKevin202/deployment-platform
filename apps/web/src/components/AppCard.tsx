@@ -2,6 +2,7 @@ import type { ContainerAction, ContainerPort, ContainerSummary, StoredApp } from
 import { useAppDeployProgress } from "../lib/deployProgress";
 import { InlineDeployProgress } from "./DeployProgressIndicator";
 import { formatRelativeTimeFromIso } from "../lib/formatTime";
+import { displayAppName } from "../lib/appName";
 
 interface AppCardProps {
   container: ContainerSummary;
@@ -79,7 +80,7 @@ export default function AppCard({
   onToggleFavorite
 }: AppCardProps) {
   const isRunning = container.state === "running";
-  const containerName = container.names[0] ?? container.shortId;
+  const containerName = displayAppName(storedApp?.name, container.names[0], container.shortId);
   const deploying = useAppDeployProgress(storedApp?.id);
 
   const canOpenApp = Boolean(storedApp?.domain && storedApp.routingReady);
