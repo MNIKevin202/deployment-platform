@@ -81,3 +81,114 @@ export async function getHostDiskUsage(
     usedBytes: Math.max(0, totalBytes - availableBytes)
   };
 }
+
+export interface CombinedUsage {
+  usage: DockerUsageSnapshot;
+  disk: HostDiskUsage;
+}
+
+export interface DockerUsageProviderOptions {
+  /** How long a successful result stays fresh before a new lookup is attempted, in ms. Default 30s. */
+  ttlMs?: number;
+  /** How long to wait for Docker before giving up and reporting a timeout, in ms. Default 5s. */
+  timeoutMs?: number;
+  now?: () => number;
+  /** Test-only override for the underlying fetch — bypasses the real docker/statfs calls. */
+  fetchUsage?: () => Promise<CombinedUsage>;
+  setTimeoutFn?: (handler: () => void, ms: number) => unknown;
+  clearTimeoutFn?: (handle: unknown) => void;
+}
+
+export interface DockerUsageProvider {
+  getUsage(): Promise<CombinedUsage>;
+}
+
+/**
+ * A cached, timeout-bounded, single-flight wrapper around the raw Docker
+ * usage lookup — required because `docker system df` (behind
+ * getDockerUsageSnapshot) is known to get slow on a host with many
+ * images/containers, and this snapshot is read on every Maintenance page
+ * load plus a periodic background poll. Without this wrapper, a slow `df()`
+ * call combined with polling would let overlapping requests pile up
+ * indefinitely, each one adding more load to an already-strained Docker
+ * daemon and leaving every page load hung waiting on a request that never
+ * returns (exactly what happened in production before this was added).
+ *
+ * Three protections, each independently sufficient to prevent that:
+ *  - a hard timeout, so a single lookup can never hang the caller forever;
+ *  - a short TTL cache, so a fast page refresh or the background poll reuses
+ *    a still-fresh result instead of re-querying Docker;
+ *  - single-flight de-duplication, so concurrent callers (e.g. two open
+ *    tabs, or a poll tick overlapping a manual refresh) share one in-flight
+ *    lookup rather than each starting their own.
+ *
+ * Create exactly one of these per process (in server.ts) so the cache and
+ * in-flight de-duplication are shared across every request.
+ */
+export function createDockerUsageProvider(
+  docker: Docker,
+  options: DockerUsageProviderOptions = {}
+): DockerUsageProvider {
+  const ttlMs = options.ttlMs ?? 30_000;
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  const now = options.now ?? (() => Date.now());
+  const fetchUsage =
+    options.fetchUsage ??
+    (() =>
+      Promise.all([getDockerUsageSnapshot(docker), getHostDiskUsage()]).then(([usage, disk]) => ({
+        usage,
+        disk
+      })));
+  const setTimeoutFn = options.setTimeoutFn ?? ((handler, ms) => setTimeout(handler, ms));
+  const clearTimeoutFn =
+    options.clearTimeoutFn ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+
+  let cached: { value: CombinedUsage; expiresAt: number } | null = null;
+  let inFlight: Promise<CombinedUsage> | null = null;
+
+  async function fetchFresh(): Promise<CombinedUsage> {
+    let timerHandle: unknown;
+    const timeout = new Promise<never>((_, reject) => {
+      timerHandle = setTimeoutFn(() => {
+        reject(
+          new Error(
+            `Docker usage lookup timed out after ${timeoutMs}ms — the host may be under heavy Docker load (many images/containers).`
+          )
+        );
+      }, timeoutMs);
+    });
+
+    try {
+      return await Promise.race([fetchUsage(), timeout]);
+    } finally {
+      clearTimeoutFn(timerHandle);
+    }
+  }
+
+  return {
+    async getUsage(): Promise<CombinedUsage> {
+      if (cached && cached.expiresAt > now()) {
+        return cached.value;
+      }
+      if (inFlight) {
+        return inFlight;
+      }
+
+      const attempt = fetchFresh();
+      inFlight = attempt;
+
+      try {
+        const value = await attempt;
+        cached = { value, expiresAt: now() + ttlMs };
+        return value;
+      } finally {
+        // Only clear if this attempt is still the current one — a slow,
+        // now-timed-out attempt finishing late must never clobber a newer
+        // in-flight attempt that started after it gave up.
+        if (inFlight === attempt) {
+          inFlight = null;
+        }
+      }
+    }
+  };
+}

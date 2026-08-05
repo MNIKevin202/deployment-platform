@@ -6,7 +6,6 @@ import {
   sendNotification,
   type NotificationConfig
 } from "../services/notification-service.js";
-import type Docker from "dockerode";
 import {
   normalizeRetentionConfig,
   DEFAULT_RETENTION_CONFIG,
@@ -15,7 +14,7 @@ import {
   type RetentionConfig,
   type RetentionCleanupResult
 } from "../services/deployment-retention-service.js";
-import { getDockerUsageSnapshot, getHostDiskUsage } from "../services/docker-usage-service.js";
+import type { DockerUsageProvider } from "../services/docker-usage-service.js";
 
 export const AUTO_BACKUP_KEY = "auto_backup";
 export const AUTO_BACKUP_LAST_RUN_KEY = "auto_backup_last_run";
@@ -65,7 +64,8 @@ export function readNotificationConfig(appDatabase: AppDatabase): NotificationCo
 interface RegisterPlatformSettingsRoutesOptions {
   appDatabase: AppDatabase;
   backupsDir: string;
-  docker: Docker;
+  /** Cached, timeout-bounded, single-flight Docker usage lookup — see docker-usage-service.ts. */
+  dockerUsageProvider: DockerUsageProvider;
   /** Runs a scheduled backup immediately (write to disk + retention). */
   runBackupNow: () => Promise<void>;
   /** Runs the deployment-retention safety-net sweep immediately. */
@@ -74,7 +74,7 @@ interface RegisterPlatformSettingsRoutesOptions {
 
 export async function registerPlatformSettingsRoutes(
   fastify: FastifyInstance,
-  { appDatabase, backupsDir, docker, runBackupNow, runRetentionSweep }: RegisterPlatformSettingsRoutesOptions
+  { appDatabase, backupsDir, dockerUsageProvider, runBackupNow, runRetentionSweep }: RegisterPlatformSettingsRoutesOptions
 ): Promise<void> {
   // ---- Automatic backups ----
   fastify.get("/settings/auto-backup", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async () => {
@@ -115,13 +115,16 @@ export async function registerPlatformSettingsRoutes(
 
     // Live Docker usage is genuinely optional — the rest of this response
     // (config, history, lifetime stats) is DB-only and must still render even
-    // when Docker itself is briefly unreachable, so a failure here degrades
-    // to null + a message rather than failing the whole request.
-    let usage: Awaited<ReturnType<typeof getDockerUsageSnapshot>> | null = null;
-    let diskUsage: Awaited<ReturnType<typeof getHostDiskUsage>> | null = null;
+    // when Docker itself is slow or briefly unreachable, so a failure here
+    // (including a timeout — see dockerUsageProvider) degrades to null + a
+    // message rather than hanging or failing the whole request.
+    let usage: { images: number; containers: number; volumes: number; imagesSizeBytes: number } | null = null;
+    let diskUsage: { usedBytes: number; totalBytes: number } | null = null;
     let usageError: string | null = null;
     try {
-      [usage, diskUsage] = await Promise.all([getDockerUsageSnapshot(docker), getHostDiskUsage()]);
+      const combined = await dockerUsageProvider.getUsage();
+      usage = combined.usage;
+      diskUsage = combined.disk;
     } catch (error) {
       usageError = error instanceof Error ? error.message : "Unable to read Docker usage.";
     }

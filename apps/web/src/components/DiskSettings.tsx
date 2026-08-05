@@ -2,8 +2,32 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApiError, RetentionInfo, RetentionRunResult, RetentionSummary } from "../types/api";
 import StatCard from "./StatCard";
 
-/** How often the live Docker usage card quietly refreshes itself in the background. */
-const USAGE_POLL_INTERVAL_MS = 20_000;
+/**
+ * How often the live Docker usage card quietly refreshes itself in the
+ * background. Kept well above the server's own Docker-usage timeout (5s,
+ * see docker-usage-service.ts) and its cache TTL (30s) — polling faster than
+ * the cache is fresh would only add load for no fresher data.
+ */
+const USAGE_POLL_INTERVAL_MS = 60_000;
+/**
+ * A hard client-side cutoff for the settings fetch itself, independent of
+ * whatever the server-side Docker lookup does. `docker system df` can be
+ * slow enough on a host with many images that, without a limit here, a
+ * single hung request would leave the page's loading state stuck forever —
+ * exactly what happened before this was added. Longer than the server's own
+ * 5s Docker-usage budget to leave room for a normal round trip.
+ */
+const FETCH_TIMEOUT_MS = 10_000;
+
+async function fetchWithTimeout(input: string, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) {
@@ -62,14 +86,22 @@ export default function DiskSettings() {
   // Tracks whether a fetch is the very first one (shows the loading state) or
   // a quiet background poll (must not flash "Checking..." over live numbers).
   const hasLoadedOnce = useRef(false);
+  // Prevents a poll tick from starting a second overlapping request while a
+  // previous one (manual refresh, a slow Docker lookup) is still in flight.
+  const isFetching = useRef(false);
 
   const load = useCallback(async () => {
+    if (isFetching.current) {
+      return;
+    }
+    isFetching.current = true;
+
     try {
       if (!hasLoadedOnce.current) {
         setLoading(true);
       }
       setError("");
-      const response = await fetch("/api/settings/retention");
+      const response = await fetchWithTimeout("/api/settings/retention");
       const result = (await response.json().catch(() => null)) as (RetentionInfo & ApiError) | null;
       if (!response.ok || !result?.success) {
         throw new Error(result?.message || "Unable to load retention settings.");
@@ -83,9 +115,16 @@ export default function DiskSettings() {
       }
       hasLoadedOnce.current = true;
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Unable to load retention settings.");
+      const message =
+        loadError instanceof Error && loadError.name === "AbortError"
+          ? "Loading retention settings timed out. Docker may be slow to respond right now — try Refresh."
+          : loadError instanceof Error
+            ? loadError.message
+            : "Unable to load retention settings.";
+      setError(message);
     } finally {
       setLoading(false);
+      isFetching.current = false;
     }
   }, []);
 
