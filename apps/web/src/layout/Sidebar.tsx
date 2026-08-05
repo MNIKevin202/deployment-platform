@@ -14,7 +14,7 @@ interface SidebarProps {
   onSelect: (section: Section) => void;
 }
 
-const NAV_ITEMS: { key: Section; label: string; glyph: string }[] = [
+export const NAV_ITEMS: { key: Section; label: string; glyph: string }[] = [
   { key: "overview", label: "Overview", glyph: "◈" },
   { key: "apps", label: "Apps", glyph: "▣" },
   { key: "databases", label: "Databases", glyph: "▤" },
@@ -25,6 +25,15 @@ const NAV_ITEMS: { key: Section; label: string; glyph: string }[] = [
   { key: "system", label: "System", glyph: "◫" },
   { key: "settings", label: "Settings", glyph: "⛭" }
 ];
+
+/** Every section that can be linked to via ?section=… — derived from the nav
+ * itself, so a new page is deep-linkable the moment it appears there. */
+export const SECTIONS: readonly Section[] = NAV_ITEMS.map((item) => item.key);
+
+/** Narrows an untrusted ?section= value to a real Section. */
+export function parseSection(value: string | null): Section | null {
+  return SECTIONS.includes(value as Section) ? (value as Section) : null;
+}
 
 export default function Sidebar({ active, onSelect }: SidebarProps) {
   return (
