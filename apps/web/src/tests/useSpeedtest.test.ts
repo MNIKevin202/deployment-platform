@@ -18,7 +18,9 @@ function reading(measuredAt: string) {
       isp: "Example ISP",
       serverName: "Example Server",
       healthy: true,
-      measuredAt
+      measuredAt,
+      failed: false,
+      failureMessage: null
     }
   };
 }

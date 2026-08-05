@@ -36,14 +36,58 @@ export interface SpeedtestReading {
   healthy: boolean | null;
   /** ISO timestamp of the test itself. */
   measuredAt: string | null;
+  /**
+   * True when the most recent test recorded no measurements — Speedtest
+   * Tracker still writes a row when a run fails, so without this the panel
+   * would show a fresh timestamp next to a grid of "Unknown" and look broken
+   * rather than reporting that the test itself failed.
+   */
+  failed: boolean;
+  /** Speedtest Tracker's reason for the failure, when it recorded one. */
+  failureMessage: string | null;
 }
 
+/**
+ * Laravel serialises decimal-cast columns as *strings* ("12.345"), and which
+ * columns are decimals has changed between Speedtest Tracker versions — so a
+ * numeric string is accepted as readily as a number.
+ */
 function asNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/** Formats bits per second the way Speedtest Tracker's own `*_human` fields do. */
+function humanizeBits(bits: number | null): string | null {
+  if (bits === null) {
+    return null;
+  }
+  return `${(bits / 1_000_000).toFixed(2)} Mbps`;
+}
+
+/**
+ * A failed run stores the reason in `data`, which is sometimes a plain string
+ * and sometimes an object — both are unwrapped here so the operator sees the
+ * actual error instead of a generic "it didn't work".
+ */
+function extractFailureMessage(root: Record<string, unknown>, nested: Record<string, unknown>): string | null {
+  return (
+    asString(root.data) ??
+    asString(nested.message) ??
+    asString(nested.error) ??
+    asString(root.message) ??
+    null
+  );
 }
 
 /**
@@ -69,33 +113,54 @@ export function normalizeSpeedtestResult(payload: unknown): SpeedtestReading | n
       ? outer
       : ((outer.data as Record<string, unknown> | undefined) ?? outer);
 
-  const nested = (root.data as Record<string, unknown> | undefined) ?? {};
+  const nestedRaw = root.data;
+  const nested =
+    typeof nestedRaw === "object" && nestedRaw !== null ? (nestedRaw as Record<string, unknown>) : {};
   const nestedPing = (nested.ping as Record<string, unknown> | undefined) ?? {};
   const nestedServer = (nested.server as Record<string, unknown> | undefined) ?? {};
 
+  // `download_bits` is an accessor, not a column, so it is absent whenever the
+  // API serialises the bare model. The `download`/`upload` columns hold the
+  // raw Ookla bandwidth in BYTES per second, hence the ×8.
+  const downloadBits = asNumber(root.download_bits) ?? multiplyBits(asNumber(root.download));
+  const uploadBits = asNumber(root.upload_bits) ?? multiplyBits(asNumber(root.upload));
+
+  const measuredAt = asString(root.created_at);
+  const pingMs = asNumber(root.ping);
+
+  const explicitlyFailed =
+    root.failed === true || (asString(root.status) ?? "").toLowerCase() === "failed";
+  const hasMeasurement = downloadBits !== null || uploadBits !== null || pingMs !== null;
+
   const reading: SpeedtestReading = {
-    downloadHuman: asString(root.download_bits_human),
-    uploadHuman: asString(root.upload_bits_human),
-    downloadBits: asNumber(root.download_bits),
-    uploadBits: asNumber(root.upload_bits),
-    pingMs: asNumber(root.ping),
+    downloadHuman: asString(root.download_bits_human) ?? humanizeBits(downloadBits),
+    uploadHuman: asString(root.upload_bits_human) ?? humanizeBits(uploadBits),
+    downloadBits,
+    uploadBits,
+    pingMs,
     jitterMs: asNumber(nestedPing.jitter),
     packetLoss: asNumber(nested.packetLoss),
     isp: asString(nested.isp),
     serverName: asString(nestedServer.name),
     healthy: typeof root.healthy === "boolean" ? root.healthy : null,
-    measuredAt: asString(root.created_at)
+    measuredAt,
+    failed: explicitlyFailed || !hasMeasurement,
+    failureMessage: null
   };
+
+  if (reading.failed) {
+    reading.failureMessage = extractFailureMessage(root, nested);
+  }
 
   // A payload with nothing usable in it is reported as "no reading" rather
   // than an empty card full of dashes.
-  const hasAnything =
-    reading.downloadHuman !== null ||
-    reading.downloadBits !== null ||
-    reading.pingMs !== null ||
-    reading.measuredAt !== null;
+  const hasAnything = hasMeasurement || measuredAt !== null;
 
   return hasAnything ? reading : null;
+}
+
+function multiplyBits(bytesPerSecond: number | null): number | null {
+  return bytesPerSecond === null ? null : bytesPerSecond * 8;
 }
 
 export function isValidSpeedtestUrl(url: string): boolean {

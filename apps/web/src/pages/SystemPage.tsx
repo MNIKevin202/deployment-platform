@@ -55,8 +55,17 @@ function InternetSection() {
       )}
       {running && <SpeedtestRunningBar />}
 
-      {!r ? (
-        <p className="text-faint">{data.error ?? "No speedtest result recorded yet."}</p>
+      {r?.failed && (
+        <div className="warning-banner">
+          The last test on {r.measuredAt ? new Date(r.measuredAt).toLocaleString() : "record"} failed —
+          Speedtest Tracker saved the attempt but no measurements.
+          {r.failureMessage ? ` It reported: ${r.failureMessage}` : ""} Check its own dashboard and logs;
+          a missing or unreachable test server is the usual cause.
+        </div>
+      )}
+
+      {!r || r.failed ? (
+        <p className="text-faint">{data.error ?? "No successful speedtest result recorded yet."}</p>
       ) : (
         <div className="server-card">
           <div>

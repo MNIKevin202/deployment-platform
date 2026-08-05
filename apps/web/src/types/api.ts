@@ -1277,6 +1277,10 @@ export interface SpeedtestReading {
   serverName: string | null;
   healthy: boolean | null;
   measuredAt: string | null;
+  /** True when the latest run recorded no measurements — i.e. the test itself failed. */
+  failed: boolean;
+  /** Speedtest Tracker's reason for the failure, when it recorded one. */
+  failureMessage: string | null;
 }
 
 export interface SpeedtestConnection {

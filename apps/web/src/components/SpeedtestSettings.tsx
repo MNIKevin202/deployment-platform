@@ -198,7 +198,17 @@ export default function SpeedtestSettings() {
           </button>
         </div>
 
-        {configured && latest?.reading && (
+        {configured && latest?.reading?.failed && (
+          <p className="text-faint">
+            The last test failed
+            {latest.reading.measuredAt
+              ? ` (${new Date(latest.reading.measuredAt).toLocaleString()})`
+              : ""}
+            {latest.reading.failureMessage ? `: ${latest.reading.failureMessage}` : "."}
+          </p>
+        )}
+
+        {configured && latest?.reading && !latest.reading.failed && (
           <p className="text-faint">
             Latest: <strong>{latest.reading.downloadHuman ?? "—"}</strong> down,{" "}
             <strong>{latest.reading.uploadHuman ?? "—"}</strong> up

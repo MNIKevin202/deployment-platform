@@ -208,17 +208,29 @@ export default function OverviewPage({
         {speedtest.data?.configured && speedtest.data.reading && (
           <StatCard
             label="Internet Speed"
-            value={speedtest.data.reading.downloadHuman ?? "—"}
-            tone={speedtest.data.reading.healthy === false ? "warning" : "positive"}
+            // A failed run has a timestamp but no numbers, so it says so
+            // outright rather than showing a dash that reads as "loading".
+            value={
+              speedtest.data.reading.failed ? "Test failed" : speedtest.data.reading.downloadHuman ?? "—"
+            }
+            tone={
+              speedtest.data.reading.failed || speedtest.data.reading.healthy === false
+                ? "warning"
+                : "positive"
+            }
             hint={
-              [
-                speedtest.data.reading.uploadHuman ? `${speedtest.data.reading.uploadHuman} up` : null,
-                speedtest.data.reading.pingMs !== null
-                  ? `${speedtest.data.reading.pingMs.toFixed(0)} ms`
-                  : null
-              ]
-                .filter(Boolean)
-                .join(" · ") || undefined
+              speedtest.data.reading.failed
+                ? "See System for details"
+                : [
+                    speedtest.data.reading.uploadHuman
+                      ? `${speedtest.data.reading.uploadHuman} up`
+                      : null,
+                    speedtest.data.reading.pingMs !== null
+                      ? `${speedtest.data.reading.pingMs.toFixed(0)} ms`
+                      : null
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || undefined
             }
           />
         )}
