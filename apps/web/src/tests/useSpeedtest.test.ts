@@ -52,7 +52,7 @@ describe("useSpeedtest — running state", () => {
   test("enters the running state after a test is started", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         if (init?.method === "POST") {
           return json({ success: true, message: "started" });
         }
@@ -74,7 +74,7 @@ describe("useSpeedtest — running state", () => {
     let measuredAt = OLD;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         if (init?.method === "POST") {
           return json({ success: true, message: "started" });
         }
@@ -104,7 +104,7 @@ describe("useSpeedtest — running state", () => {
   test("stays running while the reading is unchanged", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         if (init?.method === "POST") {
           return json({ success: true, message: "started" });
         }
@@ -130,7 +130,7 @@ describe("useSpeedtest — running state", () => {
     // producing a new reading — the UI must not wait indefinitely.
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         if (init?.method === "POST") {
           return json({ success: true, message: "started" });
         }
@@ -155,7 +155,7 @@ describe("useSpeedtest — running state", () => {
   test("a refused start surfaces the server's message and never enters the running state", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         if (init?.method === "POST") {
           return json({ success: false, message: 'The API token needs the "Run Speedtest" ability.' }, false);
         }
