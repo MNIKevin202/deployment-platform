@@ -113,3 +113,49 @@ export function isBlueprintImage(image: string): boolean {
 export function isIrcBotImage(image: string): boolean {
   return imageRepoName(image) === "quipora-bot";
 }
+
+export interface AppCategory {
+  label: string;
+  /** A plain glyph, matching the rest of the panel's text-based icon style (no icon library). */
+  icon: string;
+}
+
+const CMS_IMAGE_NAMES: ReadonlySet<string> = new Set(["joomla", "wordpress", "drupal", "ghost"]);
+const WEB_SERVER_IMAGE_NAMES: ReadonlySet<string> = new Set(["nginx", "caddy", "httpd", "apache"]);
+
+/**
+ * A best-effort "what kind of app is this" label + icon, purely from the
+ * Docker image name — there is no explicit app-type field in the data
+ * model. This is a display nicety for the Apps list, not a source of
+ * truth: an unrecognized image always falls back to a generic "Service".
+ */
+export function inferAppCategory(image: string): AppCategory {
+  const repoName = imageRepoName(image);
+
+  if (DATABASE_IMAGE_NAMES.has(repoName)) {
+    return { label: "Database", icon: "🗄️" };
+  }
+  if (repoName === "ollama") {
+    return { label: "AI / LLM", icon: "🤖" };
+  }
+  if (repoName === "open-webui") {
+    return { label: "Web UI", icon: "💬" };
+  }
+  if (repoName === "quipora-bot" || repoName.includes("discord")) {
+    return { label: "Discord Bot", icon: "🎮" };
+  }
+  if (repoName.includes("bot")) {
+    return { label: "Bot", icon: "🎮" };
+  }
+  if (repoName === "ergo") {
+    return { label: "IRC Server", icon: "📡" };
+  }
+  if (CMS_IMAGE_NAMES.has(repoName)) {
+    return { label: "CMS", icon: "📰" };
+  }
+  if (WEB_SERVER_IMAGE_NAMES.has(repoName)) {
+    return { label: "Website", icon: "🌐" };
+  }
+
+  return { label: "Service", icon: "⚙️" };
+}

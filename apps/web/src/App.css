@@ -2420,6 +2420,153 @@ code {
   text-decoration: underline;
 }
 
+/* Wraps the richer icon+name+subtitle block — resets the plain-text link
+   styling above so color/underline live on the name span instead of the
+   whole multi-line cell. */
+.apps-table-app-button {
+  text-align: left;
+  width: 100%;
+  color: inherit;
+  font-weight: inherit;
+}
+
+.apps-table-app-button:hover {
+  text-decoration: none;
+}
+
+.apps-table-app-button:hover .apps-table-app-name {
+  text-decoration: underline;
+}
+
+.apps-table-app-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.apps-table-app-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--color-surface-raised);
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.apps-table-app-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.apps-table-app-name {
+  color: var(--color-accent);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.apps-table-app-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+}
+
+.apps-table-subtext {
+  display: block;
+  font-size: 0.76rem;
+  color: var(--color-text-faint);
+  margin-top: 2px;
+}
+
+.apps-table-status-cell,
+.apps-table-image-cell,
+.apps-table-last-deployed {
+  display: flex;
+  flex-direction: column;
+}
+
+.apps-table-id-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+}
+
+.copy-button {
+  border: none;
+  background: transparent;
+  color: var(--color-text-faint);
+  padding: 0 2px;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.copy-button:hover {
+  color: var(--color-accent);
+}
+
+.icon-button.compact {
+  width: 26px;
+  height: 26px;
+  font-size: 0.9rem;
+}
+
+.icon-button.danger:hover:not(:disabled) {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+/* ---------- Apps list: filter pill row (counts + All + Clear) ---------- */
+
+.apps-filter-count {
+  margin-left: auto;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.apps-filter-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.apps-filter-chip-count {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-border-soft);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.apps-filter-chip.active .apps-filter-chip-count {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.apps-filter-clear {
+  border: none;
+  background: transparent;
+  color: var(--color-accent);
+  font-size: 0.84rem;
+  font-weight: 600;
+  margin-left: auto;
+}
+
+.apps-filter-clear:hover {
+  text-decoration: underline;
+}
+
 .table-link {
   color: var(--color-accent);
 }
