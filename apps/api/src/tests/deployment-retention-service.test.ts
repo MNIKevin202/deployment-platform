@@ -4,7 +4,12 @@ import { createAppDatabase } from "../database.js";
 import {
   planAppRetention,
   selectSweepableImages,
+  selectSweepablePlatformRollbackContainers,
   cleanupAppRetention,
+  runGlobalSweep,
+  recordRetentionStats,
+  readLastCleanup,
+  readRetentionLifetimeStats,
   clampRetentionCount,
   resolveRetentionCount,
   normalizeRetentionConfig,
@@ -13,7 +18,8 @@ import {
   type PruneImage,
   type RetentionContainer,
   type RetentionDockerOps,
-  type RetentionConfig
+  type RetentionConfig,
+  type RetentionCleanupResult
 } from "../services/deployment-retention-service.js";
 
 function deployment(version: number, imageTag: string, isCurrent = false) {
@@ -210,6 +216,8 @@ describe("selectSweepableImages", () => {
 // ---- Integration: the impure runner against a real in-memory DB ----
 
 const CONFIG: RetentionConfig = { count: 3, platformImageKeep: 3 };
+/** A definitely-old creation time (well past the 1-hour leftover age guard) for fixture containers. */
+const OLD = 1_000_000_000;
 
 function buildFakeOps(images: PruneImage[], containers: RetentionContainer[]) {
   const removedImages: string[] = [];
@@ -266,10 +274,17 @@ describe("cleanupAppRetention (runner)", () => {
       created: v
     }));
     const containers: RetentionContainer[] = [
-      { id: "live", names: ["app-x"], imageId: "img-5", managed: true, running: true },
-      { id: "leftover", names: ["app-x-rollback-abc"], imageId: "img-4", managed: true, running: false },
-      { id: "leftover-running", names: ["app-x-github-deploy-xyz"], imageId: "img-9", managed: true, running: true },
-      { id: "unmanaged", names: ["app-x-rollback-def"], imageId: "img-base", managed: false, running: false }
+      { id: "live", names: ["app-x"], imageId: "img-5", managed: true, running: true, created: OLD },
+      { id: "leftover", names: ["app-x-rollback-abc"], imageId: "img-4", managed: true, running: false, created: OLD },
+      {
+        id: "leftover-running",
+        names: ["app-x-github-deploy-xyz"],
+        imageId: "img-9",
+        managed: true,
+        running: true,
+        created: OLD
+      },
+      { id: "unmanaged", names: ["app-x-rollback-def"], imageId: "img-base", managed: false, running: false, created: OLD }
     ];
     const fake = buildFakeOps(images, containers);
 
@@ -313,8 +328,8 @@ describe("cleanupAppRetention (runner)", () => {
     }));
     // A stopped container still pins v1's image id.
     const containers: RetentionContainer[] = [
-      { id: "live", names: ["app-y"], imageId: "img-5", managed: true, running: true },
-      { id: "pins-v1", names: ["something"], imageId: "img-1", managed: true, running: false }
+      { id: "live", names: ["app-y"], imageId: "img-5", managed: true, running: true, created: OLD },
+      { id: "pins-v1", names: ["something"], imageId: "img-1", managed: true, running: false, created: OLD }
     ];
     const fake = buildFakeOps(images, containers);
 
@@ -343,7 +358,7 @@ describe("cleanupAppRetention (runner)", () => {
       created: v
     }));
     const containers: RetentionContainer[] = [
-      { id: "live", names: ["app-z"], imageId: "img-4", managed: true, running: true }
+      { id: "live", names: ["app-z"], imageId: "img-4", managed: true, running: true, created: OLD }
     ];
     const fake = buildFakeOps(images, containers);
     const deps = { appDatabase: db, dockerOps: fake.ops, config: CONFIG };
@@ -367,7 +382,7 @@ describe("cleanupAppRetention (runner)", () => {
       created: v
     }));
     const containers: RetentionContainer[] = [
-      { id: "live", names: ["app-f"], imageId: "img-5", managed: true, running: true }
+      { id: "live", names: ["app-f"], imageId: "img-5", managed: true, running: true, created: OLD }
     ];
     const fake = buildFakeOps(images, containers);
     fake.failNext(`deployment-app-${app.id}:v1`);
@@ -388,7 +403,7 @@ describe("cleanupAppRetention (runner)", () => {
     const db = createAppDatabase(":memory:");
     const app = seedApp(db, "app-small", 2);
     const fake = buildFakeOps([], [
-      { id: "live", names: ["app-small"], imageId: "img-2", managed: true, running: true }
+      { id: "live", names: ["app-small"], imageId: "img-2", managed: true, running: true, created: OLD }
     ]);
 
     const result = await cleanupAppRetention(
@@ -399,5 +414,238 @@ describe("cleanupAppRetention (runner)", () => {
     assert.equal(result.versionsPruned, 0);
     assert.equal(result.imagesDeleted, 0);
     assert.deepEqual(db.listGithubDeployments(app.id).map((d) => d.version), [2, 1]);
+  });
+});
+
+describe("selectSweepablePlatformRollbackContainers", () => {
+  function container(overrides: Partial<RetentionContainer> = {}): RetentionContainer {
+    return {
+      id: "c-" + Math.random().toString(16).slice(2),
+      names: [],
+      imageId: "img",
+      managed: false,
+      running: false,
+      created: OLD,
+      ...overrides
+    };
+  }
+
+  test("selects a stopped platform rollback container that is old enough", () => {
+    const rollback = container({ names: ["deployment-platform-api-rollback-0.1.78-20260804T235044Z"] });
+    const result = selectSweepablePlatformRollbackContainers([rollback], 10_000_000_000, 3600);
+    assert.deepEqual(result.map((c) => c.id), [rollback.id]);
+  });
+
+  test("never selects the live platform containers themselves", () => {
+    const api = container({ names: ["deployment-platform-api"] });
+    const web = container({ names: ["deployment-platform-web"] });
+    const result = selectSweepablePlatformRollbackContainers([api, web], 10_000_000_000, 3600);
+    assert.deepEqual(result, []);
+  });
+
+  test("never selects a running rollback container", () => {
+    const rollback = container({
+      names: ["deployment-platform-web-rollback-0.1.78-20260804T235044Z"],
+      running: true
+    });
+    const result = selectSweepablePlatformRollbackContainers([rollback], 10_000_000_000, 3600);
+    assert.deepEqual(result, []);
+  });
+
+  test("never selects a rollback container younger than the age guard", () => {
+    const nowSeconds = 10_000;
+    const fresh = container({
+      names: ["deployment-platform-api-rollback-0.1.79-recent"],
+      created: nowSeconds - 60
+    });
+    const result = selectSweepablePlatformRollbackContainers([fresh], nowSeconds, 3600);
+    assert.deepEqual(result, []);
+  });
+
+  test("never selects a rollback container with an unknown (non-positive) creation time", () => {
+    const unknownAge = container({
+      names: ["deployment-platform-api-rollback-0.1.10-ancient"],
+      created: 0
+    });
+    const result = selectSweepablePlatformRollbackContainers([unknownAge], 10_000_000_000, 3600);
+    assert.deepEqual(result, []);
+  });
+
+  test("ignores managed-app rollback containers (a different sweep handles those)", () => {
+    const appRollback = container({ names: ["app-x-rollback-abc"], managed: true });
+    const result = selectSweepablePlatformRollbackContainers([appRollback], 10_000_000_000, 3600);
+    assert.deepEqual(result, []);
+  });
+});
+
+describe("runGlobalSweep — platform rollback containers unblock platform image retention", () => {
+  test("removes old platform rollback containers, then prunes the platform images they were pinning", async () => {
+    const db = createAppDatabase(":memory:");
+    const OLD_ENOUGH = 1; // unix second 1 — ages out against any real "now".
+
+    // Every platform image ever built, oldest first — mirrors the reported
+    // bug (0.1.0 through 0.1.79 all still present).
+    const apiImages: PruneImage[] = [77, 78, 79].map((v) => ({
+      id: `api-img-${v}`,
+      size: 1000,
+      repoTags: [`deployment-platform-api:0.1.${v}`],
+      created: v
+    }));
+    const webImages: PruneImage[] = [77, 78, 79].map((v) => ({
+      id: `web-img-${v}`,
+      size: 1000,
+      repoTags: [`deployment-platform-web:0.1.${v}`],
+      created: v
+    }));
+
+    // The live containers pin the newest image; a leftover rollback container
+    // from the last release pins the previous one — exactly what release.sh
+    // leaves behind, and exactly what was blocking cleanup.
+    const containers: RetentionContainer[] = [
+      { id: "live-api", names: ["deployment-platform-api"], imageId: "api-img-79", managed: false, running: true, created: OLD_ENOUGH },
+      { id: "live-web", names: ["deployment-platform-web"], imageId: "web-img-79", managed: false, running: true, created: OLD_ENOUGH },
+      {
+        id: "rollback-api",
+        names: ["deployment-platform-api-rollback-0.1.78-20260804T235044Z"],
+        imageId: "api-img-78",
+        managed: false,
+        running: false,
+        created: OLD_ENOUGH
+      },
+      {
+        id: "rollback-web",
+        names: ["deployment-platform-web-rollback-0.1.78-20260804T235044Z"],
+        imageId: "web-img-78",
+        managed: false,
+        running: false,
+        created: OLD_ENOUGH
+      }
+    ];
+
+    const fake = buildFakeOps([...apiImages, ...webImages], containers);
+    const removedContainerIds: string[] = [];
+    const originalRemoveContainer = fake.ops.removeContainer;
+    fake.ops.removeContainer = async (nameOrId) => {
+      removedContainerIds.push(nameOrId);
+      // Once a rollback container is removed, it must no longer appear in a
+      // subsequent listContainers() call — mirrors real Docker behavior and
+      // is what lets the same run's image sweep see the image as unblocked.
+      const index = containers.findIndex((c) => c.id === nameOrId || c.names.includes(nameOrId));
+      if (index >= 0) {
+        containers.splice(index, 1);
+      }
+      await originalRemoveContainer(nameOrId);
+    };
+
+    const result = await runGlobalSweep({
+      appDatabase: db,
+      dockerOps: fake.ops,
+      config: { count: 3, platformImageKeep: 1 },
+      now: () => Date.now()
+    });
+
+    // Both leftover rollback containers were removed.
+    assert.deepEqual(removedContainerIds.sort(), ["rollback-api", "rollback-web"]);
+
+    // With platformImageKeep=1 and the rollback containers gone, only the
+    // newest (0.1.79, still live) survives per repo; 0.1.77 and 0.1.78 (now
+    // unpinned) are both reclaimed.
+    assert.deepEqual(
+      fake.removedImages.sort(),
+      ["deployment-platform-api:0.1.77", "deployment-platform-api:0.1.78", "deployment-platform-web:0.1.77", "deployment-platform-web:0.1.78"].sort()
+    );
+    assert.equal(result.failures.length, 0);
+  });
+
+  test("never removes a fresh (possibly in-flight) rollback container", async () => {
+    const db = createAppDatabase(":memory:");
+    const nowMs = 10_000_000; // 10,000 real seconds since epoch.
+    const recentSeconds = Math.floor(nowMs / 1000) - 60; // created 60s ago.
+
+    const images: PruneImage[] = [
+      { id: "api-img-old", size: 500, repoTags: ["deployment-platform-api:0.1.1"], created: 1 }
+    ];
+    const containers: RetentionContainer[] = [
+      { id: "live-api", names: ["deployment-platform-api"], imageId: "api-img-new", managed: false, running: true, created: 1 },
+      {
+        id: "rollback-api",
+        names: ["deployment-platform-api-rollback-0.1.1-recent"],
+        imageId: "api-img-old",
+        managed: false,
+        running: false,
+        created: recentSeconds
+      }
+    ];
+    const fake = buildFakeOps(images, containers);
+
+    await runGlobalSweep({
+      appDatabase: db,
+      dockerOps: fake.ops,
+      config: { count: 3, platformImageKeep: 0 },
+      now: () => nowMs
+    });
+
+    assert.deepEqual(fake.removedContainers, []);
+    assert.deepEqual(fake.removedImages, []);
+  });
+});
+
+describe("retention stats persistence", () => {
+  function summary(overrides: Partial<RetentionCleanupResult> = {}): RetentionCleanupResult {
+    return {
+      scope: "global",
+      appId: null,
+      skipped: false,
+      versionsPruned: 0,
+      imagesDeleted: 0,
+      imagesRetained: 0,
+      containersRemoved: 0,
+      bytesReclaimed: 0,
+      durationMs: 1,
+      failures: [],
+      ...overrides
+    };
+  }
+
+  test("records the last cleanup and accumulates lifetime totals across runs", () => {
+    const db = createAppDatabase(":memory:");
+
+    recordRetentionStats(
+      db,
+      summary({ imagesDeleted: 2, containersRemoved: 1, versionsPruned: 3, bytesReclaimed: 1000 }),
+      5000
+    );
+    recordRetentionStats(
+      db,
+      summary({ imagesDeleted: 4, containersRemoved: 0, versionsPruned: 1, bytesReclaimed: 2000 }),
+      9000
+    );
+
+    const last = readLastCleanup(db);
+    assert.ok(last);
+    assert.equal(last?.at, 9000);
+    assert.equal(last?.imagesDeleted, 4);
+
+    const lifetime = readRetentionLifetimeStats(db);
+    assert.deepEqual(lifetime, {
+      totalRuns: 2,
+      totalImagesDeleted: 6,
+      totalContainersRemoved: 1,
+      totalVersionsPruned: 4,
+      totalBytesReclaimed: 3000
+    });
+  });
+
+  test("a skipped result is never recorded", () => {
+    const db = createAppDatabase(":memory:");
+    recordRetentionStats(db, { ...summary(), skipped: true, imagesDeleted: 99 });
+    assert.equal(readLastCleanup(db), null);
+    assert.deepEqual(readRetentionLifetimeStats(db), {
+      totalRuns: 0,
+      totalImagesDeleted: 0,
+      totalContainersRemoved: 0,
+      totalVersionsPruned: 0,
+      totalBytesReclaimed: 0
+    });
   });
 });

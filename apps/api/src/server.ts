@@ -83,7 +83,9 @@ import {
   cleanupAppRetention,
   cleanupAppRetentionLocked,
   runGlobalSweep,
-  type RetentionDeps
+  recordRetentionStats,
+  type RetentionDeps,
+  type RetentionCleanupResult
 } from "./services/deployment-retention-service.js";
 import { createRetentionScheduler } from "./services/retention-scheduler.js";
 import { createBackupArchive } from "./services/backup-service.js";
@@ -351,12 +353,29 @@ function buildRetentionDeps(): RetentionDeps {
   };
 }
 
+/**
+ * Persists the Maintenance page's "last cleanup" + lifetime stats exactly
+ * once per external trigger (one deploy's cleanup, one revert's cleanup, or
+ * one sweep run — manual or scheduled), never once per app inside a sweep.
+ * A skipped result (lock held) records nothing.
+ */
+function withRetentionStats(
+  resultPromise: Promise<RetentionCleanupResult>
+): Promise<RetentionCleanupResult> {
+  return resultPromise.then((result) => {
+    recordRetentionStats(appDatabase, result);
+    return result;
+  });
+}
+
 // A deploy already holds the per-app deployment lock when its post-deploy
 // cleanup runs, so it uses the lock-free variant. A revert does not hold the
 // lock, so it uses the lock-guarded variant (which skips if a deploy is live).
-const cleanupRetentionForDeploy = (appId: number) => cleanupAppRetention(buildRetentionDeps(), appId);
-const cleanupRetentionForRevert = (appId: number) => cleanupAppRetentionLocked(buildRetentionDeps(), appId);
-const runRetentionSweep = () => runGlobalSweep(buildRetentionDeps());
+const cleanupRetentionForDeploy = (appId: number) =>
+  withRetentionStats(cleanupAppRetention(buildRetentionDeps(), appId));
+const cleanupRetentionForRevert = (appId: number) =>
+  withRetentionStats(cleanupAppRetentionLocked(buildRetentionDeps(), appId));
+const runRetentionSweep = () => withRetentionStats(runGlobalSweep(buildRetentionDeps()));
 
 const deployDeps: GithubDeployDependencies = {
   appDatabase,
@@ -451,6 +470,7 @@ const imageUpdateChecker = createImageUpdateChecker({
 await registerPlatformSettingsRoutes(app, {
   appDatabase,
   backupsDir: BACKUPS_DIR,
+  docker,
   runBackupNow: () => runScheduledBackupNow(),
   runRetentionSweep
 });
