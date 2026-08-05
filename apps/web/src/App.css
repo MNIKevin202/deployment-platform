@@ -2395,25 +2395,38 @@ code {
   color: var(--color-accent);
 }
 
+/*
+ * Fixed layout with per-column percentages that sum to exactly 100%. Both
+ * halves matter: without `fixed`, content-heavy cells (a long image tag, a
+ * long domain) starve the Actions column; and with `fixed` but widths that
+ * over-allocate, the browser silently scales every column down
+ * proportionally — which is what previously squeezed Actions to 57px and
+ * wrapped its buttons onto separate lines.
+ */
 .apps-table {
   table-layout: fixed;
+}
+
+/* `overflow: hidden` is what actually clips a cell's content to its column —
+   fixed widths alone don't stop text from spilling into the next cell. */
+.apps-table th,
+.apps-table td {
+  padding: 10px 12px;
+  overflow: hidden;
 }
 
 .apps-table td {
   vertical-align: middle;
 }
 
-/* Fixed per-column widths so a long image tag or domain can never squeeze
-   the Actions column down to nothing and force its buttons to wrap onto
-   separate lines (exactly what happened before this was added). */
 .apps-table th:nth-child(1),
 .apps-table td:nth-child(1) {
-  width: 40px;
+  width: 4%;
 }
 
 .apps-table th:nth-child(2),
 .apps-table td:nth-child(2) {
-  width: 22%;
+  width: 20%;
 }
 
 .apps-table th:nth-child(3),
@@ -2423,7 +2436,7 @@ code {
 
 .apps-table th:nth-child(4),
 .apps-table td:nth-child(4) {
-  width: 16%;
+  width: 15%;
 }
 
 .apps-table th:nth-child(5),
@@ -2433,22 +2446,60 @@ code {
 
 .apps-table th:nth-child(6),
 .apps-table td:nth-child(6) {
-  width: 11%;
+  width: 12%;
 }
 
 .apps-table th:nth-child(7),
 .apps-table td:nth-child(7) {
-  width: 12%;
+  width: 16%;
 }
 
 .apps-table th:nth-child(8),
 .apps-table td:nth-child(8) {
-  width: 8%;
+  width: 15%;
 }
 
-.apps-table th:nth-child(9),
-.apps-table td:nth-child(9) {
-  width: 250px;
+/*
+ * Every value that can be arbitrarily long truncates to one line rather than
+ * wrapping. Wrapping was what made rows 189px tall; each of these carries a
+ * `title` in the markup so the full value is still available on hover.
+ */
+.apps-table-app-name,
+.apps-table-image-cell code,
+.apps-table-id-row,
+.apps-table-last-deployed > span,
+.apps-table-subtext {
+  display: block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.apps-table-app-subtitle {
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* Badges keep their full width so they never get sliced mid-word; the
+   category label beside them absorbs any truncation instead. */
+.apps-table-app-subtitle > .status-badge {
+  flex-shrink: 0;
+}
+
+.apps-table-image-cell code {
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+/* inline-block (not block) so the trailing ↗ glyph stays on the same line. */
+.apps-table td .table-link {
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
 }
 
 .apps-table-actions {
@@ -2458,18 +2509,10 @@ code {
   justify-content: flex-end;
 }
 
-/* Open/Start/Stop stay text buttons but shed the extra horizontal padding
-   inside the now-tighter Actions column — 3 icon buttons already sit beside
-   them, and there's no room for `.compact`'s normal button padding too. */
 .apps-table-actions > .primary-button.compact,
 .apps-table-actions > .secondary-button.compact {
-  padding: 6px 10px;
+  padding: 6px 9px;
   white-space: nowrap;
-}
-
-.apps-table-image-cell code {
-  overflow-wrap: anywhere;
-  word-break: break-all;
 }
 
 .table-name-button {
