@@ -1073,6 +1073,143 @@ export const APP_TEMPLATES: AppTemplate[] = [
     publishedPorts: [{ hostPort: 6697, containerPort: 6697, protocol: "tcp" }]
   },
   {
+    id: "rustdesk",
+    name: "RustDesk Server",
+    category: "Tools",
+    icon: "🖥️",
+    description: "Self-hosted remote desktop relay. Publishes the hbbs/hbbr ports.",
+    longDescription:
+      "A self-hosted RustDesk server, so your remote-desktop traffic never touches a public relay. RustDesk needs two services: hbbs (the ID/rendezvous server clients register with) and hbbr (the relay that carries a session when a direct peer-to-peer connection can't be established). Both are deployed here — hbbs as the main app and hbbr as a companion app of its own. On first boot hbbs generates an encryption keypair and writes it to its data volume; the public key is what clients need alongside your server address, and you can read it from the app's Console tab (cat /root/id_ed25519.pub) once it's running.",
+    highlights: [
+      "Both services included — hbbs (ID/rendezvous) and hbbr (relay)",
+      "Keypair generated automatically on first boot and kept on a volume",
+      "Clients need your server IP plus the public key from /root/id_ed25519.pub",
+      "Publishes TCP 21115-21117 and 21119, plus UDP 21116 for discovery"
+    ],
+    image: "rustdesk/rustdesk-server:latest",
+    // hbbs's own signalling port; the full set is published below.
+    containerPort: 21116,
+    suggestedName: "rustdesk",
+    internalOnly: true,
+    env: [
+      // hbbr is reached over the managed-apps network by container name, so
+      // hbbs can hand clients a working relay without a public hostname.
+      { key: "RELAY", value: "{{companion:hbbr}}:21117" },
+      { key: "ENCRYPTED_ONLY", value: "1" }
+    ],
+    volumes: ["/root"],
+    publishedPorts: [
+      // hbbs: NAT type test, ID registration/signalling (TCP+UDP), and the
+      // web client's websocket.
+      { hostPort: 21115, containerPort: 21115, protocol: "tcp" },
+      { hostPort: 21116, containerPort: 21116, protocol: "tcp" },
+      { hostPort: 21116, containerPort: 21116, protocol: "udp" },
+      { hostPort: 21118, containerPort: 21118, protocol: "tcp" }
+    ],
+    companions: [
+      {
+        key: "hbbr",
+        nameSuffix: "-hbbr",
+        label: "RustDesk relay (hbbr)",
+        description:
+          "Carries session traffic when two peers can't connect directly. Keeps its own key material on a volume.",
+        image: "rustdesk/rustdesk-server:latest",
+        containerPort: 21117,
+        volumes: ["/root"],
+        internalOnly: true
+      }
+    ],
+    resources: {
+      minCpu: 1,
+      minMemoryMb: 512,
+      minDiskGb: 1,
+      recommendedCpu: 1,
+      recommendedMemoryMb: 1024,
+      recommendedDiskGb: 5
+    },
+    warning:
+      "The relay carries session traffic, so bandwidth — not CPU — is the limit. Clients also need TCP 21117 open to the relay companion; publish it from that app if your peers can't connect directly."
+  },
+  {
+    id: "openspeedtest",
+    name: "OpenSpeedTest",
+    category: "Tools",
+    icon: "🚀",
+    description: "Self-hosted HTML5 network speed test. No database needed.",
+    longDescription:
+      "A self-hosted, browser-based network speed test — download, upload, ping, and jitter — served straight from your own VPS. It's a single stateless container with no database and nothing to configure, reached over the app's assigned domain like any other web app. Results reflect the path between the browser and this server, which makes it a genuinely useful check of your own host's connectivity.",
+    highlights: [
+      "Single container, no database, nothing to configure",
+      "Measures download, upload, ping, and jitter in the browser",
+      "Reached over the app's own HTTPS domain"
+    ],
+    image: "openspeedtest/latest:latest",
+    containerPort: 3000,
+    suggestedName: "speedtest",
+    env: [],
+    // Deliberately no volumes: the image is stateless and stores nothing
+    // worth persisting, so adding one would only create an empty volume.
+    resources: {
+      minCpu: 1,
+      minMemoryMb: 256,
+      minDiskGb: 1,
+      recommendedCpu: 2,
+      recommendedMemoryMb: 512,
+      recommendedDiskGb: 2
+    },
+    warning:
+      "A speed test saturates your link by design. Running one measures — and briefly consumes — the same bandwidth your other apps share."
+  },
+  {
+    id: "rust-dedicated",
+    name: "Rust Dedicated Server (game)",
+    category: "Apps",
+    icon: "🔫",
+    description:
+      "Dedicated server for Rust, the survival game (not the programming language). Publishes UDP 28015 + RCON.",
+    longDescription:
+      "A dedicated server for Rust — the multiplayer survival game by Facepunch, not the Rust programming language. Rust speaks a raw UDP protocol, so players connect to your server's IP on UDP 28015 rather than through an HTTPS domain. RCON (remote console) is published separately for administration and is protected by a generated password. The game files, world data, and configuration all persist on a volume, so a redeploy doesn't wipe your map.",
+    highlights: [
+      "The survival GAME by Facepunch — not the Rust programming language",
+      "Players connect at your-server-ip:28015 (UDP)",
+      "Server name, description, world size, seed, and max players are configurable",
+      "RCON password generated automatically; world and game files persist on a volume"
+    ],
+    image: "didstopia/rust-server:latest",
+    containerPort: 28015,
+    suggestedName: "rust-server",
+    internalOnly: true,
+    env: [
+      { key: "RUST_SERVER_NAME", value: "My Rust Server" },
+      { key: "RUST_SERVER_DESCRIPTION", value: "Powered by Deployment Platform" },
+      { key: "RUST_SERVER_MAXPLAYERS", value: "50" },
+      { key: "RUST_SERVER_WORLDSIZE", value: "3000" },
+      { key: "RUST_SERVER_SEED", value: "12345" },
+      { key: "RUST_SERVER_PORT", value: "28015" },
+      { key: "RUST_RCON_PORT", value: "28016" },
+      { key: "RUST_RCON_WEB", value: "1" },
+      { key: "RUST_RCON_PASSWORD", generate: "password", generateLength: 24, secret: true }
+    ],
+    volumes: ["/steamcmd/rust"],
+    publishedPorts: [
+      // Game traffic (UDP), the Steam query port, and RCON.
+      { hostPort: 28015, containerPort: 28015, protocol: "udp" },
+      { hostPort: 28015, containerPort: 28015, protocol: "tcp" },
+      { hostPort: 28016, containerPort: 28016, protocol: "tcp" },
+      { hostPort: 28017, containerPort: 28017, protocol: "udp" }
+    ],
+    resources: {
+      minCpu: 2,
+      minMemoryMb: 8192,
+      minDiskGb: 20,
+      recommendedCpu: 4,
+      recommendedMemoryMb: 16384,
+      recommendedDiskGb: 50
+    },
+    warning:
+      "Rust is genuinely heavy: expect 8 GB RAM minimum (16 GB for a busy server) and ~20 GB of disk, and the first boot downloads many gigabytes of game files before the server accepts players. A larger world size raises memory use sharply."
+  },
+  {
     id: "quipora-bot",
     name: "Quipora Bot",
     category: "Apps",

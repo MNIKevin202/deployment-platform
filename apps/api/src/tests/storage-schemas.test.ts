@@ -34,7 +34,6 @@ describe("containerPathSchema", () => {
       "/etc",
       "/proc",
       "/sys",
-      "/root",
       "/var/run",
       "/var/run/docker.sock"
     ]) {
@@ -61,8 +60,6 @@ describe("containerPathSchema", () => {
       "/var/run/docker.sock",
       "/etc",
       "/etc/example",
-      "/root",
-      "/root/.ssh",
       "/boot",
       "/boot/grub",
       "/bin",
@@ -107,6 +104,14 @@ describe("containerPathSchema", () => {
   test("rejects the exact reserved root but not its subdirectories, for /var", () => {
     assert.equal(containerPathSchema.safeParse("/var").success, false);
     assert.equal(containerPathSchema.safeParse("/var/lib/myapp").success, true);
+  });
+
+  test("allows /root, which several self-hosted images use for their own state", () => {
+    // Not a system/kernel tree — it's the root user's home, and images like
+    // RustDesk's server keep their generated keypair there. The panel still
+    // refuses a hand-typed /root; only a curated template may declare it.
+    assert.equal(containerPathSchema.safeParse("/root").success, true);
+    assert.equal(containerPathSchema.safeParse("/root/.config").success, true);
   });
 
   test("rejects null bytes and shell-like characters", () => {

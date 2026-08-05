@@ -4,25 +4,19 @@ import userEvent from "@testing-library/user-event";
 import TemplateGallery from "../components/TemplateGallery";
 
 describe("TemplateGallery", () => {
-  test("renders nothing when closed", () => {
-    const { container } = render(
-      <TemplateGallery
-        open={false}
-        onClose={vi.fn()}
-        onSelect={vi.fn()}
-        storedApps={[]}
-        onViewApp={vi.fn()}
-      />
+  test("renders the catalog as a page, with the category filter chips", () => {
+    render(
+      <TemplateGallery onSelect={vi.fn()} storedApps={[]} onViewApp={vi.fn()} />
     );
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.getByRole("heading", { name: "One-click templates" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Search templates")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^All/ })).toBeInTheDocument();
   });
 
   test("opens a template's detail view, then installs it", async () => {
     const onSelect = vi.fn();
     render(
       <TemplateGallery
-        open
-        onClose={vi.fn()}
         onSelect={onSelect}
         storedApps={[]}
         onViewApp={vi.fn()}
@@ -45,8 +39,6 @@ describe("TemplateGallery", () => {
     const onSelect = vi.fn();
     render(
       <TemplateGallery
-        open
-        onClose={vi.fn()}
         onSelect={onSelect}
         storedApps={[]}
         onViewApp={vi.fn()}
@@ -64,8 +56,6 @@ describe("TemplateGallery", () => {
     const onViewApp = vi.fn();
     render(
       <TemplateGallery
-        open
-        onClose={vi.fn()}
         onSelect={vi.fn()}
         storedApps={[{ id: 7, name: "my-postgres", image: "postgres:15-alpine" }]}
         onViewApp={onViewApp}
@@ -93,8 +83,6 @@ describe("TemplateGallery", () => {
   test("warns when a DB-dependent template's database isn't installed, and can jump to it", async () => {
     render(
       <TemplateGallery
-        open
-        onClose={vi.fn()}
         onSelect={vi.fn()}
         storedApps={[]}
         onViewApp={vi.fn()}
@@ -115,8 +103,6 @@ describe("TemplateGallery", () => {
   test("no warning once the required database exists", async () => {
     render(
       <TemplateGallery
-        open
-        onClose={vi.fn()}
         onSelect={vi.fn()}
         storedApps={[{ id: 4, name: "mariadb", image: "mariadb:11" }]}
         onViewApp={vi.fn()}

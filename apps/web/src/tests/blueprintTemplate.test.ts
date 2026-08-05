@@ -219,9 +219,12 @@ describe("assessHostForTemplate", () => {
 });
 
 describe("existing templates are unaffected", () => {
-  test("no other template gained companions or a badge", () => {
+  test("companions and badges stay a deliberate, explicit set", () => {
+    // Multi-service installs are the exception, not the norm — this pins the
+    // exact set so a template can't quietly start deploying extra containers.
+    // Blueprint: Ollama + friends. RustDesk: its hbbr relay.
     const withCompanions = APP_TEMPLATES.filter((t) => (t.companions?.length ?? 0) > 0);
-    expect(withCompanions.map((t) => t.id)).toEqual(["blueprint"]);
+    expect(withCompanions.map((t) => t.id).sort()).toEqual(["blueprint", "rustdesk"]);
 
     const badged = APP_TEMPLATES.filter((t) => t.badge);
     expect(badged.map((t) => t.id)).toEqual(["blueprint"]);

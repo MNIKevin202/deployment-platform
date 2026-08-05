@@ -92,8 +92,12 @@ describe("APP_TEMPLATES catalog", () => {
       }
 
       for (const path of template.volumes ?? []) {
+        // Curated templates are the vetted case allowed to declare an
+        // otherwise-reserved path their image genuinely requires (RustDesk
+        // keeps its keypair in /root) — the wizard passes the same flag for
+        // template-seeded rows. A hand-typed path never gets this.
         expect(
-          isValidContainerPath(path),
+          isValidContainerPath(path, { allowReserved: true }),
           `${template.id}: "${path}" is not an acceptable container path`
         ).toBe(true);
       }
@@ -107,7 +111,9 @@ describe("APP_TEMPLATES catalog", () => {
       const template = APP_TEMPLATES.find((entry) => entry.id === id);
       expect(template, `${id} is listed but no longer in the catalog`).toBeDefined();
       expect(
-        (template!.volumes ?? []).some((path) => !isValidContainerPath(path)),
+        (template!.volumes ?? []).some(
+          (path) => !isValidContainerPath(path, { allowReserved: true })
+        ),
         `${id} now has only valid paths — remove it from KNOWN_UNINSTALLABLE`
       ).toBe(true);
     }
@@ -118,7 +124,7 @@ describe("APP_TEMPLATES catalog", () => {
       for (const companion of template.companions ?? []) {
         for (const path of companion.volumes ?? []) {
           expect(
-            isValidContainerPath(path),
+            isValidContainerPath(path, { allowReserved: true }),
             `${template.id}/${companion.key}: "${path}" is not an acceptable container path`
           ).toBe(true);
         }

@@ -2,6 +2,7 @@ export type Section =
   | "overview"
   | "apps"
   | "databases"
+  | "templates"
   | "repositories"
   | "cron"
   | "environment"
@@ -17,6 +18,7 @@ const NAV_ITEMS: { key: Section; label: string; glyph: string }[] = [
   { key: "overview", label: "Overview", glyph: "◈" },
   { key: "apps", label: "Apps", glyph: "▣" },
   { key: "databases", label: "Databases", glyph: "▤" },
+  { key: "templates", label: "Templates", glyph: "◳" },
   { key: "repositories", label: "Repositories", glyph: "⌥" },
   { key: "cron", label: "Cron Jobs", glyph: "⏱" },
   { key: "environment", label: "Environment", glyph: "⚙" },
