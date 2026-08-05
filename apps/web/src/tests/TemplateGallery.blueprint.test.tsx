@@ -15,8 +15,6 @@ function renderGallery(
 ) {
   return render(
     <TemplateGallery
-      open
-      onClose={() => {}}
       onSelect={overrides.onSelect ?? (() => {})}
       storedApps={[]}
       onViewApp={() => {}}
@@ -33,7 +31,7 @@ describe("TemplateGallery — Blueprint", () => {
   test("lists Blueprint under an AI category with its badge", () => {
     renderGallery();
 
-    expect(screen.getByRole("heading", { name: "AI" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^AI/ })).toBeInTheDocument();
     expect(screen.getAllByText("DevMinted Original").length).toBeGreaterThan(0);
     expect(
       screen.getByText("Private AI workspace powered by models running directly on your VPS.")

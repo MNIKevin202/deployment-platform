@@ -35,6 +35,7 @@ const SECTION_TITLES: Record<Section, string> = {
   overview: "Overview",
   apps: "Apps",
   databases: "Databases",
+  templates: "Templates",
   repositories: "Repositories",
   cron: "Cron Jobs",
   environment: "Environment",
@@ -46,6 +47,7 @@ const SECTION_SUBTITLES: Record<Section, string> = {
   overview: "A snapshot of your platform and its managed applications.",
   apps: "Deploy and manage the websites, bots, and services running on your server.",
   databases: "Managed data stores — Postgres, MySQL, Redis, and the like.",
+  templates: "One-click setups for common services — pre-filled and ready to install.",
   repositories: "Connect GitHub and browse repositories available for source-linked apps.",
   cron: "Scheduled commands that run inside your apps' containers.",
   environment: "Variables inherited by every managed app, unless overridden.",
@@ -99,7 +101,6 @@ function App() {
   const [checkingImageUpdates, setCheckingImageUpdates] = useState(false);
 
   const [showCreateApp, setShowCreateApp] = useState(false);
-  const [showTemplates, setShowTemplates] = useState(false);
   const [templateSeed, setTemplateSeed] = useState<AppTemplate | null>(null);
   const [templateModel, setTemplateModel] = useState<string | null>(null);
 
@@ -453,7 +454,6 @@ function App() {
   };
 
   const selectTemplate = (template: AppTemplate, options?: { model?: string | null }) => {
-    setShowTemplates(false);
     setError("");
     setNotice("");
     setTemplateSeed(template);
@@ -547,6 +547,18 @@ function App() {
 
       {section === "environment" ? (
         <EnvironmentPage refreshKey={environmentRefreshKey} />
+      ) : section === "templates" ? (
+        <TemplateGallery
+          onSelect={selectTemplate}
+          storedApps={storedApps}
+          hostInfo={dockerInfo}
+          onViewApp={(appId) => {
+            const storedApp = storedApps.find((app) => app.id === appId);
+            if (storedApp) {
+              viewApp(storedApp);
+            }
+          }}
+        />
       ) : section === "cron" ? (
         <CronPage apps={storedApps} />
       ) : section === "repositories" ? (
@@ -573,7 +585,7 @@ function App() {
           onDeleteApp={(container) => void deleteApp(container)}
           onViewApp={viewApp}
           onCreateApp={openCreateApp}
-          onBrowseTemplates={() => setShowTemplates(true)}
+          onBrowseTemplates={() => goToSection("templates")}
         />
       ) : section === "apps" ? (
         <AppsPage
@@ -587,7 +599,7 @@ function App() {
           onDeleteMissingApp={(storedApp) => void deleteMissingApp(storedApp)}
           onViewApp={viewApp}
           onCreateApp={openCreateApp}
-          onBrowseTemplates={() => setShowTemplates(true)}
+          onBrowseTemplates={() => goToSection("templates")}
           onUpdateAll={(list) => void updateAllApps(list)}
           updateAllLoading={actionLoading === "update-all"}
         />
@@ -621,21 +633,6 @@ function App() {
           onOpenLogs={(container) => setSelectedContainer(container)}
         />
       )}
-
-      <TemplateGallery
-        open={showTemplates}
-        onClose={() => setShowTemplates(false)}
-        onSelect={selectTemplate}
-        storedApps={storedApps}
-        hostInfo={dockerInfo}
-        onViewApp={(appId) => {
-          const storedApp = storedApps.find((app) => app.id === appId);
-          setShowTemplates(false);
-          if (storedApp) {
-            viewApp(storedApp);
-          }
-        }}
-      />
 
       <CreateAppWizard
         open={showCreateApp}

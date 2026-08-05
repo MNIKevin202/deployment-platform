@@ -14,8 +14,6 @@ import {
 import { assessHostForTemplate, formatGb } from "../lib/templateResources";
 
 interface TemplateGalleryProps {
-  open: boolean;
-  onClose: () => void;
   /** `model` is set only for templates that offer a first model download. */
   onSelect: (template: AppTemplate, options?: { model?: string | null }) => void;
   /** Existing apps, used to detect a template that's already installed. */
@@ -61,65 +59,63 @@ function TemplateIcon({ template, large }: { template: AppTemplate; large?: bool
 }
 
 export default function TemplateGallery({
-  open,
-  onClose,
   onSelect,
   storedApps,
   onViewApp,
   hostInfo
 }: TemplateGalleryProps) {
   const [selected, setSelected] = useState<AppTemplate | null>(null);
+  const [search, setSearch] = useState("");
+  const [activeCategory, setActiveCategory] = useState<TemplateCategory | null>(null);
 
-  // Escape backs out of the detail view first, then closes. Clicking the
-  // backdrop deliberately does nothing, so a stray click can't discard things.
+  // Escape backs out of the detail view to the list. As a page (rather than a
+  // modal) there is nothing to close beyond that.
   useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") {
-        return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSelected(null);
       }
-      setSelected((current) => {
-        if (current) {
-          return null;
-        }
-        onClose();
-        return null;
-      });
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  // Reset the detail view whenever the gallery is reopened.
-  useEffect(() => {
-    if (!open) {
-      setSelected(null);
     }
-  }, [open]);
-
-  if (!open) {
-    return null;
-  }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const selectedMatch = selected ? findInstalledTemplateApp(selected, storedApps) : null;
   const selectedDbStatus = selected ? requiredDatabaseStatus(selected, storedApps) : null;
 
-  return (
-    <div className="modal-backdrop">
-      <section className="form-modal wide template-gallery" role="dialog" aria-modal="true" aria-label="App templates">
-        <header>
-          <div>
-            <p className="eyebrow">New app</p>
-            <h2>{selected ? selected.name : "One-click templates"}</h2>
-          </div>
-          <button className="close-button" type="button" onClick={onClose}>
-            Close
-          </button>
-        </header>
+  const query = search.trim().toLowerCase();
+  const matchesQuery = (template: AppTemplate) =>
+    query === "" ||
+    template.name.toLowerCase().includes(query) ||
+    template.description.toLowerCase().includes(query);
 
-        {selected ? (
+  // Counts are per-category over the search results, so a chip's number
+  // always reflects what clicking it would actually show.
+  const visibleByCategory = new Map<TemplateCategory, AppTemplate[]>(
+    CATEGORIES.map((category) => [category, templatesInCategory(category).filter(matchesQuery)])
+  );
+  const totalVisible = CATEGORIES.reduce(
+    (sum, category) => sum + (visibleByCategory.get(category)?.length ?? 0),
+    0
+  );
+  const shownCategories = CATEGORIES.filter(
+    (category) => activeCategory === null || activeCategory === category
+  );
+
+  if (selected) {
+    return (
+      <div className="page">
+        <section className="page-section template-gallery-page">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Template</p>
+              <h2>{selected.name}</h2>
+            </div>
+            <button className="secondary-button compact" type="button" onClick={() => setSelected(null)}>
+              ← All templates
+            </button>
+          </div>
+
           <TemplateDetail
             template={selected}
             installedMatch={selectedMatch}
@@ -130,23 +126,85 @@ export default function TemplateGallery({
             onViewApp={onViewApp}
             onSelectTemplate={setSelected}
           />
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <div className="page">
+      <section className="page-section template-gallery-page">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">New app</p>
+            <h2>One-click templates</h2>
+          </div>
+        </div>
+
+        <p className="text-faint">
+          Pick a service to see what it sets up, then install to pre-fill the Create App wizard —
+          image, port, environment (with generated passwords where needed), and storage.
+        </p>
+
+        <div className="apps-filter-row">
+          <input
+            className="apps-filter-search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search templates..."
+            aria-label="Search templates"
+          />
+          <span className="apps-filter-count text-faint">
+            {totalVisible} template{totalVisible === 1 ? "" : "s"}
+          </span>
+        </div>
+
+        <div className="apps-filter-pill-row">
+          <div className="apps-filter-chips" role="group" aria-label="Template categories">
+            <button
+              type="button"
+              className={`apps-filter-chip ${activeCategory === null ? "active" : ""}`}
+              aria-pressed={activeCategory === null}
+              onClick={() => setActiveCategory(null)}
+            >
+              All <span className="apps-filter-chip-count">{totalVisible}</span>
+            </button>
+            {CATEGORIES.map((category) => (
+              <button
+                key={category}
+                type="button"
+                className={`apps-filter-chip ${activeCategory === category ? "active" : ""}`}
+                aria-pressed={activeCategory === category}
+                onClick={() => setActiveCategory(category)}
+              >
+                {category}{" "}
+                <span className="apps-filter-chip-count">
+                  {visibleByCategory.get(category)?.length ?? 0}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {totalVisible === 0 ? (
+          <div className="empty-state">
+            <h3>No templates match "{search}"</h3>
+            <p>Try a different search term, or pick another category.</p>
+          </div>
         ) : (
           <>
-            <p className="dialog-description">
-              Pick a service to see what it sets up, then install to pre-fill the Create App wizard —
-              image, port, environment (with generated passwords where needed), and storage.
-            </p>
-
             <div className="template-gallery-body">
-              {CATEGORIES.map((category) => {
-                const items = templatesInCategory(category);
+              {shownCategories.map((category) => {
+                const items = visibleByCategory.get(category) ?? [];
                 if (items.length === 0) {
                   return null;
                 }
 
                 return (
                   <div key={category} className="template-category">
-                    <h3>{category}</h3>
+                    <h3>
+                      {category} <span className="template-category-count">{items.length}</span>
+                    </h3>
                     <div className="template-grid">
                       {items.map((template) => {
                         const installed = findInstalledTemplateApp(template, storedApps) !== null;
