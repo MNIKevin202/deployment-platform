@@ -978,6 +978,11 @@ export default function CreateAppWizard({
 
       setCreatedApp(result.app);
 
+      const templateNotice = postInstallNoticeForTemplate(initialTemplate, envRows);
+      if (templateNotice) {
+        setPostCreateNotice(templateNotice);
+      }
+
       if (pendingModel) {
         await startInitialModelDownload(result.app.id, pendingModel);
       }
@@ -2446,4 +2451,41 @@ export default function CreateAppWizard({
       />
     </div>
   );
+}
+
+/**
+ * A template-specific message shown on the wizard's success screen, alongside
+ * the app's URL and container status.
+ *
+ * This exists for the things an operator needs to know immediately after
+ * install but that the generic summary can't express — for CanvasMint, which
+ * sign-in mode it actually came up in, and where its projects are kept. It is
+ * derived from the env rows as submitted rather than from the template's
+ * defaults, so editing the admin fields in the wizard changes what is said.
+ */
+export function postInstallNoticeForTemplate(
+  template: AppTemplate | null | undefined,
+  envRows: ReadonlyArray<{ key: string; value: string; enabled: boolean }>
+): string {
+  if (template?.id !== "canvasmint") {
+    return "";
+  }
+
+  const valueOf = (key: string) =>
+    envRows.find((row) => row.enabled && row.key === key)?.value.trim() ?? "";
+
+  const username = valueOf("ADMIN_USERNAME");
+  const password = valueOf("ADMIN_PASSWORD");
+
+  // CanvasMint requires BOTH to enable authentication; a half-filled pair
+  // leaves it open, so the notice has to say which of the three states the
+  // install actually landed in rather than assume.
+  const signIn =
+    username && password
+      ? `Sign in as "${username}" with the admin password you set — it is stored as a secret env var on this app.`
+      : username || password
+        ? "Only one of ADMIN_USERNAME/ADMIN_PASSWORD was set, so CanvasMint opened in single-user mode with no sign-in. Set both from the Environment tab and restart to require a login."
+        : "CanvasMint opened in single-user mode — anyone who can reach its domain can edit. Set ADMIN_USERNAME and ADMIN_PASSWORD from the Environment tab and restart to require a sign-in.";
+
+  return `${signIn} Projects, uploaded images, and thumbnails are stored on this app's persistent volume at /app/data, so they survive restarts, redeploys, and image upgrades.`;
 }
