@@ -4,6 +4,7 @@ import type { AppDatabase } from "../database.js";
 import {
   clearSpeedtestConnection,
   getSpeedtestConnectionInfo,
+  runSpeedtest,
   saveSpeedtestConnection,
   type SpeedtestDeps,
   type SpeedtestProvider
@@ -66,6 +67,27 @@ export async function registerSpeedtestRoutes(
       clearSpeedtestConnection(appDatabase);
       provider.invalidate();
       return { success: true, ...getSpeedtestConnectionInfo(appDatabase) };
+    }
+  );
+
+  /**
+   * Queues a test on the connected instance. The result isn't available
+   * immediately — Speedtest Tracker runs it in the background — so the
+   * cached reading is dropped and the panel picks up the new value on its
+   * next poll.
+   */
+  fastify.post(
+    "/speedtest/run",
+    { config: { rateLimit: { max: 6, timeWindow: "1 minute" } } },
+    async (_request, reply) => {
+      const result = await runSpeedtest(buildDeps());
+
+      if (!result.success) {
+        return reply.code(result.statusCode ?? 400).send({ success: false, message: result.message });
+      }
+
+      provider.invalidate();
+      return { success: true, message: result.message };
     }
   );
 

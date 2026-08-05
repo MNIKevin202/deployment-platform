@@ -1604,6 +1604,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
       "Scheduled speed tests, graphed over time",
       "Great for catching ISP slowdowns",
       "Uses its own SQLite database — no external DB needed",
+      "Runs automatically every 6 hours by default (SPEEDTEST_SCHEDULE)",
       "Admin login is seeded on first boot from the values below"
     ],
     image: "lscr.io/linuxserver/speedtest-tracker:latest",
@@ -1615,6 +1616,13 @@ export const APP_TEMPLATES: AppTemplate[] = [
       { key: "TZ", value: "Etc/UTC" },
       { key: "APP_KEY", generate: "password", generateLength: 32, secret: true },
       { key: "DB_CONNECTION", value: "sqlite" },
+      /*
+       * Without a schedule the app records nothing at all — it only tests
+       * when told to. Every 6 hours is frequent enough to spot a degraded
+       * connection without saturating the link (a test consumes real
+       * bandwidth). Edit or clear it before installing to suit.
+       */
+      { key: "SPEEDTEST_SCHEDULE", value: "0 */6 * * *" },
       /*
        * These three seed the admin account, and ONLY on the first boot — the
        * app writes the user row into /config/database.sqlite and afterwards

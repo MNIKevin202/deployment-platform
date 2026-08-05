@@ -14,6 +14,7 @@ export default function SpeedtestSettings() {
   const [token, setToken] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -89,6 +90,24 @@ export default function SpeedtestSettings() {
     }
   };
 
+  const runNow = async () => {
+    try {
+      setRunning(true);
+      setError("");
+      setNotice("");
+      const response = await fetch("/api/speedtest/run", { method: "POST" });
+      const result = (await response.json().catch(() => null)) as ApiError | null;
+      if (!response.ok) {
+        throw new Error(result?.message || "Could not start a speed test.");
+      }
+      setNotice(result?.message ?? "Speed test started.");
+    } catch (runError) {
+      setError(runError instanceof Error ? runError.message : "Could not start a speed test.");
+    } finally {
+      setRunning(false);
+    }
+  };
+
   const configured = connection?.configured ?? false;
 
   return (
@@ -107,7 +126,8 @@ export default function SpeedtestSettings() {
         </a>{" "}
         instance to show your connection's latest download, upload, and ping on the Overview and System
         pages. Generate a token under <code className="inline-code">/admin/api-tokens</code> in Speedtest
-        Tracker — it needs the <strong>Read Results</strong> ability.
+        Tracker — it needs the <strong>Read Results</strong> ability, plus{" "}
+        <strong>Run Speedtest</strong> if you want the button below to start one.
       </p>
 
       {error && <div className="error-banner">{error}</div>}
@@ -163,8 +183,18 @@ export default function SpeedtestSettings() {
             <button
               className="secondary-button"
               type="button"
+              onClick={() => void runNow()}
+              disabled={running || saving}
+            >
+              {running ? "Starting…" : "Run test now"}
+            </button>
+          )}
+          {configured && (
+            <button
+              className="secondary-button"
+              type="button"
               onClick={() => void disconnect()}
-              disabled={saving}
+              disabled={saving || running}
             >
               Disconnect
             </button>
