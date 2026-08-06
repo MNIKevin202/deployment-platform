@@ -12,14 +12,14 @@ import { isBlueprintImage } from "../lib/appKind";
 const blueprint = APP_TEMPLATES.find((template) => template.id === "blueprint");
 
 describe("Blueprint template", () => {
-  test("appears in the AI category as a DevMinted Original", () => {
+  test("appears in the Exclusive Apps category as a DevMinted Original", () => {
     expect(blueprint).toBeDefined();
-    expect(blueprint!.category).toBe("AI");
+    expect(blueprint!.category).toBe("Exclusive Apps");
     expect(blueprint!.badge).toBe("DevMinted Original");
     expect(blueprint!.description).toBe(
       "Private AI workspace powered by models running directly on your VPS."
     );
-    expect(templatesInCategory("AI").map((t) => t.id)).toContain("blueprint");
+    expect(templatesInCategory("Exclusive Apps").map((t) => t.id)).toContain("blueprint");
   });
 
   test("uses a first-party icon rather than an external logo", () => {
@@ -227,9 +227,9 @@ describe("existing templates are unaffected", () => {
     expect(withCompanions.map((t) => t.id).sort()).toEqual(["blueprint", "rustdesk"]);
 
     // The badge marks a first-party app, so this set grows only when we ship
-    // one — Blueprint (AI) and CanvasMint (Graphics) so far.
+    // one — Blueprint, CanvasMint, and SitePhotos (all Exclusive Apps) so far.
     const badged = APP_TEMPLATES.filter((t) => t.badge);
-    expect(badged.map((t) => t.id)).toEqual(["blueprint", "canvasmint"]);
+    expect(badged.map((t) => t.id)).toEqual(["blueprint", "canvasmint", "sitephotos"]);
   });
 
   test("every companion's app name stays a valid platform app slug", () => {

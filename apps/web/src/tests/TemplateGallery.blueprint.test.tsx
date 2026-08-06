@@ -28,10 +28,10 @@ async function openBlueprint(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("TemplateGallery — Blueprint", () => {
-  test("lists Blueprint under an AI category with its badge", () => {
+  test("lists Blueprint under an Exclusive Apps category with its badge", () => {
     renderGallery();
 
-    expect(screen.getByRole("heading", { name: /^AI/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^Exclusive Apps/ })).toBeInTheDocument();
     expect(screen.getAllByText("DevMinted Original").length).toBeGreaterThan(0);
     expect(
       screen.getByText("Private AI workspace powered by models running directly on your VPS.")

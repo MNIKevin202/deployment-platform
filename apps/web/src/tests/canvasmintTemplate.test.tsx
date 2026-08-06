@@ -29,18 +29,18 @@ function installFetchMock() {
 }
 
 describe("CanvasMint in the template gallery", () => {
-  test("appears under a Graphics category chip", () => {
+  test("appears under an Exclusive Apps category chip", () => {
     render(
       <TemplateGallery onSelect={() => {}} storedApps={[]} onViewApp={() => {}} hostInfo={null} />
     );
 
     const chips = screen.getByRole("group", { name: "Template categories" });
-    expect(within(chips).getByRole("button", { name: /^Graphics/ })).toBeInTheDocument();
+    expect(within(chips).getByRole("button", { name: /^Exclusive Apps/ })).toBeInTheDocument();
     expect(screen.getByText("CanvasMint")).toBeInTheDocument();
   });
 
-  test("Graphics contains CanvasMint", () => {
-    expect(templatesInCategory("Graphics").map((entry) => entry.id)).toContain("canvasmint");
+  test("Exclusive Apps contains CanvasMint", () => {
+    expect(templatesInCategory("Exclusive Apps").map((entry) => entry.id)).toContain("canvasmint");
   });
 
   test("its detail view states the image, port, and volume before installing", async () => {

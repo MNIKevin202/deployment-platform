@@ -26,7 +26,7 @@ describe("APP_TEMPLATES catalog", () => {
   });
 
   test("templatesInCategory returns entries sorted A–Z, case-insensitively", () => {
-    for (const category of ["Graphics", "Databases", "Apps", "Tools"] as const) {
+    for (const category of ["Exclusive Apps", "Databases", "Apps", "Tools"] as const) {
       const names = templatesInCategory(category).map((t) => t.name);
       const sorted = [...names].sort((a, b) =>
         a.localeCompare(b, undefined, { sensitivity: "base" })
@@ -160,9 +160,9 @@ describe("APP_TEMPLATES catalog", () => {
 describe("CanvasMint", () => {
   const template = APP_TEMPLATES.find((entry) => entry.id === "canvasmint");
 
-  test("is in the catalog under Graphics as a first-party template", () => {
+  test("is in the catalog under Exclusive Apps as a first-party template", () => {
     expect(template).toBeDefined();
-    expect(template!.category).toBe("Graphics");
+    expect(template!.category).toBe("Exclusive Apps");
     expect(template!.badge).toBe("DevMinted Original");
     expect(template!.iconImage).toBe("/canvasmint-icon.png");
   });

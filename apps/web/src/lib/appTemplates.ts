@@ -10,7 +10,7 @@ export interface TemplateEnvVar {
   generateLength?: number;
 }
 
-export type TemplateCategory = "AI" | "Graphics" | "Databases" | "Apps" | "Tools";
+export type TemplateCategory = "Exclusive Apps" | "Databases" | "Apps" | "Tools";
 
 /**
  * A second service a template deploys alongside its main app — e.g.
@@ -237,11 +237,11 @@ export const BLUEPRINT_MODEL_CHOICES: TemplateModelChoice[] = [
 ];
 
 export const APP_TEMPLATES: AppTemplate[] = [
-  // ---- AI ----
+  // ---- Exclusive Apps ----
   {
     id: "blueprint",
     name: "Blueprint",
-    category: "AI",
+    category: "Exclusive Apps",
     icon: "🧠",
     iconImage: "/blueprint-icon.png",
     badge: "DevMinted Original",
@@ -321,11 +321,10 @@ export const APP_TEMPLATES: AppTemplate[] = [
     ]
   },
 
-  // ---- Graphics ----
   {
     id: "canvasmint",
     name: "CanvasMint",
-    category: "Graphics",
+    category: "Exclusive Apps",
     icon: "🎨",
     iconImage: "/canvasmint-icon.png",
     badge: "DevMinted Original",
@@ -373,7 +372,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
   {
     id: "sitephotos",
     name: "SitePhotos",
-    category: "Graphics",
+    category: "Exclusive Apps",
     icon: "🖼️",
     iconImage: "/sitephotos-icon.png",
     badge: "DevMinted Original",

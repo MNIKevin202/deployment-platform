@@ -24,9 +24,9 @@ interface TemplateGalleryProps {
   hostInfo?: { cpuCount: number; memoryTotalBytes: number } | null;
 }
 
-// AI and Graphics lead the list: they hold the platform's own first-party
-// templates (Blueprint and CanvasMint).
-const CATEGORIES: TemplateCategory[] = ["AI", "Graphics", "Databases", "Apps", "Tools"];
+// Exclusive Apps leads the list: it holds the platform's own first-party
+// templates (Blueprint, CanvasMint, SitePhotos).
+const CATEGORIES: TemplateCategory[] = ["Exclusive Apps", "Databases", "Apps", "Tools"];
 
 function envSummary(env: AppTemplate["env"][number]): string {
   if (env.generate === "password") {
