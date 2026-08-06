@@ -370,6 +370,50 @@ export const APP_TEMPLATES: AppTemplate[] = [
     // the generated session secret — lives under this one path.
     volumes: ["/app/data"]
   },
+  {
+    id: "sitephotos",
+    name: "SitePhotos",
+    category: "Graphics",
+    icon: "🖼️",
+    iconImage: "/sitephotos-icon.png",
+    badge: "DevMinted Original",
+    description:
+      "Self-hosted image hosting with a stable public link per image — replace the file any time without the link ever changing.",
+    longDescription:
+      "SitePhotos gives every uploaded image a permanent public URL you can drop into a website, app, or email template. When the image needs to change, use Replace Image on the dashboard — the file updates but the link stays exactly the same, so anything already pointing at it picks up the new version automatically. Images and metadata are stored on a single persistent volume, with no database to run or back up. It opens straight into single-user mode by default; fill in the optional admin fields below to require a sign-in for the dashboard (public image links always stay public either way).",
+    highlights: [
+      "One permanent public URL per image — replacing the file never changes the link",
+      "Drag-and-drop upload with instant copy-to-clipboard links",
+      "Public image links always stay public even when the dashboard is locked down",
+      "Optional single-user sign-in — leave the admin fields blank to skip it",
+      "One container, one HTTP port, no database"
+    ],
+    resources: {
+      minCpu: 1,
+      minMemoryMb: 256,
+      minDiskGb: 5,
+      recommendedCpu: 1,
+      recommendedMemoryMb: 512,
+      recommendedDiskGb: 10
+    },
+    image: "ghcr.io/mnikevin202/sitephotos:latest",
+    containerPort: 3000,
+    suggestedName: "sitephotos",
+    env: [
+      // Blank by default: with neither set, SitePhotos runs single-user with
+      // no sign-in. Setting BOTH turns authentication on for the dashboard;
+      // a half-filled pair is treated by the app as a misconfiguration and
+      // locks the dashboard down rather than running open by accident.
+      { key: "ADMIN_USERNAME", value: "" },
+      { key: "ADMIN_PASSWORD", value: "", secret: true },
+      // Signs session cookies. Generated per install so two deployments never
+      // share one.
+      { key: "SESSION_SECRET", generate: "password", generateLength: 48, secret: true },
+      { key: "MAX_UPLOAD_MB", value: "25" }
+    ],
+    // Uploaded images and their metadata live under this one path.
+    volumes: ["/app/data"]
+  },
 
   // ---- Databases ----
   {
