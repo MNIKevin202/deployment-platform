@@ -232,6 +232,54 @@ describe("CanvasMint", () => {
   });
 });
 
+describe("BuildAnApp", () => {
+  const template = APP_TEMPLATES.find((entry) => entry.id === "buildanapp");
+
+  test("is in the catalog under Exclusive Apps as a first-party template", () => {
+    expect(template).toBeDefined();
+    expect(template!.category).toBe("Exclusive Apps");
+    expect(template!.badge).toBe("DevMinted Original");
+    expect(template!.iconImage).toBe("/buildanapp-icon.png");
+  });
+
+  /**
+   * Unlike CanvasMint/SitePhotos, a session here can trigger arbitrary
+   * build-script execution with access to GITHUB_TOKEN — there must never be
+   * a blank-admin-fields "open" mode. Both credentials are generated, never
+   * a blank literal that would leave the dashboard unauthenticated.
+   */
+  test("always generates admin credentials — never ships an open-by-default mode", () => {
+    const username = template!.env.find((entry) => entry.key === "ADMIN_USERNAME")!;
+    const password = template!.env.find((entry) => entry.key === "ADMIN_PASSWORD")!;
+    expect(username.generate).toBe("password");
+    expect(username.value).toBeUndefined();
+    expect(password.generate).toBe("password");
+    expect(password.secret).toBe(true);
+    expect(password.value).toBeUndefined();
+  });
+
+  test("generates a secret API key for the CLI", () => {
+    const apiKey = template!.env.find((entry) => entry.key === "API_KEY")!;
+    expect(apiKey.generate).toBe("password");
+    expect(apiKey.secret).toBe(true);
+  });
+
+  test("leaves GITHUB_TOKEN blank for the operator to fill in, marked secret", () => {
+    const token = template!.env.find((entry) => entry.key === "GITHUB_TOKEN")!;
+    expect(token.value).toBe("");
+    expect(token.secret).toBe(true);
+  });
+
+  test("warns that .dmg isn't supported, and why", () => {
+    expect(template!.warning).toMatch(/dmg/i);
+    expect(template!.warning).toMatch(/apple|macos/i);
+  });
+
+  test("persists job records on /app/data", () => {
+    expect(template!.volumes).toEqual(["/app/data"]);
+  });
+});
+
 describe("generateSecret", () => {
   test("returns the requested length from a safe alphabet", () => {
     const secret = generateSecret(24);

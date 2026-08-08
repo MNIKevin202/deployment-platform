@@ -413,6 +413,58 @@ export const APP_TEMPLATES: AppTemplate[] = [
     // Uploaded files and their metadata live under this one path.
     volumes: ["/app/data"]
   },
+  {
+    id: "buildanapp",
+    name: "BuildAnApp",
+    category: "Exclusive Apps",
+    icon: "🛠️",
+    iconImage: "/buildanapp-icon.png",
+    badge: "DevMinted Original",
+    description:
+      "Self-hosted build service: turns an Electron app's source into a Windows installer and publishes it to GitHub Releases.",
+    longDescription:
+      "BuildAnApp takes a ready-to-package Electron app — a zip upload, or a GitHub repo it clones itself — and runs the whole release pipeline on your own VPS: install dependencies, run the project's build script, cross-compile a Windows .exe with electron-builder and Wine, then publish it as a GitHub Release asset. No GitHub-hosted runners involved. A companion CLI (downloadable from the dashboard) lets you kick off a build from the terminal with one command instead of using the web form. Unlike this platform's other exclusive apps, sign-in is never optional here — a signed-in session can trigger arbitrary build-script execution with access to your GitHub token, so the install generates real admin credentials up front rather than defaulting to an open dashboard.",
+    warning:
+      "macOS .dmg builds aren't supported yet — Apple's licensing terms block cross-building macOS installers on non-Apple hardware. Windows .exe only for now.",
+    highlights: [
+      "Upload a .zip or point at a GitHub repo — builds run on your own VPS, not GitHub-hosted runners",
+      "Cross-compiles a Windows .exe with electron-builder + Wine and publishes it to GitHub Releases",
+      "Terminal CLI included for scripted/CI-style triggering, alongside the web dashboard",
+      "One build at a time with a live log, so a heavy build never starves another",
+      "Sign-in is mandatory — admin credentials are generated at install, never left open"
+    ],
+    resources: {
+      minCpu: 2,
+      minMemoryMb: 2 * 1024,
+      minDiskGb: 20,
+      recommendedCpu: 4,
+      recommendedMemoryMb: 4 * 1024,
+      recommendedDiskGb: 40
+    },
+    image: "ghcr.io/mnikevin202/buildanapp:latest",
+    containerPort: 3000,
+    suggestedName: "buildanapp",
+    env: [
+      // Always generated, never left blank — an open dashboard here means
+      // arbitrary code execution with access to GITHUB_TOKEN, unlike the
+      // "blank admin fields = single-user mode" pattern the other exclusive
+      // apps use. Visible in the install summary like any generated secret.
+      { key: "ADMIN_USERNAME", generate: "password", generateLength: 10, secret: true },
+      { key: "ADMIN_PASSWORD", generate: "password", generateLength: 24, secret: true },
+      // Bearer token the CLI uses to start builds without a browser session.
+      { key: "API_KEY", generate: "password", generateLength: 40, secret: true },
+      // A GitHub PAT with repo scope — required to clone private source repos
+      // and to publish releases. Left blank: fill it in after install, from
+      // a token you create yourself. Builds run without it but fail clearly
+      // at the publish step until it's set.
+      { key: "GITHUB_TOKEN", value: "", secret: true },
+      { key: "SESSION_SECRET", generate: "password", generateLength: 48, secret: true },
+      { key: "MAX_UPLOAD_MB", value: "500" }
+    ],
+    // Job records and logs live here; build workspaces themselves are
+    // ephemeral temp directories cleaned up after each job.
+    volumes: ["/app/data"]
+  },
 
   // ---- Databases ----
   {

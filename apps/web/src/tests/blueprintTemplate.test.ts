@@ -227,9 +227,10 @@ describe("existing templates are unaffected", () => {
     expect(withCompanions.map((t) => t.id).sort()).toEqual(["blueprint", "rustdesk"]);
 
     // The badge marks a first-party app, so this set grows only when we ship
-    // one — Blueprint, CanvasMint, and SitePhotos (all Exclusive Apps) so far.
+    // one — Blueprint, CanvasMint, SitePhotos, and BuildAnApp (all Exclusive
+    // Apps) so far.
     const badged = APP_TEMPLATES.filter((t) => t.badge);
-    expect(badged.map((t) => t.id)).toEqual(["blueprint", "canvasmint", "sitephotos"]);
+    expect(badged.map((t) => t.id)).toEqual(["blueprint", "canvasmint", "sitephotos", "buildanapp"]);
   });
 
   test("every companion's app name stays a valid platform app slug", () => {
