@@ -377,15 +377,15 @@ export const APP_TEMPLATES: AppTemplate[] = [
     iconImage: "/sitephotos-icon.png",
     badge: "DevMinted Original",
     description:
-      "Self-hosted image hosting with a stable public link per image — replace the file any time without the link ever changing.",
+      "Self-hosted image and video hosting with a stable public link per file — replace it any time without the link ever changing.",
     longDescription:
-      "SitePhotos gives every uploaded image a permanent public URL you can drop into a website, app, or email template. When the image needs to change, use Replace Image on the dashboard — the file updates but the link stays exactly the same, so anything already pointing at it picks up the new version automatically. Images and metadata are stored on a single persistent volume, with no database to run or back up. It opens straight into single-user mode by default; fill in the optional admin fields below to require a sign-in for the dashboard (public image links always stay public either way).",
+      "SitePhotos gives every uploaded image or video a permanent public URL you can drop into a website, app, or email template. When the file needs to change, use Replace on the dashboard — the file updates but the link stays exactly the same, so anything already pointing at it picks up the new version automatically. Public links support HTTP Range requests, so video can be scrubbed without downloading the whole file. Files can be organized into folders from the dashboard; deleting a folder never deletes what's inside it. Everything is stored on a single persistent volume, with no database to run or back up. It opens straight into single-user mode by default; fill in the optional admin fields below to require a sign-in for the dashboard (public links always stay public either way).",
     highlights: [
-      "One permanent public URL per image — replacing the file never changes the link",
-      "Drag-and-drop upload with instant copy-to-clipboard links",
-      "Public image links always stay public even when the dashboard is locked down",
-      "Optional single-user sign-in — leave the admin fields blank to skip it",
-      "One container, one HTTP port, no database"
+      "One permanent public URL per file — replacing it never changes the link",
+      "Images and video, with Range-request support for scrubbing video",
+      "Drag-and-drop upload, folders to keep things organized, instant copy-to-clipboard links",
+      "Public links always stay public even when the dashboard is locked down",
+      "Optional single-user sign-in — leave the admin fields blank to skip it"
     ],
     resources: {
       minCpu: 1,
@@ -393,7 +393,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
       minDiskGb: 5,
       recommendedCpu: 1,
       recommendedMemoryMb: 512,
-      recommendedDiskGb: 10
+      recommendedDiskGb: 20
     },
     image: "ghcr.io/mnikevin202/sitephotos:latest",
     containerPort: 3000,
@@ -408,9 +408,9 @@ export const APP_TEMPLATES: AppTemplate[] = [
       // Signs session cookies. Generated per install so two deployments never
       // share one.
       { key: "SESSION_SECRET", generate: "password", generateLength: 48, secret: true },
-      { key: "MAX_UPLOAD_MB", value: "25" }
+      { key: "MAX_UPLOAD_MB", value: "250" }
     ],
-    // Uploaded images and their metadata live under this one path.
+    // Uploaded files and their metadata live under this one path.
     volumes: ["/app/data"]
   },
 
