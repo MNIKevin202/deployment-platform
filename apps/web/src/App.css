@@ -1415,6 +1415,148 @@ code {
   cursor: default;
 }
 
+/* ---------- Add / Edit Database Connection dialog ---------- */
+
+.connection-modal .field {
+  display: grid;
+  gap: 9px;
+}
+
+.connection-modal .field-label {
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+/* Database-type picker — colored chips instead of a bare dropdown. */
+.connection-kind-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kind-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.83rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.kind-chip:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+.kind-chip.active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+}
+
+.kind-chip:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.kind-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--kind-color, #8a8f98);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--kind-color, #8a8f98) 22%, transparent);
+}
+
+.kind-chip[data-kind="mongodb"] {
+  --kind-color: #13aa52;
+}
+.kind-chip[data-kind="postgres"] {
+  --kind-color: #4a90d9;
+}
+.kind-chip[data-kind="mysql"] {
+  --kind-color: #e48e00;
+}
+.kind-chip[data-kind="redis"] {
+  --kind-color: #d82c20;
+}
+.kind-chip[data-kind="sqlite"] {
+  --kind-color: #0f80cc;
+}
+.kind-chip[data-kind="other"] {
+  --kind-color: #8a8f98;
+}
+
+/* Connection string field with an inline Show / Hide affordance. */
+.input-affix {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input-affix input {
+  padding-right: 74px;
+}
+
+.input-affix .input-affix-btn {
+  position: absolute;
+  right: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.input-affix .input-affix-btn:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+.input-affix .input-affix-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.connection-modal input.mono {
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+}
+
+/* The "share with every app" controls, grouped so they read as one action. */
+.connection-share-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--color-accent-soft);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+}
+
+.connection-share-card .share-card-title {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-accent);
+}
+
+.connection-modal .form-actions {
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-soft);
+  margin-top: 2px;
+}
+
 .env-source-badge {
   font-size: 0.65rem;
   font-weight: 700;
