@@ -38,6 +38,7 @@ import BulkEnvVarDialog from "./BulkEnvVarDialog";
 import InstallProgressModal from "./InstallProgressModal";
 import {
   companionAppName,
+  generateNameSuffix,
   generateSecret,
   resolveTemplatePlaceholders,
   type AppTemplate,
@@ -296,6 +297,13 @@ export default function CreateAppWizard({
   const [templateCompanions, setTemplateCompanions] = useState<TemplateCompanion[]>([]);
   const [pendingModel, setPendingModel] = useState<string | null>(null);
 
+  // A guided template (currently just the Postgres database template)
+  // renders a small dedicated screen instead of the full step-by-step
+  // wizard — see the render branch near the bottom of this component.
+  const [guidedMode, setGuidedMode] = useState(false);
+  const [guidedShowPassword, setGuidedShowPassword] = useState(false);
+  const [guidedCopied, setGuidedCopied] = useState(false);
+
   const [routingChoice, setRoutingChoice] = useState<"public" | "internal">("public");
   const [domainChoice, setDomainChoice] = useState<"default" | "custom">("default");
   const [customDomain, setCustomDomain] = useState("");
@@ -353,6 +361,9 @@ export default function CreateAppWizard({
     setPortRows([]);
     setTemplateCompanions([]);
     setPendingModel(null);
+    setGuidedMode(false);
+    setGuidedShowPassword(false);
+    setGuidedCopied(false);
     setRoutingChoice("public");
     setDomainChoice("default");
     setCustomDomain("");
@@ -392,7 +403,12 @@ export default function CreateAppWizard({
       return;
     }
     setSourceType("manual");
-    setName(sanitizeAppName(initialTemplate.suggestedName));
+    setGuidedMode(Boolean(initialTemplate.guided));
+    setName(
+      initialTemplate.guided
+        ? `${sanitizeAppName(initialTemplate.suggestedName)}-${generateNameSuffix()}`
+        : sanitizeAppName(initialTemplate.suggestedName)
+    );
     setImage(initialTemplate.image);
     setContainerPort(String(initialTemplate.containerPort));
     setContainerPortManuallySet(true);
@@ -652,6 +668,17 @@ export default function CreateAppWizard({
   const trimmedImage = image.trim();
   const parsedPort = Number(containerPort);
 
+  // Guided mode's two freehand fields — looked up by key rather than a
+  // fixed row index so updateEnvRow (shared with the full wizard) keeps
+  // working unmodified.
+  const guidedUsernameRow = envRows.find((row) => row.key === "POSTGRES_USER");
+  const guidedPasswordRow = envRows.find((row) => row.key === "POSTGRES_PASSWORD");
+  const guidedUsername = guidedUsernameRow?.value ?? "";
+  const guidedPassword = guidedPasswordRow?.value ?? "";
+  const guidedUsernameValid = /^[a-z_][a-z0-9_]*$/i.test(guidedUsername.trim());
+  const guidedPasswordValid = guidedPassword.trim().length >= 8;
+  const guidedValid = guidedUsernameValid && guidedPasswordValid;
+
   const githubNodejsStartScriptMissing =
     githubSelectedStrategy === "nodejs" && githubInspection?.packageJson?.hasStartScript === false;
 
@@ -875,6 +902,55 @@ export default function CreateAppWizard({
       window.setTimeout(() => setBriefCopied(false), 2000);
     } catch {
       setBriefError("Unable to copy to the clipboard. Select and copy the text manually.");
+    }
+  };
+
+  /**
+   * A ready-to-paste block for an AI coding assistant: the connection
+   * string plus the facts an assistant can't infer on its own (internal-only
+   * networking, the container-name host, that this is Postgres). Values are
+   * read from envRows/app at copy time, not from the template's defaults, so
+   * they always match what was actually submitted.
+   */
+  const guidedConnectionInstructions = (app: CreatedAppSummary): string => {
+    const dbName =
+      envRows.find((row) => row.key === "POSTGRES_DB")?.value.trim() || "postgres";
+    const user = guidedUsername.trim();
+    const password = guidedPassword.trim();
+    const connectionString = `postgresql://${user}:${password}@${app.containerName}:${app.containerPort}/${dbName}`;
+
+    return [
+      `Connect to the PostgreSQL database "${app.name}" on this platform:`,
+      "",
+      `Host: ${app.containerName}`,
+      `Port: ${app.containerPort}`,
+      `Database: ${dbName}`,
+      `Username: ${user}`,
+      `Password: ${password}`,
+      `Connection string: ${connectionString}`,
+      "",
+      "Notes:",
+      "- This database is internal-only: it has no public domain and is reachable" +
+        " only from other apps on this platform's private Docker network, by" +
+        " container name (the host above) — not from the public internet.",
+      "- The app that needs this database must be deployed on the same platform," +
+        " so it can resolve that hostname.",
+      `- Set the connection string as that app's DATABASE_URL environment variable` +
+        " (or the equivalent for the Postgres driver/ORM in use)."
+    ].join("\n");
+  };
+
+  const copyGuidedInstructions = async () => {
+    if (!createdApp) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(guidedConnectionInstructions(createdApp));
+      setGuidedCopied(true);
+      window.setTimeout(() => setGuidedCopied(false), 2000);
+    } catch {
+      setCreateError("Unable to copy to the clipboard. Select and copy the text manually.");
     }
   };
 
@@ -1167,7 +1243,7 @@ export default function CreateAppWizard({
           </button>
         </header>
 
-        {!createdApp && (
+        {!createdApp && !guidedMode && (
           <div className="wizard-steps">
             {STEP_LABELS.map((label, index) => (
               <div
@@ -1222,6 +1298,23 @@ export default function CreateAppWizard({
                 </div>
               </dl>
 
+              {guidedMode && (
+                <div className="wizard-connect-instructions">
+                  <p className="section-description">
+                    Ready to hand this to an AI coding assistant — the
+                    connection string plus what it needs to know about this
+                    platform.
+                  </p>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void copyGuidedInstructions()}
+                  >
+                    {guidedCopied ? "Copied!" : "Copy AI Connection Instructions"}
+                  </button>
+                </div>
+              )}
+
               <div className="form-actions wizard-success-actions">
                 <button
                   className="secondary-button"
@@ -1240,6 +1333,107 @@ export default function CreateAppWizard({
               </div>
             </div>
           </div>
+        ) : guidedMode ? (
+          <>
+            <div className="wizard-body">
+              <p className="section-description">
+                Only two fields to fill in — everything else (image, port,
+                database name, and storage) is set automatically. This
+                database is internal-only: it's reachable by your other apps
+                on this platform, never from the public internet.
+              </p>
+
+              <label>
+                <span>Database username</span>
+                <input
+                  value={guidedUsername}
+                  onChange={(event) => {
+                    if (guidedUsernameRow) {
+                      updateEnvRow(guidedUsernameRow.rowId, { value: event.target.value });
+                    }
+                  }}
+                  placeholder="app_user"
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoFocus
+                />
+                {guidedUsername.trim().length > 0 && !guidedUsernameValid && (
+                  <small className="text-faint">
+                    Letters, numbers, and underscores only — must start with a letter or underscore.
+                  </small>
+                )}
+              </label>
+
+              <label>
+                <span>Database password</span>
+                <div className="guided-password-row">
+                  <input
+                    type={guidedShowPassword ? "text" : "password"}
+                    value={guidedPassword}
+                    onChange={(event) => {
+                      if (guidedPasswordRow) {
+                        updateEnvRow(guidedPasswordRow.rowId, { value: event.target.value });
+                      }
+                    }}
+                    placeholder="At least 8 characters"
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoComplete="new-password"
+                  />
+                  <button
+                    className="secondary-button compact"
+                    type="button"
+                    onClick={() => setGuidedShowPassword((current) => !current)}
+                  >
+                    {guidedShowPassword ? "Hide" : "Show"}
+                  </button>
+                  <button
+                    className="secondary-button compact"
+                    type="button"
+                    onClick={() => {
+                      if (guidedPasswordRow) {
+                        updateEnvRow(guidedPasswordRow.rowId, { value: generateSecret(20) });
+                        setGuidedShowPassword(true);
+                      }
+                    }}
+                  >
+                    Generate
+                  </button>
+                </div>
+                {guidedPassword.trim().length > 0 && !guidedPasswordValid && (
+                  <small className="text-faint">At least 8 characters.</small>
+                )}
+              </label>
+
+              {createError && (
+                <div className="error-banner" role="alert">
+                  {createError}
+                </div>
+              )}
+            </div>
+
+            <div className="wizard-footer">
+              <div className="wizard-footer-right">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={creating}
+                  onClick={handleClose}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={creating || !guidedValid}
+                  onClick={() => void submitCreate()}
+                >
+                  {creating ? "Creating..." : "Create Database"}
+                </button>
+              </div>
+            </div>
+          </>
         ) : (
           <>
             <div className="wizard-body">

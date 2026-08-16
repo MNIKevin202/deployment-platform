@@ -112,6 +112,15 @@ export interface AppTemplate {
   warning?: string;
   /** Optional post-install model choice — see MODEL_CHOICES below. */
   modelChoices?: TemplateModelChoice[];
+  /**
+   * Renders a compact, dedicated setup screen instead of the normal
+   * multi-step wizard — every field is auto-filled and the app name is
+   * auto-generated, leaving only the specific fields that guided mode
+   * knows how to render (currently: a Postgres username/password) as
+   * freehand input. The normal template flow (full wizard, every field
+   * editable) still works for every template that doesn't set this.
+   */
+  guided?: boolean;
 }
 
 /**
@@ -166,6 +175,25 @@ export function templatesInCategory(category: TemplateCategory): AppTemplate[] {
   return APP_TEMPLATES.filter((template) => template.category === category).sort(
     (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
   );
+}
+
+/**
+ * A short random lowercase-hex suffix for auto-generated app names (e.g.
+ * "postgres-a1b2c3"), so a guided install never asks the operator to pick a
+ * name. Hex-only keeps it a trivially valid app-name segment.
+ */
+export function generateNameSuffix(length = 6): string {
+  const bytes = new Uint8Array(Math.ceil(length / 2));
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, length);
 }
 
 /** A random URL-safe secret, e.g. for a generated database password. */
@@ -464,6 +492,43 @@ export const APP_TEMPLATES: AppTemplate[] = [
     // Job records and logs live here; build workspaces themselves are
     // ephemeral temp directories cleaned up after each job.
     volumes: ["/app/data"]
+  },
+
+  {
+    id: "postgres-guided",
+    name: "PostgreSQL Database",
+    category: "Exclusive Apps",
+    icon: "🐘",
+    badge: "Guided Setup",
+    description:
+      "The easiest way to spin up a Postgres database — a short guided setup with everything auto-filled except your username and password.",
+    longDescription:
+      "A dedicated, simplified setup for a PostgreSQL database, for anyone who finds the general Create App wizard's many database-related fields confusing. The image, port, database name, and persistent storage are all set automatically — the only two things to type are a database username and password. The database is created internal-only: it has no public domain and is reachable only by your other apps, over the platform's private network, by container name.",
+    highlights: [
+      "Only two fields to fill in: database username and password",
+      "Everything else — image, port, database name, storage — is set automatically",
+      "Internal only by default: never exposed to the public internet",
+      "Ends with a ready-to-copy connection string and AI-assistant setup instructions"
+    ],
+    resources: {
+      minCpu: 1,
+      minMemoryMb: 256,
+      minDiskGb: 5,
+      recommendedCpu: 1,
+      recommendedMemoryMb: 512,
+      recommendedDiskGb: 10
+    },
+    image: "postgres:16-alpine",
+    containerPort: 5432,
+    suggestedName: "postgres",
+    internalOnly: true,
+    guided: true,
+    env: [
+      { key: "POSTGRES_USER", value: "" },
+      { key: "POSTGRES_PASSWORD", value: "", secret: true },
+      { key: "POSTGRES_DB", value: "app" }
+    ],
+    volumes: ["/var/lib/postgresql/data"]
   },
 
   // ---- Databases ----

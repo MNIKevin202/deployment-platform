@@ -2242,6 +2242,24 @@ code {
   padding-top: 8px;
 }
 
+.wizard-connect-instructions {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-sm);
+  justify-items: start;
+}
+
+.guided-password-row {
+  display: flex;
+  gap: 8px;
+}
+
+.guided-password-row input {
+  flex: 1;
+}
+
 @media (max-width: 640px) {
   .wizard-modal {
     max-height: 94vh;
