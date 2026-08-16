@@ -166,6 +166,37 @@ export interface EnvVarFormValues {
   enabled: boolean;
 }
 
+export type DatabaseConnectionKind =
+  | "mongodb"
+  | "postgres"
+  | "mysql"
+  | "redis"
+  | "sqlite"
+  | "other";
+
+/** A stored database connection as the list/detail endpoints return it: the
+ * raw connection string is never included, only a redacted `preview`. */
+export interface MaskedDatabaseConnection {
+  id: number;
+  name: string;
+  kind: DatabaseConnectionKind;
+  envKey: string | null;
+  preview: string;
+  inGlobalEnv: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConnectionFormValues {
+  name: string;
+  kind: DatabaseConnectionKind;
+  connectionString: string;
+  envKey: string;
+  /** When set, the connection is pushed to the global environment right after
+   * it is saved, so every app inherits it. */
+  injectGlobally: boolean;
+}
+
 export interface ApiError {
   message?: string;
 }

@@ -15,8 +15,16 @@ import { createPerformanceDiagnosticsRepository } from "./performance-diagnostic
 import { createIdempotencyRepository } from "./idempotency-database.js";
 import { createInstallationRepository } from "./installation-database.js";
 import { createCronJobRepository } from "./cron-job-database.js";
+import { createConnectionRepository } from "./connection-database.js";
 
 export type { StoredGithubAppInstallation, UpsertGithubAppInstallationInput } from "./installation-database.js";
+
+export type {
+  StoredDatabaseConnection,
+  DatabaseConnectionKind,
+  CreateDatabaseConnectionInput,
+  UpdateDatabaseConnectionInput
+} from "./connection-database.js";
 
 export type {
   StoredGlobalEnvVar,
@@ -454,6 +462,7 @@ export function createAppDatabase(databasePath: string) {
   const idempotencyRepository = createIdempotencyRepository(db);
   const installationRepository = createInstallationRepository(db);
   const cronJobRepository = createCronJobRepository(db);
+  const connectionRepository = createConnectionRepository(db);
 
   return {
     db,
@@ -488,7 +497,8 @@ export function createAppDatabase(databasePath: string) {
     ...performanceDiagnosticsRepository,
     ...idempotencyRepository,
     ...installationRepository,
-    ...cronJobRepository
+    ...cronJobRepository,
+    ...connectionRepository
   };
 }
 

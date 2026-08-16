@@ -1371,6 +1371,50 @@ code {
   color: var(--color-text-muted);
 }
 
+/* A redacted connection string: kept on one line, truncated if very long, so
+   the table row stays tidy. */
+.connection-preview {
+  display: inline-block;
+  max-width: 42ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: var(--color-text-muted);
+}
+
+/* A cell that stacks a value over a small badge or action (e.g. a variable
+   name above its "in every app" status). */
+.stacked-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* The Show/Hide toggle beneath the connection-string field in the dialog. */
+.inline-field-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--color-accent, #4f46e5);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.link-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .env-source-badge {
   font-size: 0.65rem;
   font-weight: 700;

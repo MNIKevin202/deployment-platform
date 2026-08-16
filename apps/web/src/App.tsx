@@ -16,6 +16,7 @@ import AppsPage from "./pages/AppsPage";
 import RepositoriesPage from "./pages/RepositoriesPage";
 import RepositoryDetail from "./components/RepositoryDetail";
 import EnvironmentPage from "./pages/EnvironmentPage";
+import ConnectionsPage from "./pages/ConnectionsPage";
 import CronPage from "./pages/CronPage";
 import SystemPage from "./pages/SystemPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -35,6 +36,7 @@ const SECTION_TITLES: Record<Section, string> = {
   overview: "Overview",
   apps: "Apps",
   databases: "Databases",
+  connections: "Connections",
   templates: "Templates",
   repositories: "Repositories",
   cron: "Cron Jobs",
@@ -47,6 +49,7 @@ const SECTION_SUBTITLES: Record<Section, string> = {
   overview: "A snapshot of your platform and its managed applications.",
   apps: "Deploy and manage the websites, bots, and services running on your server.",
   databases: "Managed data stores — Postgres, MySQL, Redis, and the like.",
+  connections: "Connection strings for databases you host elsewhere, ready to copy or share with every app.",
   templates: "One-click setups for common services — pre-filled and ready to install.",
   repositories: "Connect GitHub and browse repositories available for source-linked apps.",
   cron: "Scheduled commands that run inside your apps' containers.",
@@ -94,6 +97,7 @@ function App() {
   const [notice, setNotice] = useState("");
 
   const [environmentRefreshKey, setEnvironmentRefreshKey] = useState(0);
+  const [connectionsRefreshKey, setConnectionsRefreshKey] = useState(0);
   const [checkingImageUpdates, setCheckingImageUpdates] = useState(false);
 
   const [showCreateApp, setShowCreateApp] = useState(false);
@@ -515,6 +519,8 @@ function App() {
         onClick={() => {
           if (section === "environment") {
             setEnvironmentRefreshKey((key) => key + 1);
+          } else if (section === "connections") {
+            setConnectionsRefreshKey((key) => key + 1);
           } else {
             void loadDashboard();
           }
@@ -543,6 +549,8 @@ function App() {
 
       {section === "environment" ? (
         <EnvironmentPage refreshKey={environmentRefreshKey} />
+      ) : section === "connections" ? (
+        <ConnectionsPage refreshKey={connectionsRefreshKey} />
       ) : section === "templates" ? (
         <TemplateGallery
           onSelect={selectTemplate}
