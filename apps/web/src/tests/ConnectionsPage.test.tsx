@@ -63,6 +63,13 @@ function installFetchMock(options: {
       list = list.map((c) => ({ ...c, inGlobalEnv: true }));
       return jsonResponse(200, { success: true, key: "MONGODB_URI", created: true });
     }
+    if (url === "/api/connections/test" || url.endsWith("/test")) {
+      return jsonResponse(200, {
+        success: true,
+        reachable: true,
+        message: "Reached shard.x.mongodb.net:27017."
+      });
+    }
 
     throw new Error(`Unhandled fetch: ${method} ${url}`);
   });
@@ -130,6 +137,46 @@ describe("ConnectionsPage", () => {
       expect(calls.some((c) => c.url === "/api/connections" && c.method === "POST")).toBe(true);
       expect(calls.some((c) => c.url.endsWith("/push-to-global") && c.method === "POST")).toBe(true);
     });
+  });
+
+  test("Test connection probes the typed string and shows the result", async () => {
+    const user = userEvent.setup();
+    const { calls } = installFetchMock({ initial: [] });
+
+    render(<ConnectionsPage />);
+    await screen.findByText(/No connections yet/);
+    await user.click(screen.getByRole("button", { name: "Add Connection" }));
+
+    // Disabled until a string is entered.
+    const testButton = screen.getByRole("button", { name: "Test connection" });
+    expect(testButton).toBeDisabled();
+
+    await user.type(
+      screen.getByPlaceholderText(/mongodb\+srv:\/\/user:password/),
+      "mongodb+srv://u:p@cluster0.x.mongodb.net/"
+    );
+    expect(testButton).toBeEnabled();
+
+    await user.click(testButton);
+
+    expect(await screen.findByText(/Reached shard\.x\.mongodb\.net:27017/)).toBeInTheDocument();
+    expect(calls.some((c) => c.url === "/api/connections/test" && c.method === "POST")).toBe(true);
+  });
+
+  test("clicking the backdrop does not close the dialog", async () => {
+    const user = userEvent.setup();
+    installFetchMock({ initial: [] });
+
+    render(<ConnectionsPage />);
+    await screen.findByText(/No connections yet/);
+    await user.click(screen.getByRole("button", { name: "Add Connection" }));
+
+    expect(screen.getByText("Add Database Connection")).toBeInTheDocument();
+
+    // The backdrop is the modal container behind the dialog card.
+    await user.click(document.querySelector(".modal-backdrop")!);
+
+    expect(screen.getByText("Add Database Connection")).toBeInTheDocument();
   });
 
   test("a copy-only connection shows no 'Add to apps' action and no variable", async () => {
