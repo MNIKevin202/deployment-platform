@@ -80,7 +80,10 @@ export default function ConnectionDialog({
         }
       }}
     >
-      <section className="form-modal" onClick={(event) => event.stopPropagation()}>
+      <section
+        className="form-modal connection-modal"
+        onClick={(event) => event.stopPropagation()}
+      >
         <header>
           <div>
             <p className="eyebrow">Database Connection</p>
@@ -120,96 +123,110 @@ export default function ConnectionDialog({
             <small>A friendly label so you can tell your connections apart.</small>
           </label>
 
-          <label>
-            <span>Type</span>
-            <select
-              value={values.kind}
-              onChange={(event) =>
-                setValues((current) => ({
-                  ...current,
-                  kind: event.target.value as DatabaseConnectionKind
-                }))
-              }
-              disabled={submitting}
+          <div className="field">
+            <span className="field-label">Type</span>
+            <div
+              className="connection-kind-grid"
+              role="group"
+              aria-label="Database type"
             >
               {CONNECTION_KIND_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`kind-chip ${values.kind === option.value ? "active" : ""}`}
+                  data-kind={option.value}
+                  aria-pressed={values.kind === option.value}
+                  disabled={submitting}
+                  onClick={() =>
+                    setValues((current) => ({ ...current, kind: option.value }))
+                  }
+                >
+                  <span className="kind-dot" aria-hidden="true" />
                   {option.label}
-                </option>
+                </button>
               ))}
-            </select>
-          </label>
+            </div>
+          </div>
 
           <label>
             <span>Connection string</span>
-            <input
-              type={reveal ? "text" : "password"}
-              value={values.connectionString}
-              onChange={(event) =>
-                setValues((current) => ({
-                  ...current,
-                  connectionString: event.target.value
-                }))
-              }
-              placeholder={
-                editing
-                  ? "Leave blank to keep the current connection string"
-                  : "mongodb+srv://user:password@cluster0.abcde.mongodb.net/"
-              }
-              disabled={submitting}
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <div className="inline-field-actions">
+            <div className="input-affix">
+              <input
+                className="mono"
+                type={reveal ? "text" : "password"}
+                value={values.connectionString}
+                onChange={(event) =>
+                  setValues((current) => ({
+                    ...current,
+                    connectionString: event.target.value
+                  }))
+                }
+                placeholder={
+                  editing
+                    ? "Leave blank to keep the current connection string"
+                    : "mongodb+srv://user:password@cluster0.abcde.mongodb.net/"
+                }
+                disabled={submitting}
+                autoComplete="off"
+                spellCheck={false}
+              />
               <button
                 type="button"
-                className="link-button"
+                className="input-affix-btn"
                 onClick={() => setReveal((shown) => !shown)}
                 disabled={submitting}
               >
                 {reveal ? "Hide" : "Show"}
               </button>
-              {editing && (
-                <small>Stored securely. Leave blank to keep the existing one.</small>
-              )}
             </div>
-          </label>
-
-          <label>
-            <span>Variable name (optional)</span>
-            <input
-              value={values.envKey}
-              onChange={(event) =>
-                setValues((current) => ({ ...current, envKey: event.target.value }))
-              }
-              placeholder={suggestedKey}
-              disabled={submitting}
-              autoComplete="off"
-              spellCheck={false}
-            />
             <small>
-              The environment variable your apps read this connection from (e.g.{" "}
-              <code>{suggestedKey}</code>). Leave blank to keep it copy-only.
+              {editing
+                ? "Stored securely. Leave blank to keep the existing one."
+                : "Stored securely — never shown again in full once saved."}
             </small>
           </label>
 
-          <label className="checkbox-field">
-            <input
-              type="checkbox"
-              checked={values.injectGlobally}
-              onChange={(event) =>
-                setValues((current) => ({
-                  ...current,
-                  injectGlobally: event.target.checked
-                }))
-              }
-              disabled={submitting || values.envKey.trim() === ""}
-            />
-            <span>
-              Add to every app now — inject it into the global environment as a
-              secret variable.
-            </span>
-          </label>
+          <div className="connection-share-card">
+            <p className="share-card-title">Make it available to your apps</p>
+
+            <label>
+              <span>Variable name (optional)</span>
+              <input
+                className="mono"
+                value={values.envKey}
+                onChange={(event) =>
+                  setValues((current) => ({ ...current, envKey: event.target.value }))
+                }
+                placeholder={suggestedKey}
+                disabled={submitting}
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <small>
+                The environment variable your apps read this connection from (e.g.{" "}
+                <code>{suggestedKey}</code>). Leave blank to keep it copy-only.
+              </small>
+            </label>
+
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={values.injectGlobally}
+                onChange={(event) =>
+                  setValues((current) => ({
+                    ...current,
+                    injectGlobally: event.target.checked
+                  }))
+                }
+                disabled={submitting || values.envKey.trim() === ""}
+              />
+              <span>
+                Add to every app now — inject it into the global environment as a
+                secret variable.
+              </span>
+            </label>
+          </div>
 
           <div className="form-actions">
             <button
