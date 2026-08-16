@@ -1557,6 +1557,30 @@ code {
   margin-top: 2px;
 }
 
+.connection-test-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.connection-test-result {
+  flex: 1;
+  min-width: 200px;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  align-self: center;
+}
+
+.connection-test-result.ok {
+  color: var(--color-positive, #2ea043);
+}
+
+.connection-test-result.fail {
+  color: var(--color-danger, #e5534b);
+}
+
 .env-source-badge {
   font-size: 0.65rem;
   font-weight: 700;

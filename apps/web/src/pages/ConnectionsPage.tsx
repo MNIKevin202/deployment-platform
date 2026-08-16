@@ -116,6 +116,39 @@ export default function ConnectionsPage({ refreshKey = 0 }: ConnectionsPageProps
     []
   );
 
+  const testConnection = useCallback(
+    async (
+      connectionString: string
+    ): Promise<{ reachable: boolean; message: string }> => {
+      const trimmed = connectionString.trim();
+
+      // When editing and the field is left blank, probe the stored string by id;
+      // otherwise probe exactly what's typed in the dialog.
+      const response =
+        trimmed === "" && editing
+          ? await fetch(`/api/connections/${editing.id}/test`, { method: "POST" })
+          : await fetch("/api/connections/test", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ connectionString })
+            });
+
+      if (!response.ok) {
+        return {
+          reachable: false,
+          message: await readApiError(response, "Unable to test the connection")
+        };
+      }
+
+      const result = (await response.json()) as {
+        reachable: boolean;
+        message: string;
+      };
+      return result;
+    },
+    [editing]
+  );
+
   const submitDialog = async (values: ConnectionFormValues) => {
     try {
       setSubmitting(true);
@@ -397,6 +430,7 @@ export default function ConnectionsPage({ refreshKey = 0 }: ConnectionsPageProps
         error={dialogError}
         onSubmit={(values) => void submitDialog(values)}
         onCancel={() => setShowDialog(false)}
+        onTest={testConnection}
       />
 
       <ConfirmationDialog

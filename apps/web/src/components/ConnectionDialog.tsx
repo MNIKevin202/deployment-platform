@@ -4,6 +4,11 @@ import type {
   DatabaseConnectionKind
 } from "../types/api";
 
+interface ConnectionTestOutcome {
+  reachable: boolean;
+  message: string;
+}
+
 interface ConnectionDialogProps {
   open: boolean;
   title: string;
@@ -14,6 +19,9 @@ interface ConnectionDialogProps {
   error: string;
   onSubmit: (values: ConnectionFormValues) => void;
   onCancel: () => void;
+  /** Runs a reachability probe. Receives the current form string (may be blank
+   * on an edit, in which case the caller tests the stored connection). */
+  onTest?: (connectionString: string) => Promise<ConnectionTestOutcome>;
 }
 
 export const CONNECTION_KIND_OPTIONS: {
@@ -46,18 +54,23 @@ export default function ConnectionDialog({
   submitting,
   error,
   onSubmit,
-  onCancel
+  onCancel,
+  onTest
 }: ConnectionDialogProps) {
   const [values, setValues] = useState<ConnectionFormValues>({
     ...EMPTY_VALUES,
     ...initialValues
   });
   const [reveal, setReveal] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<ConnectionTestOutcome | null>(null);
 
   useEffect(() => {
     if (open) {
       setValues({ ...EMPTY_VALUES, ...initialValues });
       setReveal(false);
+      setTesting(false);
+      setTestResult(null);
     }
     // Only reset when the dialog opens, not on every initialValues change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -67,19 +80,35 @@ export default function ConnectionDialog({
     return null;
   }
 
+  const canTest = Boolean(onTest) && (values.connectionString.trim() !== "" || editing);
+
+  const runTest = async () => {
+    if (!onTest) {
+      return;
+    }
+    setTesting(true);
+    setTestResult(null);
+    try {
+      setTestResult(await onTest(values.connectionString));
+    } catch (error) {
+      setTestResult({
+        reachable: false,
+        message: error instanceof Error ? error.message : "Test failed"
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const suggestedKey =
     CONNECTION_KIND_OPTIONS.find((option) => option.value === values.kind)
       ?.suggestedKey ?? "DATABASE_URL";
 
   return (
-    <div
-      className="modal-backdrop"
-      onClick={() => {
-        if (!submitting) {
-          onCancel();
-        }
-      }}
-    >
+    // The backdrop deliberately does NOT close the dialog on click — a stray
+    // click outside shouldn't discard a half-entered connection. Close only via
+    // the Close / Cancel buttons.
+    <div className="modal-backdrop">
       <section
         className="form-modal connection-modal"
         onClick={(event) => event.stopPropagation()}
@@ -156,12 +185,13 @@ export default function ConnectionDialog({
                 className="mono"
                 type={reveal ? "text" : "password"}
                 value={values.connectionString}
-                onChange={(event) =>
+                onChange={(event) => {
+                  setTestResult(null);
                   setValues((current) => ({
                     ...current,
                     connectionString: event.target.value
-                  }))
-                }
+                  }));
+                }}
                 placeholder={
                   editing
                     ? "Leave blank to keep the current connection string"
@@ -185,6 +215,28 @@ export default function ConnectionDialog({
                 ? "Stored securely. Leave blank to keep the existing one."
                 : "Stored securely — never shown again in full once saved."}
             </small>
+
+            {onTest && (
+              <div className="connection-test-row">
+                <button
+                  type="button"
+                  className="secondary-button compact"
+                  onClick={() => void runTest()}
+                  disabled={submitting || testing || !canTest}
+                >
+                  {testing ? "Testing…" : "Test connection"}
+                </button>
+                {testResult && (
+                  <span
+                    className={`connection-test-result ${testResult.reachable ? "ok" : "fail"}`}
+                    role="status"
+                  >
+                    {testResult.reachable ? "✓ " : "✗ "}
+                    {testResult.message}
+                  </span>
+                )}
+              </div>
+            )}
           </label>
 
           <div className="connection-share-card">

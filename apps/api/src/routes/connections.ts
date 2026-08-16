@@ -6,6 +6,7 @@ import {
   updateConnectionSchema
 } from "../schemas/connection.js";
 import { redactConnectionString } from "../connection-redaction.js";
+import { testConnection } from "../connection-test.js";
 
 interface RegisterConnectionRoutesOptions {
   appDatabase: AppDatabase;
@@ -59,6 +60,52 @@ export async function registerConnectionRoutes(
         )
     };
   });
+
+  const testBodySchema = z.object({
+    connectionString: z.string().min(1, "Connection string is required")
+  });
+
+  // Reachability probe for a connection string typed into the dialog (not yet
+  // saved). Resolves the host and opens a TCP connection — see connection-test.
+  fastify.post("/connections/test", async (request, reply) => {
+    const parsed = testBodySchema.safeParse(request.body);
+
+    if (!parsed.success) {
+      return reply.code(400).send({
+        success: false,
+        message: "A connection string is required to test"
+      });
+    }
+
+    const result = await testConnection(parsed.data.connectionString);
+    return { success: true, ...result };
+  });
+
+  // Reachability probe for an already-saved connection, by id — used when
+  // editing, where the dialog doesn't hold the stored string.
+  fastify.post<{ Params: IdParams }>(
+    "/connections/:id/test",
+    async (request, reply) => {
+      const parsedParams = idParamSchema.safeParse(request.params);
+
+      if (!parsedParams.success) {
+        return reply
+          .code(400)
+          .send({ success: false, message: "Invalid connection id" });
+      }
+
+      const existing = appDatabase.getConnectionById(parsedParams.data.id);
+
+      if (!existing) {
+        return reply
+          .code(404)
+          .send({ success: false, message: "Connection not found" });
+      }
+
+      const result = await testConnection(existing.connectionString);
+      return { success: true, ...result };
+    }
+  );
 
   fastify.post("/connections", async (request, reply) => {
     const parsedBody = createConnectionSchema.safeParse(request.body);
