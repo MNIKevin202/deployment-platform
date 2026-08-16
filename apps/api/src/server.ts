@@ -29,6 +29,7 @@ import {
 } from "./services/app-detail-service.js";
 import { computeEnvironmentStatus } from "./services/environment-service.js";
 import { registerEnvironmentRoutes } from "./routes/environment.js";
+import { registerConnectionRoutes } from "./routes/connections.js";
 import { registerStorageRoutes } from "./routes/storage.js";
 import {
   createDockerOps,
@@ -218,6 +219,7 @@ await registerAuthentication(app, {
   setStoredPasswordHash: (hash) => appDatabase.setSetting(ADMIN_PASSWORD_HASH_SETTING, hash)
 });
 await registerEnvironmentRoutes(app, { appDatabase });
+await registerConnectionRoutes(app, { appDatabase });
 await registerStorageRoutes(app, { appDatabase });
 
 const baseRecordEvent = createEventRecorder(appDatabase, app.log);
