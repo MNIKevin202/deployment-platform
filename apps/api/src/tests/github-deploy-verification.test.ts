@@ -33,17 +33,17 @@ describe("verifyInternalReachability", () => {
     }
   );
 
-  test("targets exactly the given container name and port — never a browser-supplied value", async () => {
-    let seenTarget: { hostname: string; port: number } | null = null;
+  test("targets exactly the given container name, port, and path", async () => {
+    let seenTarget: { hostname: string; port: number; path: string } | null = null;
     const httpClient: HealthCheckHttpClient = {
-      async request({ hostname, port }) {
-        seenTarget = { hostname, port };
+      async request({ hostname, port, path }) {
+        seenTarget = { hostname, port, path };
         return { statusCode: 200, latencyMs: 1 };
       }
     };
 
-    await verifyInternalReachability(httpClient, "app-mflabs", 53123);
-    assert.deepEqual(seenTarget, { hostname: "app-mflabs", port: 53123 });
+    await verifyInternalReachability(httpClient, "app-mflabs", 53123, "api/ready");
+    assert.deepEqual(seenTarget, { hostname: "app-mflabs", port: 53123, path: "/api/ready" });
   });
 });
 

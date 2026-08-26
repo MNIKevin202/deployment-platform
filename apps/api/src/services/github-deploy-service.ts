@@ -81,22 +81,24 @@ export interface InternalCheckResult {
 export async function verifyInternalReachability(
   httpClient: HealthCheckHttpClient,
   containerName: string,
-  port: number
+  port: number,
+  path = "/"
 ): Promise<InternalCheckResult> {
   let lastError: string | null = null;
+  const requestPath = path.startsWith("/") ? path : `/${path}`;
 
   for (let attempt = 1; attempt <= INTERNAL_CHECK_ATTEMPTS; attempt += 1) {
     try {
       const result = await httpClient.request({
         hostname: containerName,
         port,
-        path: "/",
+        path: requestPath,
         timeoutMs: INTERNAL_CHECK_TIMEOUT_MS
       });
       return {
         reachable: true,
         statusCode: result.statusCode,
-        message: `Internal service responded with HTTP ${result.statusCode} on port ${port}.`
+        message: `Internal service responded with HTTP ${result.statusCode} on port ${port}${requestPath}.`
       };
     } catch (error) {
       lastError = sanitizeHealthCheckError(error);
@@ -109,7 +111,7 @@ export async function verifyInternalReachability(
   return {
     reachable: false,
     statusCode: null,
-    message: `Container started, but nothing responded on port ${port}${lastError ? ` (${lastError})` : "."}`
+    message: `Container started, but nothing responded on port ${port}${requestPath}${lastError ? ` (${lastError})` : "."}`
   };
 }
 
@@ -757,7 +759,14 @@ export async function deployFromGithub(
       );
     }
 
-    internalCheckResult = await verifyInternalReachability(deps.healthCheckDeps.httpClient, containerName, containerPort);
+    const healthConfig = appDatabase.getAppHealthCheck(appId);
+    const internalVerificationPath = healthConfig?.enabled ? healthConfig.path : "/";
+    internalCheckResult = await verifyInternalReachability(
+      deps.healthCheckDeps.httpClient,
+      containerName,
+      containerPort,
+      internalVerificationPath
+    );
 
     recordEvent({
       appId,
@@ -801,7 +810,6 @@ export async function deployFromGithub(
 
     // An operator-configured health check, if one exists, still runs too
     // — additively, never as a substitute for the mandatory checks above.
-    const healthConfig = appDatabase.getAppHealthCheck(appId);
     if (healthConfig) {
       const healthOutcome = await performHealthCheck(
         {
