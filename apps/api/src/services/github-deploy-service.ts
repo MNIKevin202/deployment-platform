@@ -136,8 +136,9 @@ export interface PublicCheckResult {
  * response (including ordinary 4xx from the app itself) is accepted —
  * this is the platform's `502` bug fix, not a strict-uptime gate.
  */
-export async function verifyPublicRoute(domain: string): Promise<PublicCheckResult> {
-  const url = `https://${domain}/`;
+export async function verifyPublicRoute(domain: string, path = "/"): Promise<PublicCheckResult> {
+  const requestPath = path.startsWith("/") ? path : `/${path}`;
+  const url = `https://${domain}${requestPath}`;
   let lastError: string | null = null;
 
   for (let attempt = 1; attempt <= PUBLIC_CHECK_ATTEMPTS; attempt += 1) {
@@ -786,7 +787,7 @@ export async function deployFromGithub(
     }
 
     if (app.domain) {
-      publicCheckResult = await verifyPublicRoute(app.domain);
+      publicCheckResult = await verifyPublicRoute(app.domain, internalVerificationPath);
 
       recordEvent({
         appId,

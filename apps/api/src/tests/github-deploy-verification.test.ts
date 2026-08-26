@@ -65,6 +65,21 @@ describe("verifyPublicRoute", () => {
     }
   });
 
+  test("uses the configured health path for public verification", async () => {
+    let seenUrl = "";
+    globalThis.fetch = (async (input) => {
+      seenUrl = String(input);
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+    try {
+      const result = await verifyPublicRoute("wizard-test.apps.hookstats.com", "api/ready");
+      assert.equal(result.ok, true);
+      assert.equal(seenUrl, "https://wizard-test.apps.hookstats.com/api/ready");
+    } finally {
+      restoreFetch();
+    }
+  });
+
   test(
     "treats a 502 as a deployment failure, not an acceptable application response",
     { timeout: 15000 },
