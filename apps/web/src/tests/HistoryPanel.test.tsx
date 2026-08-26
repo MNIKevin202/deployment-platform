@@ -14,6 +14,7 @@ function deployment(overrides: Partial<Deployment> = {}): Deployment {
     commitMessage: "first",
     sourceKind: "github",
     revertOfVersion: null,
+    status: "success",
     isCurrent: false,
     canRevert: true,
     createdAt: "2026-07-27T03:00:00.000Z",
@@ -61,6 +62,32 @@ describe("HistoryPanel", () => {
     expect(screen.getByText("1m 32s")).toBeInTheDocument();
     // Exactly one revert control (only the older, non-current github version).
     expect(screen.getAllByRole("button", { name: /Revert to version 1/ })).toHaveLength(1);
+  });
+
+  test("renders failed deployment duration with a failed marker and no revert control", async () => {
+    const failedHistory: Deployment[] = [
+      deployment({
+        id: 3,
+        version: 3,
+        imageTag: "deployment-app-5:cccccccccccc",
+        commitSha: "cccccccccccc3333",
+        status: "failed",
+        canRevert: false,
+        durationMs: 45_000
+      }),
+      ...githubHistory
+    ];
+    vi.stubGlobal(
+      "fetch",
+      mockFetchOnceSequence([() => ({ success: true, deployments: failedHistory })])
+    );
+
+    render(<HistoryPanel appId={5} />);
+
+    expect(await screen.findByText("v3")).toBeInTheDocument();
+    expect(screen.getByText("45s")).toBeInTheDocument();
+    expect(screen.getByText("(failed)")).toHaveClass("deployment-status-failed");
+    expect(screen.queryByRole("button", { name: /Revert to version 3/ })).not.toBeInTheDocument();
   });
 
   test("reverting posts to the version endpoint and reloads", async () => {

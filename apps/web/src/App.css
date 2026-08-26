@@ -2600,6 +2600,11 @@ code {
   background: var(--color-accent-soft);
 }
 
+.deployment-status-failed {
+  color: var(--color-danger);
+  font-weight: 700;
+}
+
 .icon-button {
   display: inline-flex;
   align-items: center;
@@ -2637,6 +2642,16 @@ code {
 .console-output pre {
   max-height: none;
   margin: 0;
+}
+
+.console-live-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 10px 0 12px;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .console-status-dot {

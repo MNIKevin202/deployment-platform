@@ -24,6 +24,7 @@ import { migration022CronJobRuns } from "./022_cron_job_runs.js";
 import { migration023AppDeploymentRetention } from "./023_app_deployment_retention.js";
 import { migration024DatabaseConnections } from "./024_database_connections.js";
 import { migration025DeploymentDuration } from "./025_deployment_duration.js";
+import { migration026DeploymentStatus } from "./026_deployment_status.js";
 import type { Migration } from "./types.js";
 
 export type { Migration } from "./types.js";
@@ -53,7 +54,8 @@ const migrations: Migration[] = [
   migration022CronJobRuns,
   migration023AppDeploymentRetention,
   migration024DatabaseConnections,
-  migration025DeploymentDuration
+  migration025DeploymentDuration,
+  migration026DeploymentStatus
 ];
 
 interface SchemaMigrationRow {

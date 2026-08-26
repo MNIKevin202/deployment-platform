@@ -43,6 +43,7 @@ describe("deployment ledger (app_deployments)", () => {
     assert.equal(v1.version, 1);
     assert.equal(v1.isCurrent, true);
     assert.equal(v1.durationMs, 12_345);
+    assert.equal(v1.status, "success");
 
     const v2 = appDatabase.recordDeployment({
       appId: app.id,
@@ -61,6 +62,36 @@ describe("deployment ledger (app_deployments)", () => {
     const reFetchedV1 = appDatabase.getDeployment(app.id, 1);
     assert.equal(reFetchedV1?.isCurrent, false);
     assert.equal(reFetchedV1?.durationMs, 12_345);
+  });
+
+  test("failed attempts keep their duration without replacing the current version", () => {
+    const app = makeApp();
+
+    appDatabase.recordDeployment({
+      appId: app.id,
+      imageTag: "deployment-app-1:aaaaaaaaaaaa",
+      commitSha: "aaaaaaaaaaaa1111",
+      commitMessage: "first",
+      sourceKind: "github",
+      durationMs: 10_000
+    });
+
+    const failed = appDatabase.recordDeployment({
+      appId: app.id,
+      imageTag: "deployment-app-1:bbbbbbbbbbbb",
+      commitSha: "bbbbbbbbbbbb2222",
+      commitMessage: "broken",
+      sourceKind: "github",
+      durationMs: 45_000,
+      status: "failed"
+    });
+
+    assert.equal(failed.version, 2);
+    assert.equal(failed.isCurrent, false);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.durationMs, 45_000);
+    assert.equal(appDatabase.getCurrentDeployment(app.id)?.version, 1);
+    assert.equal(appDatabase.getLatestDeployment(app.id)?.version, 2);
   });
 
   test("lists newest-first and records a revert as a new version", () => {

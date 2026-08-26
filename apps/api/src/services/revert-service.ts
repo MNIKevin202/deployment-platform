@@ -81,6 +81,13 @@ export async function revertToDeployment(
     };
   }
 
+  if (target.status === "failed") {
+    return {
+      success: false,
+      message: "Failed deployment attempts cannot be reverted to."
+    };
+  }
+
   if (target.isCurrent) {
     return {
       success: false,

@@ -401,6 +401,9 @@ export async function deployFromGithub(
   let internalCheckResult: InternalCheckResult | null = null;
   let publicCheckResult: PublicCheckResult | null = null;
   let selectedContainerPort: number | null = null;
+  let commitSha: string | null = null;
+  let commitMessage: string | null = null;
+  let imageTag: string | null = null;
 
   try {
     progress("resolving-repository");
@@ -412,7 +415,6 @@ export async function deployFromGithub(
 
     progress("resolving-branch");
 
-    let commitSha: string;
     try {
       commitSha = await githubClient.resolveBranchCommit(
         credential.token,
@@ -433,7 +435,6 @@ export async function deployFromGithub(
 
     progress("reading-commit-metadata");
 
-    let commitMessage: string | null = null;
     try {
       const commits = await githubClient.listCommits(
         credential.token,
@@ -541,7 +542,8 @@ export async function deployFromGithub(
     progress("building-image");
 
     const shortSha = commitSha.slice(0, 12);
-    const imageTag = `deployment-app-${appId}:${shortSha}`;
+    imageTag = `deployment-app-${appId}:${shortSha}`;
+    const buildImageTag = imageTag;
     // A no-cache deploy must always rebuild — reusing the existing image
     // would defeat the operator's explicit "build fresh" choice, and it's
     // also the escape hatch when a prior cached image is itself suspect.
@@ -567,7 +569,7 @@ export async function deployFromGithub(
         dockerOps.buildImage({
           contextPath: buildPlan.buildContextPath,
           dockerfileRelativePath: relative(buildPlan.buildContextPath, buildPlan.dockerfilePath),
-          tag: imageTag,
+          tag: buildImageTag,
           // A no-cache build rebuilds every layer, so it gets the longer of
           // the configured timeout and the no-cache floor — otherwise the
           // automatic corrupt-cache recovery gets killed by a timeout tuned
@@ -990,6 +992,16 @@ export async function deployFromGithub(
         eventMetadata.stdoutSummary = diagnostics.sanitizedStdoutSummary;
       }
     }
+
+    appDatabase.recordDeployment({
+      appId,
+      imageTag: imageTag ?? `${source.repositoryOwner}/${source.repositoryName}@${source.branch}`,
+      commitSha,
+      commitMessage,
+      sourceKind: "github",
+      durationMs: Math.max(0, Date.now() - deployStartedAtMs),
+      status: "failed"
+    });
 
     if (!anySwapPerformed) {
       // Nothing live was ever touched — clean up any replacement

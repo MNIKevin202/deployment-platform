@@ -51,6 +51,15 @@ function formatDuration(durationMs: number | null | undefined): string {
   return minutes === 0 ? `${seconds}s` : `${minutes}m ${seconds}s`;
 }
 
+function DurationCell({ deployment }: { deployment: Deployment }) {
+  return (
+    <span>
+      {formatDuration(deployment.durationMs)}
+      {deployment.status === "failed" && <span className="deployment-status-failed"> (failed)</span>}
+    </span>
+  );
+}
+
 export default function HistoryPanel({
   appId,
   onReverted,
@@ -255,7 +264,9 @@ export default function HistoryPanel({
                     )}
                   </td>
                   <td className="text-faint">{formatDate(deployment.createdAt)}</td>
-                  <td className="text-faint">{formatDuration(deployment.durationMs)}</td>
+                  <td className="text-faint">
+                    <DurationCell deployment={deployment} />
+                  </td>
                   <td>
                     <code className="inline-code">{deployment.imageTag}</code>
                   </td>

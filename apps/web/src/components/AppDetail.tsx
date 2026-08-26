@@ -1044,7 +1044,12 @@ export default function AppDetail({
 
             <div>
               <dt>Deploy duration</dt>
-              <dd>{formatDuration(detail.lastDeploymentDurationMs)}</dd>
+              <dd>
+                {formatDuration(detail.lastDeploymentDurationMs)}
+                {detail.lastDeploymentStatus === "failed" && (
+                  <span className="deployment-status-failed"> (failed)</span>
+                )}
+              </dd>
             </div>
           </dl>
 

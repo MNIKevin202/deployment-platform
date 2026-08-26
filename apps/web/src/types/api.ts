@@ -74,6 +74,7 @@ export interface StoredApp {
   updatedAt: string;
   lastDeployedAt: string | null;
   lastDeploymentDurationMs?: number | null;
+  lastDeploymentStatus?: DeploymentStatus | null;
   routingReady: boolean;
   health: { state: HealthState; lastCheckedAt: string | null } | null;
   latestEventSeverity: DeploymentEventSeverity | null;
@@ -117,6 +118,7 @@ export interface AppDetail {
   updatedAt: string;
   lastDeployedAt: string | null;
   lastDeploymentDurationMs?: number | null;
+  lastDeploymentStatus?: DeploymentStatus | null;
   restartPolicy: string;
   memoryLimitMb: number | null;
   cpuLimit: number | null;
@@ -789,6 +791,7 @@ export interface DeploymentEventsResponse {
 // ---------- Deployment history / version ledger ----------
 
 export type DeploymentSourceKind = "github" | "image";
+export type DeploymentStatus = "success" | "failed";
 
 export interface Deployment {
   id: number;
@@ -800,6 +803,7 @@ export interface Deployment {
   sourceKind: DeploymentSourceKind;
   revertOfVersion: number | null;
   durationMs?: number | null;
+  status?: DeploymentStatus;
   isCurrent: boolean;
   /** Server-computed: a retained GitHub build that isn't already live. */
   canRevert: boolean;

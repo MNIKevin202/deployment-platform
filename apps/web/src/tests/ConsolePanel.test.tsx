@@ -39,9 +39,16 @@ class FakeEventSource {
 }
 
 describe("ConsolePanel", () => {
+  let writeText: ReturnType<typeof vi.fn>;
+
   beforeEach(() => {
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource as unknown as typeof EventSource);
+    writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText }
+    });
   });
 
   afterEach(() => {
@@ -70,6 +77,8 @@ describe("ConsolePanel", () => {
     const pre = container.querySelector("pre");
     expect(pre?.textContent).toContain("hello world");
     expect(pre?.textContent).toContain("second line");
+    expect(screen.getByText("2 lines")).toBeInTheDocument();
+    expect(screen.getByText(/Last output:/)).toBeInTheDocument();
   });
 
   test("marks the stream stopped and closes it on an end event", async () => {
@@ -102,5 +111,21 @@ describe("ConsolePanel", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Clear" }));
     expect(container.querySelector("pre")).toBeNull();
+    expect(screen.getByText("0 lines")).toBeInTheDocument();
+  });
+
+  test("copies the full retained console buffer", async () => {
+    render(<ConsolePanel appId={5} />);
+    const source = latest();
+
+    act(() => {
+      source.emit("line", { line: "first line" });
+      source.emit("line", { line: "second line" });
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy console" }));
+
+    expect(writeText).toHaveBeenCalledWith("first line\nsecond line");
+    expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
   });
 });

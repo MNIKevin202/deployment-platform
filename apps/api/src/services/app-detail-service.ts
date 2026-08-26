@@ -37,6 +37,7 @@ export interface AppDetail {
   updatedAt: string;
   lastDeployedAt: string | null;
   lastDeploymentDurationMs: number | null;
+  lastDeploymentStatus: StoredDeployment["status"] | null;
   restartPolicy: string;
   memoryLimitMb: number | null;
   cpuLimit: number | null;
@@ -82,7 +83,7 @@ export function buildAppDetail(
   environmentStatus: EnvironmentStatus,
   publishedPorts: StoredAppPublishedPort[] = [],
   imageUpdateStatus: ImageUpdateStatus | null = null,
-  currentDeployment: StoredDeployment | null = null
+  latestDeployment: StoredDeployment | null = null
 ): AppDetail {
   return {
     id: storedApp.id,
@@ -101,7 +102,8 @@ export function buildAppDetail(
     createdAt: storedApp.createdAt,
     updatedAt: storedApp.updatedAt,
     lastDeployedAt: storedApp.lastDeployedAt,
-    lastDeploymentDurationMs: currentDeployment?.durationMs ?? null,
+    lastDeploymentDurationMs: latestDeployment?.durationMs ?? null,
+    lastDeploymentStatus: latestDeployment?.status ?? null,
     restartPolicy: storedApp.restartPolicy,
     memoryLimitMb: storedApp.memoryLimitMb,
     cpuLimit: storedApp.cpuLimit,

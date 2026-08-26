@@ -8,6 +8,7 @@ import type { DatabaseSync } from "node:sqlite";
  *    manually-specified images). Current-only — no per-version revert.
  */
 export type DeploymentSourceKind = "github" | "image";
+export type DeploymentStatus = "success" | "failed";
 
 export interface StoredDeployment {
   id: number;
@@ -21,6 +22,7 @@ export interface StoredDeployment {
   /** Set when this version was produced by reverting to an earlier one. */
   revertOfVersion: number | null;
   durationMs: number | null;
+  status: DeploymentStatus;
   isCurrent: boolean;
   createdAt: string;
 }
@@ -35,13 +37,14 @@ interface DeploymentRow {
   source_kind: string;
   revert_of_version: number | null;
   duration_ms: number | null;
+  status: string;
   is_current: number;
   created_at: string;
 }
 
 const DEPLOYMENT_COLUMNS = `
   id, app_id, version, image_tag, commit_sha, commit_message,
-  source_kind, revert_of_version, duration_ms, is_current, created_at
+  source_kind, revert_of_version, duration_ms, status, is_current, created_at
 `;
 
 function mapDeployment(row: DeploymentRow): StoredDeployment {
@@ -55,6 +58,7 @@ function mapDeployment(row: DeploymentRow): StoredDeployment {
     sourceKind: row.source_kind === "github" ? "github" : "image",
     revertOfVersion: row.revert_of_version,
     durationMs: row.duration_ms,
+    status: row.status === "failed" ? "failed" : "success",
     isCurrent: row.is_current === 1,
     createdAt: row.created_at
   };
@@ -70,6 +74,8 @@ export interface RecordDeploymentInput {
   revertOfVersion?: number | null;
   /** End-to-end deploy duration in milliseconds. Null for legacy or unknown rows. */
   durationMs?: number | null;
+  /** Success rows become current; failed rows stay in history as non-current attempts. */
+  status?: DeploymentStatus;
 }
 
 export function createDeploymentRepository(db: DatabaseSync) {
@@ -84,6 +90,8 @@ export function createDeploymentRepository(db: DatabaseSync) {
     db.exec("BEGIN");
 
     let version: number;
+    const status = input.status ?? "success";
+    const isCurrent = status === "success";
 
     try {
       const maxRow = db
@@ -92,17 +100,19 @@ export function createDeploymentRepository(db: DatabaseSync) {
 
       version = (maxRow?.max_version ?? 0) + 1;
 
-      db.prepare("UPDATE app_deployments SET is_current = 0 WHERE app_id = ? AND is_current = 1").run(
-        input.appId
-      );
+      if (isCurrent) {
+        db.prepare("UPDATE app_deployments SET is_current = 0 WHERE app_id = ? AND is_current = 1").run(
+          input.appId
+        );
+      }
 
       db.prepare(
         `
           INSERT INTO app_deployments (
             app_id, version, image_tag, commit_sha, commit_message,
-            source_kind, revert_of_version, duration_ms, is_current
+            source_kind, revert_of_version, duration_ms, status, is_current
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
       ).run(
         input.appId,
@@ -112,7 +122,9 @@ export function createDeploymentRepository(db: DatabaseSync) {
         input.commitMessage,
         input.sourceKind,
         input.revertOfVersion ?? null,
-        input.durationMs ?? null
+        input.durationMs ?? null,
+        status,
+        isCurrent ? 1 : 0
       );
 
       db.exec("COMMIT");
@@ -156,6 +168,16 @@ export function createDeploymentRepository(db: DatabaseSync) {
     return row ? mapDeployment(row) : null;
   }
 
+  function getLatestDeployment(appId: number): StoredDeployment | null {
+    const row = db
+      .prepare(
+        `SELECT ${DEPLOYMENT_COLUMNS} FROM app_deployments WHERE app_id = ? ORDER BY version DESC LIMIT 1`
+      )
+      .get(appId) as unknown as DeploymentRow | undefined;
+
+    return row ? mapDeployment(row) : null;
+  }
+
   /**
    * Every GitHub-built version for one app, newest first and unbounded (unlike
    * listDeployments, which is capped for the History panel). Retention needs
@@ -167,7 +189,7 @@ export function createDeploymentRepository(db: DatabaseSync) {
     const rows = db
       .prepare(
         `SELECT ${DEPLOYMENT_COLUMNS} FROM app_deployments
-         WHERE app_id = ? AND source_kind = 'github'
+         WHERE app_id = ? AND source_kind = 'github' AND status = 'success'
          ORDER BY version DESC`
       )
       .all(appId) as unknown as DeploymentRow[];
@@ -185,7 +207,7 @@ export function createDeploymentRepository(db: DatabaseSync) {
     const rows = db
       .prepare(
         `SELECT ${DEPLOYMENT_COLUMNS} FROM app_deployments
-         WHERE source_kind = 'github'
+         WHERE source_kind = 'github' AND status = 'success'
          ORDER BY app_id ASC, version DESC`
       )
       .all() as unknown as DeploymentRow[];
@@ -227,6 +249,7 @@ export function createDeploymentRepository(db: DatabaseSync) {
     listDeployments,
     getDeployment,
     getCurrentDeployment,
+    getLatestDeployment,
     listGithubDeployments,
     listAllGithubDeployments,
     deleteDeployments
