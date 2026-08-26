@@ -18,7 +18,7 @@ describe("verifyInternalReachability", () => {
 
   test(
     "is unreachable (connection-refused style) when nothing is listening on the configured port",
-    { timeout: 10000 },
+    { timeout: 70000 },
     async () => {
       const httpClient: HealthCheckHttpClient = {
         async request() {

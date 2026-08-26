@@ -53,9 +53,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const INTERNAL_CHECK_ATTEMPTS = 3;
+const INTERNAL_CHECK_ATTEMPTS = 10;
 const INTERNAL_CHECK_TIMEOUT_MS = 5000;
-const INTERNAL_CHECK_RETRY_DELAY_MS = 1500;
+const INTERNAL_CHECK_RETRY_DELAY_MS = 2000;
 
 export interface InternalCheckResult {
   reachable: boolean;
