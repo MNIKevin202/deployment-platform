@@ -20,6 +20,7 @@ export interface StoredDeployment {
   sourceKind: DeploymentSourceKind;
   /** Set when this version was produced by reverting to an earlier one. */
   revertOfVersion: number | null;
+  durationMs: number | null;
   isCurrent: boolean;
   createdAt: string;
 }
@@ -33,13 +34,14 @@ interface DeploymentRow {
   commit_message: string | null;
   source_kind: string;
   revert_of_version: number | null;
+  duration_ms: number | null;
   is_current: number;
   created_at: string;
 }
 
 const DEPLOYMENT_COLUMNS = `
   id, app_id, version, image_tag, commit_sha, commit_message,
-  source_kind, revert_of_version, is_current, created_at
+  source_kind, revert_of_version, duration_ms, is_current, created_at
 `;
 
 function mapDeployment(row: DeploymentRow): StoredDeployment {
@@ -52,6 +54,7 @@ function mapDeployment(row: DeploymentRow): StoredDeployment {
     commitMessage: row.commit_message,
     sourceKind: row.source_kind === "github" ? "github" : "image",
     revertOfVersion: row.revert_of_version,
+    durationMs: row.duration_ms,
     isCurrent: row.is_current === 1,
     createdAt: row.created_at
   };
@@ -65,6 +68,8 @@ export interface RecordDeploymentInput {
   sourceKind: DeploymentSourceKind;
   /** Present only when this deployment is a revert to `revertOfVersion`. */
   revertOfVersion?: number | null;
+  /** End-to-end deploy duration in milliseconds. Null for legacy or unknown rows. */
+  durationMs?: number | null;
 }
 
 export function createDeploymentRepository(db: DatabaseSync) {
@@ -95,9 +100,9 @@ export function createDeploymentRepository(db: DatabaseSync) {
         `
           INSERT INTO app_deployments (
             app_id, version, image_tag, commit_sha, commit_message,
-            source_kind, revert_of_version, is_current
+            source_kind, revert_of_version, duration_ms, is_current
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
         `
       ).run(
         input.appId,
@@ -106,7 +111,8 @@ export function createDeploymentRepository(db: DatabaseSync) {
         input.commitSha,
         input.commitMessage,
         input.sourceKind,
-        input.revertOfVersion ?? null
+        input.revertOfVersion ?? null,
+        input.durationMs ?? null
       );
 
       db.exec("COMMIT");

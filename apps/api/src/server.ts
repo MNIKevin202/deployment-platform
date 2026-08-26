@@ -714,6 +714,7 @@ app.get("/apps", async () => {
         latestEventType: event?.eventType ?? null,
         currentVersion: currentDeployment?.version ?? null,
         currentVersionCommitSha: currentDeployment?.commitSha ?? null,
+        lastDeploymentDurationMs: currentDeployment?.durationMs ?? null,
         runtime: resolveAppRuntime(storedApp.containerName, runtimeByName),
         publishedPorts: appDatabase.listAppPublishedPorts(storedApp.id),
         imageUpdateAvailable: imageUpdateChecker.getStatus(storedApp.id)?.updateAvailable ?? false,
@@ -784,7 +785,8 @@ app.get<{ Params: AppIdParams }>("/apps/:id", async (request, reply) => {
         storedApp.environmentTouchedAt
       ),
       appDatabase.listAppPublishedPorts(storedApp.id),
-      imageUpdateChecker.getStatus(storedApp.id)
+      imageUpdateChecker.getStatus(storedApp.id),
+      appDatabase.getCurrentDeployment(storedApp.id)
     );
   } catch (error) {
     return sendDockerError(

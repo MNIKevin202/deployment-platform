@@ -37,10 +37,12 @@ describe("deployment ledger (app_deployments)", () => {
       imageTag: "deployment-app-1:aaaaaaaaaaaa",
       commitSha: "aaaaaaaaaaaa1111",
       commitMessage: "first",
-      sourceKind: "github"
+      sourceKind: "github",
+      durationMs: 12_345
     });
     assert.equal(v1.version, 1);
     assert.equal(v1.isCurrent, true);
+    assert.equal(v1.durationMs, 12_345);
 
     const v2 = appDatabase.recordDeployment({
       appId: app.id,
@@ -58,6 +60,7 @@ describe("deployment ledger (app_deployments)", () => {
 
     const reFetchedV1 = appDatabase.getDeployment(app.id, 1);
     assert.equal(reFetchedV1?.isCurrent, false);
+    assert.equal(reFetchedV1?.durationMs, 12_345);
   });
 
   test("lists newest-first and records a revert as a new version", () => {

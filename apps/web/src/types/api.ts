@@ -73,6 +73,7 @@ export interface StoredApp {
   createdAt: string;
   updatedAt: string;
   lastDeployedAt: string | null;
+  lastDeploymentDurationMs?: number | null;
   routingReady: boolean;
   health: { state: HealthState; lastCheckedAt: string | null } | null;
   latestEventSeverity: DeploymentEventSeverity | null;
@@ -115,6 +116,7 @@ export interface AppDetail {
   createdAt: string;
   updatedAt: string;
   lastDeployedAt: string | null;
+  lastDeploymentDurationMs?: number | null;
   restartPolicy: string;
   memoryLimitMb: number | null;
   cpuLimit: number | null;
@@ -797,6 +799,7 @@ export interface Deployment {
   commitMessage: string | null;
   sourceKind: DeploymentSourceKind;
   revertOfVersion: number | null;
+  durationMs?: number | null;
   isCurrent: boolean;
   /** Server-computed: a retained GitHub build that isn't already live. */
   canRevert: boolean;

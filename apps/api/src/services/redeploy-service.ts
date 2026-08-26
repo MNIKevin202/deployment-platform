@@ -229,6 +229,11 @@ export interface RedeployOptions {
    * would fail — the caller confirms the image is present first.
    */
   skipPull?: boolean;
+  /**
+   * Revert reuses the same container-swap machinery, then records its own
+   * GitHub-sourced history row. Disable the generic image row in that path.
+   */
+  recordHistory?: boolean;
 }
 
 export async function redeployApp(
@@ -236,6 +241,7 @@ export async function redeployApp(
   appId: number,
   options: RedeployOptions = {}
 ): Promise<RedeployResult> {
+  const deployStartedAtMs = Date.now();
   const { appDatabase, dockerOps, reconcileRouting, recordEvent } = deps;
 
   const app = appDatabase.getAppById(appId);
@@ -508,6 +514,17 @@ export async function redeployApp(
     message: `Redeploy succeeded for "${app.name}"`,
     metadata: { newContainerId: finalContainerId, image }
   });
+
+  if (options.recordHistory !== false) {
+    appDatabase.recordDeployment({
+      appId: app.id,
+      imageTag: image,
+      commitSha: null,
+      commitMessage: null,
+      sourceKind: "image",
+      durationMs: Math.max(0, Date.now() - deployStartedAtMs)
+    });
+  }
 
   if (routingWarning) {
     recordEvent({

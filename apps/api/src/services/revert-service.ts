@@ -58,6 +58,7 @@ export async function revertToDeployment(
   appId: number,
   version: number
 ): Promise<RevertResult> {
+  const deployStartedAtMs = Date.now();
   const { appDatabase, dockerOps, reconcileRouting, recordEvent } = deps;
   const now = deps.now ?? (() => new Date());
 
@@ -115,7 +116,7 @@ export async function revertToDeployment(
   const result = await redeployApp(
     { appDatabase, dockerOps, reconcileRouting, recordEvent },
     appId,
-    { imageOverride: target.imageTag, skipPull: true }
+    { imageOverride: target.imageTag, skipPull: true, recordHistory: false }
   );
 
   if (!result.success) {
@@ -158,7 +159,8 @@ export async function revertToDeployment(
     commitSha: target.commitSha,
     commitMessage: target.commitMessage,
     sourceKind: "github",
-    revertOfVersion: version
+    revertOfVersion: version,
+    durationMs: Math.max(0, Date.now() - deployStartedAtMs)
   });
 
   recordEvent({

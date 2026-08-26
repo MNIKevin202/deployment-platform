@@ -315,6 +315,7 @@ export async function deployFromGithub(
     forceNoCache?: boolean;
   } = {}
 ): Promise<GithubDeployResult> {
+  const deployStartedAtMs = Date.now();
   const { appDatabase, dockerOps, githubClient, resolveCredential, recordEvent } = deps;
   const now = deps.now ?? (() => new Date());
   const cloneTimeoutMs = deps.cloneTimeoutMs ?? DEFAULT_CLONE_TIMEOUT_MS;
@@ -854,7 +855,8 @@ export async function deployFromGithub(
       imageTag,
       commitSha,
       commitMessage,
-      sourceKind: "github"
+      sourceKind: "github",
+      durationMs: Math.max(0, Date.now() - deployStartedAtMs)
     });
 
     progress("updating-route");

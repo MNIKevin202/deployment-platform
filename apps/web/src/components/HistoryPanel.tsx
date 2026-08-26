@@ -35,6 +35,22 @@ function shortSha(sha: string | null): string {
   return sha ? sha.slice(0, 7) : "—";
 }
 
+function formatDuration(durationMs: number | null | undefined): string {
+  if (durationMs == null) {
+    return "—";
+  }
+
+  if (durationMs < 1000) {
+    return `${durationMs} ms`;
+  }
+
+  const totalSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return minutes === 0 ? `${seconds}s` : `${minutes}m ${seconds}s`;
+}
+
 export default function HistoryPanel({
   appId,
   onReverted,
@@ -199,6 +215,7 @@ export default function HistoryPanel({
                 <th>State</th>
                 <th>Version</th>
                 <th>Deploy Time</th>
+                <th>Duration</th>
                 <th>Image</th>
                 <th>Commit</th>
               </tr>
@@ -238,6 +255,7 @@ export default function HistoryPanel({
                     )}
                   </td>
                   <td className="text-faint">{formatDate(deployment.createdAt)}</td>
+                  <td className="text-faint">{formatDuration(deployment.durationMs)}</td>
                   <td>
                     <code className="inline-code">{deployment.imageTag}</code>
                   </td>

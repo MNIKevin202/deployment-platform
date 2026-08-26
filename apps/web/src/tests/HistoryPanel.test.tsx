@@ -17,12 +17,13 @@ function deployment(overrides: Partial<Deployment> = {}): Deployment {
     isCurrent: false,
     canRevert: true,
     createdAt: "2026-07-27T03:00:00.000Z",
+    durationMs: null,
     ...overrides
   };
 }
 
 const githubHistory: Deployment[] = [
-  deployment({ id: 2, version: 2, imageTag: "deployment-app-5:bbbbbbbbbbbb", isCurrent: true, canRevert: false }),
+  deployment({ id: 2, version: 2, imageTag: "deployment-app-5:bbbbbbbbbbbb", isCurrent: true, canRevert: false, durationMs: 92_000 }),
   deployment({ id: 1, version: 1, imageTag: "deployment-app-5:aaaaaaaaaaaa", isCurrent: false, canRevert: true })
 ];
 
@@ -57,6 +58,7 @@ describe("HistoryPanel", () => {
     expect(screen.getByText("v1")).toBeInTheDocument();
     // The current version reads "Live".
     expect(screen.getByText(/Live/)).toBeInTheDocument();
+    expect(screen.getByText("1m 32s")).toBeInTheDocument();
     // Exactly one revert control (only the older, non-current github version).
     expect(screen.getAllByRole("button", { name: /Revert to version 1/ })).toHaveLength(1);
   });

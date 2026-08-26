@@ -135,6 +135,22 @@ function formatDate(value: string | null): string {
   return parsed.toLocaleString();
 }
 
+function formatDuration(durationMs: number | null | undefined): string {
+  if (durationMs == null) {
+    return "Unknown";
+  }
+
+  if (durationMs < 1000) {
+    return `${durationMs} ms`;
+  }
+
+  const totalSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return minutes === 0 ? `${seconds}s` : `${minutes}m ${seconds}s`;
+}
+
 export default function AppDetail({
   appId,
   onBack,
@@ -1024,6 +1040,11 @@ export default function AppDetail({
             <div>
               <dt>Last deployed</dt>
               <dd>{formatDate(detail.lastDeployedAt)}</dd>
+            </div>
+
+            <div>
+              <dt>Deploy duration</dt>
+              <dd>{formatDuration(detail.lastDeploymentDurationMs)}</dd>
             </div>
           </dl>
 

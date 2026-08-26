@@ -47,6 +47,7 @@ function serializeDeployment(deployment: StoredDeployment) {
     commitMessage: deployment.commitMessage,
     sourceKind: deployment.sourceKind,
     revertOfVersion: deployment.revertOfVersion,
+    durationMs: deployment.durationMs,
     isCurrent: deployment.isCurrent,
     // Only a retained GitHub build that isn't already live can be restored.
     canRevert: deployment.sourceKind === "github" && !deployment.isCurrent,

@@ -1,4 +1,5 @@
 import type { StoredApp, StoredAppPublishedPort } from "../database.js";
+import type { StoredDeployment } from "../deployment-database.js";
 import type { EnvironmentStatus } from "./environment-service.js";
 import type { ImageUpdateStatus } from "./image-update-check-service.js";
 
@@ -35,6 +36,7 @@ export interface AppDetail {
   createdAt: string;
   updatedAt: string;
   lastDeployedAt: string | null;
+  lastDeploymentDurationMs: number | null;
   restartPolicy: string;
   memoryLimitMb: number | null;
   cpuLimit: number | null;
@@ -79,7 +81,8 @@ export function buildAppDetail(
   routingReady: boolean,
   environmentStatus: EnvironmentStatus,
   publishedPorts: StoredAppPublishedPort[] = [],
-  imageUpdateStatus: ImageUpdateStatus | null = null
+  imageUpdateStatus: ImageUpdateStatus | null = null,
+  currentDeployment: StoredDeployment | null = null
 ): AppDetail {
   return {
     id: storedApp.id,
@@ -98,6 +101,7 @@ export function buildAppDetail(
     createdAt: storedApp.createdAt,
     updatedAt: storedApp.updatedAt,
     lastDeployedAt: storedApp.lastDeployedAt,
+    lastDeploymentDurationMs: currentDeployment?.durationMs ?? null,
     restartPolicy: storedApp.restartPolicy,
     memoryLimitMb: storedApp.memoryLimitMb,
     cpuLimit: storedApp.cpuLimit,
