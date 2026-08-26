@@ -10,6 +10,7 @@ interface AttentionPanelProps {
   onQuickAction?: (item: AttentionItem) => void;
   getQuickActionLabel?: (item: AttentionItem) => string | null;
   isQuickActionLoading?: (item: AttentionItem) => boolean;
+  onDismissItem?: (item: AttentionItem) => void;
 }
 
 export default function AttentionPanel({
@@ -17,7 +18,8 @@ export default function AttentionPanel({
   onViewApp,
   onQuickAction,
   getQuickActionLabel,
-  isQuickActionLoading
+  isQuickActionLoading,
+  onDismissItem
 }: AttentionPanelProps) {
   if (items.length === 0) {
     return (
@@ -63,6 +65,15 @@ export default function AttentionPanel({
                   onClick={() => onViewApp(item.app as StoredApp)}
                 >
                   View app →
+                </button>
+              )}
+              {onDismissItem && (
+                <button
+                  type="button"
+                  className="secondary-button compact attention-item-action"
+                  onClick={() => onDismissItem(item)}
+                >
+                  Don&apos;t show again
                 </button>
               )}
             </span>

@@ -33,6 +33,7 @@ import type {
  * same underlying data.
  */
 const HEALTH_POLL_INTERVAL_MS = 60_000;
+const DISMISSED_ATTENTION_STORAGE_KEY = "deployment-platform:dismissed-attention:v1";
 
 const PLATFORM_HEALTH_LABEL: Record<PlatformHealthStatus, string> = {
   healthy: "Healthy",
@@ -89,6 +90,24 @@ function routingHealthLabel(status: RoutingStatus | null): {
   return { label: "Unknown", tone: "warning" };
 }
 
+function loadDismissedAttentionIds(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(DISMISSED_ATTENTION_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveDismissedAttentionIds(ids: Set<string>): void {
+  try {
+    window.localStorage.setItem(DISMISSED_ATTENTION_STORAGE_KEY, JSON.stringify([...ids]));
+  } catch {
+    // Non-fatal: the item still disappears for this page lifetime.
+  }
+}
+
 export default function OverviewPage({
   dockerInfo,
   routingStatus,
@@ -114,6 +133,7 @@ export default function OverviewPage({
   // self-fetched here, slower, since Platform Health is the only consumer.
   const [diskUsage, setDiskUsage] = useState<DiskUsageStatus | null>(null);
   const [autoBackup, setAutoBackup] = useState<AutoBackupStatus | null>(null);
+  const [dismissedAttentionIds, setDismissedAttentionIds] = useState<Set<string>>(() => loadDismissedAttentionIds());
 
   useEffect(() => {
     let cancelled = false;
@@ -162,6 +182,21 @@ export default function OverviewPage({
     diskUsage,
     autoBackup
   });
+  const visibleAttentionItems = health.items.filter((item) => !dismissedAttentionIds.has(item.id));
+  const visibleHealthStatus: PlatformHealthStatus = visibleAttentionItems.some((item) => item.severity === "critical")
+    ? "critical"
+    : visibleAttentionItems.length > 0
+      ? "warning"
+      : "healthy";
+
+  const dismissAttentionItem = (item: AttentionItem): void => {
+    setDismissedAttentionIds((current) => {
+      const next = new Set(current);
+      next.add(item.id);
+      saveDismissedAttentionIds(next);
+      return next;
+    });
+  };
 
   const containerForApp = (app: StoredApp | undefined): ContainerSummary | null => {
     if (!app) {
@@ -224,22 +259,23 @@ export default function OverviewPage({
       <section className="stats-grid platform-health-grid">
         <StatCard
           label="Platform Health"
-          value={PLATFORM_HEALTH_LABEL[health.status]}
-          tone={PLATFORM_HEALTH_TONE[health.status]}
+          value={PLATFORM_HEALTH_LABEL[visibleHealthStatus]}
+          tone={PLATFORM_HEALTH_TONE[visibleHealthStatus]}
           hint={
-            health.items.length > 0
-              ? `${health.items.length} item${health.items.length === 1 ? "" : "s"} need attention`
+            visibleAttentionItems.length > 0
+              ? `${visibleAttentionItems.length} item${visibleAttentionItems.length === 1 ? "" : "s"} need attention`
               : "All systems normal"
           }
         />
       </section>
 
       <AttentionPanel
-        items={health.items}
+        items={visibleAttentionItems}
         onViewApp={onViewApp}
         onQuickAction={runAttentionAction}
         getQuickActionLabel={getAttentionActionLabel}
         isQuickActionLoading={isAttentionActionLoading}
+        onDismissItem={dismissAttentionItem}
       />
 
       <section className="stats-grid">

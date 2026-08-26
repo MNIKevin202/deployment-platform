@@ -75,6 +75,16 @@ describe("AttentionPanel", () => {
     expect(screen.getByRole("button", { name: "Redeploy..." })).toBeDisabled();
   });
 
+  test("renders a don't show again button that dismisses the item", async () => {
+    const app = fakeApp(7, "worker");
+    const onDismissItem = vi.fn();
+    const target = item({ id: "a", message: "worker is stopped.", app });
+    render(<AttentionPanel items={[target]} onViewApp={vi.fn()} onDismissItem={onDismissItem} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Don't show again" }));
+    expect(onDismissItem).toHaveBeenCalledWith(target);
+  });
+
   test("a platform-wide item (no app) renders without a View app button", () => {
     const items = [item({ id: "a", message: "Disk is 92% full." })];
     render(<AttentionPanel items={items} onViewApp={vi.fn()} />);
