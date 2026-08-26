@@ -3225,6 +3225,13 @@ code {
   color: var(--color-text);
 }
 
+.attention-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .attention-item-action {
   flex-shrink: 0;
 }

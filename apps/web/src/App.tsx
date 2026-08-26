@@ -363,6 +363,32 @@ function App() {
     }
   };
 
+  const redeployApp = async (storedApp: StoredApp) => {
+    try {
+      setError("");
+      setNotice("");
+      setActionLoading(`app-${storedApp.id}:redeploy`);
+
+      const response = await fetch(`/api/apps/${storedApp.id}/redeploy`, {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        throw new Error(await getApiError(response, "Unable to redeploy app"));
+      }
+
+      const result = (await response.json().catch(() => null)) as { message?: string } | null;
+      setNotice(result?.message || `${storedApp.name} redeployed.`);
+      await loadDashboard();
+    } catch (redeployError) {
+      setError(
+        redeployError instanceof Error ? redeployError.message : "Unable to redeploy app"
+      );
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const handleAppCreated = async (createdApp: CreatedAppSummary) => {
     setShowCreateApp(false);
     setNotice(`${createdApp.name} was created successfully.`);
@@ -588,6 +614,7 @@ function App() {
           onOpenLogs={(container) => setSelectedContainer(container)}
           onDeleteApp={(container) => void deleteApp(container)}
           onViewApp={viewApp}
+          onRedeployApp={(storedApp) => void redeployApp(storedApp)}
           onCreateApp={openCreateApp}
           onBrowseTemplates={() => goToSection("templates")}
         />

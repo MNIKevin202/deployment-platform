@@ -42,6 +42,39 @@ describe("AttentionPanel", () => {
     expect(onViewApp).toHaveBeenCalledWith(app);
   });
 
+  test("renders a quick action button when an item has a matching action", async () => {
+    const app = fakeApp(7, "worker");
+    const onQuickAction = vi.fn();
+    const target = item({ id: "a", message: "worker is stopped.", app });
+    render(
+      <AttentionPanel
+        items={[target]}
+        onViewApp={vi.fn()}
+        onQuickAction={onQuickAction}
+        getQuickActionLabel={() => "Start"}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Start" }));
+    expect(onQuickAction).toHaveBeenCalledWith(target);
+  });
+
+  test("shows a disabled loading state for a running quick action", () => {
+    const app = fakeApp(7, "worker");
+    const target = item({ id: "a", message: "worker is stopped.", app });
+    render(
+      <AttentionPanel
+        items={[target]}
+        onViewApp={vi.fn()}
+        onQuickAction={vi.fn()}
+        getQuickActionLabel={() => "Redeploy"}
+        isQuickActionLoading={() => true}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Redeploy..." })).toBeDisabled();
+  });
+
   test("a platform-wide item (no app) renders without a View app button", () => {
     const items = [item({ id: "a", message: "Disk is 92% full." })];
     render(<AttentionPanel items={items} onViewApp={vi.fn()} />);

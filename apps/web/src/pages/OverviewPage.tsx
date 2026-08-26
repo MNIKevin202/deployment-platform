@@ -12,6 +12,7 @@ import { useAppsView } from "../hooks/useAppsView";
 import { isDatabaseImage } from "../lib/appKind";
 import {
   computePlatformHealth,
+  type AttentionItem,
   type AutoBackupStatus,
   type DiskUsageStatus,
   type PlatformHealthStatus
@@ -55,6 +56,7 @@ interface OverviewPageProps {
   onOpenLogs: (container: ContainerSummary) => void;
   onDeleteApp: (container: ContainerSummary) => void;
   onViewApp: (storedApp: StoredApp) => void;
+  onRedeployApp: (storedApp: StoredApp) => void;
   onCreateApp: () => void;
   onBrowseTemplates?: () => void;
 }
@@ -97,6 +99,7 @@ export default function OverviewPage({
   onOpenLogs,
   onDeleteApp,
   onViewApp,
+  onRedeployApp,
   onCreateApp,
   onBrowseTemplates
 }: OverviewPageProps) {
@@ -160,6 +163,62 @@ export default function OverviewPage({
     autoBackup
   });
 
+  const containerForApp = (app: StoredApp | undefined): ContainerSummary | null => {
+    if (!app) {
+      return null;
+    }
+
+    return (
+      managedApps.find((container) => container.labels["com.deployment-platform.app-name"] === app.name) ??
+      managedApps.find((container) => container.id === app.containerId) ??
+      null
+    );
+  };
+
+  const getAttentionActionLabel = (item: AttentionItem): string | null => {
+    if (item.category === "stopped-app" && containerForApp(item.app)) {
+      return "Start";
+    }
+
+    if (item.category === "deploy-failed" && item.app) {
+      return "Redeploy";
+    }
+
+    return null;
+  };
+
+  const isAttentionActionLoading = (item: AttentionItem): boolean => {
+    const label = getAttentionActionLabel(item);
+    if (!label) {
+      return false;
+    }
+
+    if (item.category === "stopped-app") {
+      const container = containerForApp(item.app);
+      return Boolean(container && actionLoading === `${container.id}:start`);
+    }
+
+    if (item.category === "deploy-failed") {
+      return Boolean(item.app && actionLoading === `app-${item.app.id}:redeploy`);
+    }
+
+    return false;
+  };
+
+  const runAttentionAction = (item: AttentionItem): void => {
+    if (item.category === "stopped-app") {
+      const container = containerForApp(item.app);
+      if (container) {
+        onAction(container, "start");
+      }
+      return;
+    }
+
+    if (item.category === "deploy-failed" && item.app) {
+      onRedeployApp(item.app);
+    }
+  };
+
   return (
     <div className="page">
       <section className="stats-grid platform-health-grid">
@@ -175,7 +234,13 @@ export default function OverviewPage({
         />
       </section>
 
-      <AttentionPanel items={health.items} onViewApp={onViewApp} />
+      <AttentionPanel
+        items={health.items}
+        onViewApp={onViewApp}
+        onQuickAction={runAttentionAction}
+        getQuickActionLabel={getAttentionActionLabel}
+        isQuickActionLoading={isAttentionActionLoading}
+      />
 
       <section className="stats-grid">
         <StatCard label="Apps" value={String(serviceApps.length)} />

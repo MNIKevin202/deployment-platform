@@ -7,9 +7,18 @@ const MAX_VISIBLE_ITEMS = 10;
 interface AttentionPanelProps {
   items: AttentionItem[];
   onViewApp: (storedApp: StoredApp) => void;
+  onQuickAction?: (item: AttentionItem) => void;
+  getQuickActionLabel?: (item: AttentionItem) => string | null;
+  isQuickActionLoading?: (item: AttentionItem) => boolean;
 }
 
-export default function AttentionPanel({ items, onViewApp }: AttentionPanelProps) {
+export default function AttentionPanel({
+  items,
+  onViewApp,
+  onQuickAction,
+  getQuickActionLabel,
+  isQuickActionLoading
+}: AttentionPanelProps) {
   if (items.length === 0) {
     return (
       <div className="attention-panel">
@@ -28,21 +37,38 @@ export default function AttentionPanel({ items, onViewApp }: AttentionPanelProps
 
   return (
     <div className="attention-panel">
-      {visible.map((item) => (
-        <div key={item.id} className={`attention-item severity-${item.severity}`}>
-          <span className="attention-item-dot" aria-hidden="true" />
-          <span className="attention-item-message">{item.message}</span>
-          {item.app && (
-            <button
-              type="button"
-              className="secondary-button compact attention-item-action"
-              onClick={() => onViewApp(item.app as StoredApp)}
-            >
-              View app →
-            </button>
-          )}
-        </div>
-      ))}
+      {visible.map((item) => {
+        const quickActionLabel = getQuickActionLabel?.(item) ?? null;
+        const quickActionLoading = isQuickActionLoading?.(item) ?? false;
+
+        return (
+          <div key={item.id} className={`attention-item severity-${item.severity}`}>
+            <span className="attention-item-dot" aria-hidden="true" />
+            <span className="attention-item-message">{item.message}</span>
+            <span className="attention-item-actions">
+              {quickActionLabel && onQuickAction && (
+                <button
+                  type="button"
+                  className="primary-button compact attention-item-action"
+                  onClick={() => onQuickAction(item)}
+                  disabled={quickActionLoading}
+                >
+                  {quickActionLoading ? `${quickActionLabel}...` : quickActionLabel}
+                </button>
+              )}
+              {item.app && (
+                <button
+                  type="button"
+                  className="secondary-button compact attention-item-action"
+                  onClick={() => onViewApp(item.app as StoredApp)}
+                >
+                  View app →
+                </button>
+              )}
+            </span>
+          </div>
+        );
+      })}
       {remaining > 0 && <p className="attention-more">+{remaining} more</p>}
     </div>
   );
