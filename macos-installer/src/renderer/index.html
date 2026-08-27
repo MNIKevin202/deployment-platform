@@ -132,8 +132,12 @@
         <section id="dashboard-view" class="view hidden">
           <div class="dashboard-heading">
             <div><p class="eyebrow">Server status</p><h2 id="dashboard-name">Production</h2><p id="dashboard-domain" class="subtle"></p></div>
-            <div class="button-row"><button id="open-dashboard-inline" type="button" class="primary">Open Dashboard</button><button id="refresh-status" type="button" class="ghost">Refresh Status</button></div>
+            <div id="dashboard-actions" class="button-row"><button id="open-dashboard-inline" type="button" class="primary">Open Dashboard</button><button id="refresh-status" type="button" class="ghost">Refresh Status</button></div>
           </div>
+          <section id="not-installed-view" class="panel not-installed-panel hidden">
+            <button id="install-on-server" type="button" class="primary">Install Deployment Platform</button>
+          </section>
+          <div id="installed-options">
           <section class="panel status-panel">
             <div class="section-title"><h2>Server Status</h2><span id="status-updated" class="subtle"></span></div>
             <div id="status-cards" class="status-rows"></div>
@@ -178,6 +182,7 @@
             </div>
             <pre id="dashboard-log" tabindex="0"></pre>
           </section>
+          </div>
         </section>
       </main>
     </div>

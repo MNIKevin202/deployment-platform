@@ -61,10 +61,16 @@ test("updateStagesFromOutput advances stages from real output", () => {
 });
 
 test("parseStatus extracts container image and state summaries", () => {
-  const parsed = parseStatus("deployment-platform-api deployment-platform-api:0.1.1 running\ndeployment-platform-web deployment-platform-web:0.1.1 exited");
+  const parsed = parseStatus("__DP_INSTALLED__=true\ndeployment-platform-api deployment-platform-api:0.1.1 running\ndeployment-platform-web deployment-platform-web:0.1.1 exited");
+  assert.equal(parsed.installed, true);
   assert.equal(parsed.api.image, "deployment-platform-api:0.1.1");
   assert.equal(parsed.api.state, "running");
   assert.equal(parsed.web.state, "exited");
+});
+
+test("parseStatus distinguishes an uninstalled VPS", () => {
+  assert.equal(parseStatus("__DP_INSTALLED__=false\n").installed, false);
+  assert.equal(parseStatus("").installed, null);
 });
 
 test("parseStatus extracts token-free GitHub status", () => {
@@ -125,4 +131,12 @@ test("manager requires final confirmation before starting uninstall", () => {
   const handler = renderer.slice(renderer.indexOf('$("#run-uninstall").addEventListener'), renderer.indexOf("window.installer.onLog"));
   assert.match(handler, /window\.confirm\("Are you sure you want to uninstall Deployment Platform from this VPS\?"\)/);
   assert.ok(handler.indexOf("window.confirm") < handler.indexOf("window.installer.uninstall"));
+});
+
+test("manager hides management options when the platform is not installed", () => {
+  const { readFileSync } = require("node:fs");
+  const renderer = readFileSync(require.resolve("../src/renderer/renderer.js"), "utf8");
+  assert.match(renderer, /renderInstallationState\(result\.status\.installed\)/);
+  assert.match(renderer, /installed-options.*classList\.toggle\("hidden", !installed\)/s);
+  assert.match(renderer, /not-installed-view.*classList\.toggle\("hidden", installed !== false\)/s);
 });

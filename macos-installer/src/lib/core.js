@@ -163,7 +163,9 @@ function parseStatus(raw) {
   const web = image("deployment-platform-web");
   const caddy = image("deployment-platform-caddy");
   const githubMatch = text.match(/\{"connected":(true|false),"username":(null|"[^"]*"),"lastValidatedAt":(null|"[^"]*"),"credentialStatus":"([^"]+)"\}/);
+  const installedMatch = text.match(/__DP_INSTALLED__=(true|false)/);
   return {
+    installed: installedMatch ? installedMatch[1] === "true" : null,
     api: api ? { image: api[1], state: api[2].trim() } : null,
     web: web ? { image: web[1], state: web[2].trim() } : null,
     caddy: caddy ? { image: caddy[1], state: caddy[2].trim() } : null,

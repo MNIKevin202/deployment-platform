@@ -322,6 +322,12 @@ echo "Installation complete. Open: https://${config.panelDomain}"
 
 function buildStatusScript() {
   return `set -Eeuo pipefail
+installed=false
+for container in deployment-platform-api deployment-platform-web deployment-platform-caddy; do
+  if docker inspect "$container" >/dev/null 2>&1; then installed=true; break; fi
+done
+printf '__DP_INSTALLED__=%s\n' "$installed"
+[ "$installed" = true ] || exit 0
 echo "__DP_SECTION__:containers"
 docker ps -a --format '{{.Names}} {{.Image}} {{.Status}}' | grep '^deployment-platform-' || true
 echo "__DP_SECTION__:state"

@@ -131,8 +131,18 @@ async function showDashboard(profile) {
   $("#page-title").textContent = profile.name;
   $("#open-dashboard").disabled = false;
   $("#open-dashboard").onclick = () => window.open(`https://${profile.panelDomain}`);
+  renderInstallationState(null);
   renderStatusCards();
   refreshStatus();
+}
+
+function renderInstallationState(installed) {
+  const checking = installed === null;
+  $("#installed-options").classList.toggle("hidden", !installed);
+  $("#not-installed-view").classList.toggle("hidden", installed !== false);
+  $("#dashboard-actions").classList.toggle("hidden", !installed);
+  $("#open-dashboard").disabled = !installed;
+  if (checking) $("#status-updated").textContent = "Checking installation...";
 }
 
 function renderStatusCards(status = {}) {
@@ -151,6 +161,13 @@ async function refreshStatus() {
   if (!selectedProfile) return;
   dashboardLog.textContent = "";
   const result = await window.installer.serverStatus(selectedConfig());
+  if (result.code !== 0 || result.status?.installed === null) {
+    renderInstallationState(null);
+    $("#status-updated").textContent = "Could not check installation.";
+    return;
+  }
+  renderInstallationState(result.status.installed);
+  if (!result.status.installed) return;
   if (result.status) renderStatusCards(result.status);
   $("#status-updated").textContent = "Updated just now";
   const enabled = result.output?.includes("active") || result.output?.includes("enabled");
@@ -190,6 +207,12 @@ $("#stepper").addEventListener("click", (event) => {
   renderStepper();
 });
 $("#add-server").addEventListener("click", () => showInstall());
+$("#install-on-server").addEventListener("click", () => {
+  if (!selectedProfile) return;
+  showInstall(selectedProfile);
+  currentStep = 0;
+  renderStepper();
+});
 $("#change-github").addEventListener("click", () => {
   if (!selectedProfile) return;
   const profile = selectedProfile;
@@ -374,6 +397,7 @@ window.installer.onUninstallDone(({ code }) => {
     status.textContent = uninstallMode === "preview" ? "Preview complete. No changes were made." : "Uninstall completed successfully.";
     status.className = "task-status success";
     append(dashboardLog, { source: "local", text: uninstallMode === "preview" ? "\nUninstall preview complete. No changes were made.\n" : "\nUninstall completed successfully.\n" });
+    if (uninstallMode === "run") renderInstallationState(false);
   } else {
     status.textContent = uninstallMode === "preview" ? "Preview failed. Review the console for details." : "Uninstall failed. Review the console for details.";
     status.className = "task-status error";
