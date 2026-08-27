@@ -27,7 +27,10 @@ function formObject() {
     adminPassword: data.get("adminPassword"),
     adminPasswordConfirm: data.get("adminPasswordConfirm"),
     repository: data.get("repository"),
-    sourceRef: data.get("sourceRef"),
+  sourceRef: data.get("sourceRef"),
+    githubToken: data.get("githubToken"),
+    githubAccount: data.get("githubAccount"),
+    githubRepository: data.get("githubRepository"),
     name: data.get("name"),
     enableAutoUpdates: data.has("enableAutoUpdates"),
     continueWithoutDns: data.has("continueWithoutDns")
@@ -99,13 +102,19 @@ function renderProfiles() {
     </button>`).join("");
 }
 
-function showInstall() {
-  selectedProfile = null;
+function showInstall(profile = null) {
+  selectedProfile = profile;
   $("#install-view").classList.remove("hidden");
   $("#dashboard-view").classList.add("hidden");
   $("#section-eyebrow").textContent = "Installer";
   $("#page-title").textContent = "Add a server";
   $("#open-dashboard").disabled = true;
+  if (profile) {
+    for (const [name, value] of Object.entries({ host: profile.host, sshUser: profile.sshUser, panelDomain: profile.panelDomain, appsDomain: profile.appsDomain, repository: profile.repository, sourceRef: profile.sourceRef, name: profile.name })) {
+      const field = $("[name='" + name + "']");
+      if (field && value) field.value = value;
+    }
+  }
 }
 
 function showDashboard(profile) {
@@ -128,7 +137,8 @@ function renderStatusCards(status = {}) {
     ["Source", `${profile.repository || "repo"} @ ${profile.sourceRef || "main"}`],
     ["API", status.api?.state || "Unknown"],
     ["Web", status.web?.state || "Unknown"],
-    ["Caddy", status.caddy?.state || "Unknown"]
+    ["Caddy", status.caddy?.state || "Unknown"],
+    ["GitHub", status.github?.connected ? "Connected as " + (status.github.username || "account") : "Disconnected"]
   ].map(([label, value]) => `<article class="card"><span>${label}</span><strong>${value}</strong></article>`).join("");
 }
 
@@ -170,7 +180,14 @@ $("#stepper").addEventListener("click", (event) => {
   currentStep = Number(target.dataset.stepTarget);
   renderStepper();
 });
-$("#add-server").addEventListener("click", showInstall);
+$("#add-server").addEventListener("click", () => showInstall());
+$("#change-github").addEventListener("click", () => {
+  if (!selectedProfile) return;
+  const profile = selectedProfile;
+  showInstall(profile);
+  currentStep = 2;
+  renderStepper();
+});
 $("#test-connection").addEventListener("click", async () => {
   $("#connection-result").textContent = "Testing...";
   const result = await window.installer.testConnection(formObject());
@@ -237,7 +254,26 @@ window.installer.onLog((payload) => {
   append(log, payload);
   renderStages(log.textContent);
   const line = payload.text.split("\n").filter(Boolean).pop();
-  if (line) $("#current-stage").textContent = line.replace(/^\[[0-9/]+\]\s*/, "").slice(0, 90);
+  if (line) {
+    const status = line.replace(/^\[[0-9/]+\]\s*/, "");
+    const current = $("#current-stage");
+    current.textContent = status;
+    current.title = status;
+    current.classList.toggle("long", status.length > 96);
+  }
+});
+$("#test-github").addEventListener("click", async () => {
+  const resultNode = $("#github-result");
+  resultNode.textContent = "Testing account, repository visibility, branch, and contents access...";
+  resultNode.className = "inline-state";
+  const result = await window.installer.testGithub(formObject());
+  resultNode.textContent = result.success
+    ? "Connected as " + result.account + ". " + result.repositoryCount + " repositories accessible. " + (result.privateAccess ? "Private repository access confirmed. " : "") + "Contents: read permission confirmed."
+    : result.message;
+  resultNode.className = "inline-state " + (result.success ? "success" : "error");
+  if (result.success && result.repositories) {
+    $("#github-repository").innerHTML = '<option value="">Use first accessible repository</option>' + result.repositories.map((repo) => '<option value="' + repo.fullName + '">' + repo.fullName + (repo.private ? " (private)" : "") + "</option>").join("");
+  }
 });
 window.installer.onServerLog((payload) => append(dashboardLog, payload));
 window.installer.onLogsLog((payload) => append(dashboardLog, payload));

@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("installer", {
   start: (input) => ipcRenderer.invoke("install:start", input),
   testConnection: (input) => ipcRenderer.invoke("ssh:test", input),
+  testGithub: (input) => ipcRenderer.invoke("github:test", input),
+  testGithub: (input) => ipcRenderer.invoke("github:test", input),
   cancel: () => ipcRenderer.invoke("task:cancel"),
   listProfiles: () => ipcRenderer.invoke("profiles:list"),
   saveProfile: (profile) => ipcRenderer.invoke("profiles:save", profile),

@@ -74,6 +74,18 @@
               <section class="step hidden" data-step="2">
                 <h2>Source & Updates</h2>
                 <label><span>GitHub repository</span><input name="repository" value="https://github.com/MNIKevin202/deployment-platform.git" required /></label>
+                <div class="github-access">
+                  <div class="section-heading"><strong>GitHub access for private app repositories</strong><span class="badge">Optional</span></div>
+                  <p class="helper">Use a fine-grained token with Contents: Read-only and Metadata: Read-only. Choose only selected repositories when possible. It is sent over SSH, encrypted into the platform credential store, and never shown in logs.</p>
+                  <label><span>Fine-grained GitHub token</span><input name="githubToken" type="password" autocomplete="off" placeholder="github_pat_..." /></label>
+                  <label><span>GitHub account label <small>(optional)</small></span><input name="githubAccount" placeholder="MNIKevin202" /></label>
+                  <div class="two">
+                    <button id="test-github" type="button">Test GitHub Connection</button>
+                    <label><span>Optional repository access test</span><select name="githubRepository" id="github-repository"><option value="">Use first accessible repository</option></select></label>
+                  </div>
+                  <p id="github-result" class="inline-state" aria-live="polite"></p>
+                  <p class="helper">No Actions, Administration, Issues, Pull Requests, Workflows, or write permissions are needed to clone and deploy code.</p>
+                </div>
                 <div class="two">
                   <label><span>Branch, tag, or ref</span><input name="sourceRef" value="main" required /></label>
                   <label class="check"><input name="enableAutoUpdates" type="checkbox" checked /><span>Install VPS-local automatic updater</span></label>
@@ -90,7 +102,7 @@
               <section class="step hidden" data-step="4">
                 <h2>Installation</h2>
                 <div id="stage-list" class="stage-list"></div>
-                <div class="timers"><span id="current-stage">Ready</span><span id="elapsed">00:00</span></div>
+                <div class="progress-status"><span id="current-stage">Ready</span><span id="elapsed">00:00</span></div>
               </section>
 
               <div class="form-actions">
@@ -128,6 +140,7 @@
                 <button data-command="update" type="button">Update Now</button>
                 <button data-command="enableUpdates" type="button" class="ghost">Enable Auto Updates</button>
                 <button data-command="disableUpdates" type="button" class="ghost">Disable Auto Updates</button>
+                <button id="change-github" type="button" class="ghost">Change GitHub Token</button>
               </div>
             </section>
             <section class="panel">

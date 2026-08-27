@@ -39,6 +39,20 @@ function redactSecrets(text, explicitSecrets = []) {
   return redacted;
 }
 
+function progressStatusClass(text) {
+  return String(text ?? "").trim().length > 96 ? "long" : "";
+}
+
+function githubCapabilityMessage(result) {
+  if (result.success) {
+    const parts = [`Connected as ${result.account}` , `${result.repositoryCount} repositories accessible`];
+    if (result.privateAccess) parts.push("Private repository access confirmed");
+    if (result.contentsAccess) parts.push("Contents: read permission confirmed");
+    return parts.join(". ") + ".";
+  }
+  return result.message || "GitHub connection failed.";
+}
+
 function updateStagesFromOutput(stages, output) {
   const next = stages.map((stage) => ({ ...stage }));
   let highestCompleted = -1;
@@ -133,6 +147,9 @@ function validateInstallInput(input) {
     adminPassword,
     repository,
     sourceRef,
+    githubToken: String(input.githubToken ?? "").trim(),
+    githubAccount: String(input.githubAccount ?? "").trim(),
+    githubRepository: String(input.githubRepository ?? "").trim(),
     continueWithoutDns: Boolean(input.continueWithoutDns),
     enableAutoUpdates: input.enableAutoUpdates !== false,
     name: String(input.name ?? panelDomain).trim() || panelDomain
@@ -145,10 +162,12 @@ function parseStatus(raw) {
   const api = image("deployment-platform-api");
   const web = image("deployment-platform-web");
   const caddy = image("deployment-platform-caddy");
+  const githubMatch = text.match(/\{"connected":(true|false),"username":(null|"[^"]*"),"lastValidatedAt":(null|"[^"]*"),"credentialStatus":"([^"]+)"\}/);
   return {
     api: api ? { image: api[1], state: api[2].trim() } : null,
     web: web ? { image: web[1], state: web[2].trim() } : null,
-    caddy: caddy ? { image: caddy[1], state: caddy[2].trim() } : null
+    caddy: caddy ? { image: caddy[1], state: caddy[2].trim() } : null,
+    github: githubMatch ? { connected: githubMatch[1] === "true", username: githubMatch[2] === "null" ? null : githubMatch[2].slice(1, -1), lastValidatedAt: githubMatch[3] === "null" ? null : githubMatch[3].slice(1, -1), credentialStatus: githubMatch[4] } : null
   };
 }
 
@@ -174,6 +193,7 @@ module.exports = {
   initialStages,
   parseStatus,
   redactSecrets,
+  progressStatusClass,
   updateStagesFromOutput,
   validateInstallInput
 };

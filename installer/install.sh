@@ -81,6 +81,7 @@ OPT_SOURCE_REF="main"
 OPT_BACKUPS_ENABLED=1
 OPT_BACKUP_RETENTION=14
 OPT_CONTINUE_WITHOUT_DNS=0
+OPT_GITHUB_TOKEN_FILE=""
 OPT_DELETE_PLATFORM_DATA=0
 OPT_DELETE_APP_CONTAINERS=0
 OPT_DELETE_APP_VOLUMES=0
@@ -114,6 +115,7 @@ Non-interactive options:
   --no-backups                   Disable automatic database backups.
   --backup-retention N           Days of daily backups to keep (default: 14).
   --continue-without-dns         Proceed even if DNS is not confirmed yet.
+  --github-token-file PATH        Configure GitHub PAT from a mode-600 file.
 
 Uninstall flags (each is independently opt-in; all default to "preserve"):
   --delete-platform-data         Delete the platform database volume.
@@ -146,6 +148,7 @@ while [ "$#" -gt 0 ]; do
     --no-backups) OPT_BACKUPS_ENABLED=0; shift ;;
     --backup-retention) OPT_BACKUP_RETENTION="$2"; shift 2 ;;
     --continue-without-dns) OPT_CONTINUE_WITHOUT_DNS=1; shift ;;
+    --github-token-file) OPT_GITHUB_TOKEN_FILE="$2"; shift 2 ;;
     --delete-platform-data) OPT_DELETE_PLATFORM_DATA=1; shift ;;
     --delete-app-containers) OPT_DELETE_APP_CONTAINERS=1; shift ;;
     --delete-app-volumes) OPT_DELETE_APP_VOLUMES=1; shift ;;

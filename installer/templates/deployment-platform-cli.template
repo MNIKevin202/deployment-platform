@@ -26,6 +26,8 @@ Usage: deployment-platform <command>
   logs api|web|caddy     Tail a container's logs
   backup-database         Back up the SQLite database now
   reset-admin-password    Rotate the administrator password (interactive, hidden input)
+  configure-github         Save and validate a GitHub token from a mode-600 file
+  github-status             Show token-free GitHub connection status
   uninstall-preview       Show what an uninstall would remove, without changing anything
 
 reset-admin-password:
@@ -144,6 +146,17 @@ case "$cmd" in
     source "${INSTALLER_DIR}/lib/rollback.sh"
     install_trap_handlers
     rotate_admin_password "${password_file_arg}"
+    ;;
+  configure-github)
+    require_root_for configure-github
+    token_file=""
+    [ "${1:-}" = "--token-file" ] && token_file="${2:-}"
+    [ -f "$token_file" ] || { echo "A readable --token-file is required." >&2; exit 1; }
+    chmod 600 "$token_file"
+    docker exec -i deployment-platform-api node /app/apps/api/dist/bootstrap-github.js < "$token_file"
+    ;;
+  github-status)
+    docker exec deployment-platform-api node /app/apps/api/dist/github-status.js
     ;;
   uninstall-preview)
     require_root_for uninstall-preview

@@ -66,3 +66,55 @@ test("parseStatus extracts container image and state summaries", () => {
   assert.equal(parsed.api.state, "running");
   assert.equal(parsed.web.state, "exited");
 });
+
+test("parseStatus extracts token-free GitHub status", () => {
+  const parsed = parseStatus('{"connected":true,"username":"MNIKevin202","lastValidatedAt":"2026-08-27T00:00:00Z","credentialStatus":"connected"}');
+  assert.equal(parsed.github.connected, true);
+  assert.equal(parsed.github.username, "MNIKevin202");
+});
+
+test("long progress status gets a stable long-text class", () => {
+  const { progressStatusClass } = require("../src/lib/core");
+  assert.equal(progressStatusClass("Reading package lists... 99%"), "");
+  assert.equal(progressStatusClass("x".repeat(120)), "long");
+});
+
+test("profile storage excludes the GitHub token", () => {
+  const input = validateInstallInput({
+    host: "host.example.com", sshUser: "root", sshPassword: "server-password",
+    panelDomain: "deploy.example.com", appsDomain: "apps.example.com", adminUsername: "admin",
+    adminPassword: "long-password", adminPasswordConfirm: "long-password",
+    repository: "https://github.com/MNIKevin202/deployment-platform.git", sourceRef: "main",
+    githubToken: "github_pat_fake_secret"
+  });
+  assert.equal(input.githubToken, "github_pat_fake_secret");
+  assert.equal(require("../src/lib/core").buildProfile(input).githubToken, undefined);
+});
+
+test("GitHub capability test validates private contents with mocked API", async () => {
+  const { testGithubToken } = require("../src/lib/github");
+  const calls = [];
+  const responses = {
+    "/user": { login: "MNIKevin202" },
+    "/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member": [{ full_name: "MNIKevin202/private-app", owner: { login: "MNIKevin202" }, name: "private-app", private: true, default_branch: "main" }],
+    "/repos/MNIKevin202/private-app": {},
+    "/repos/MNIKevin202/private-app/git/ref/heads/main": {},
+    "/repos/MNIKevin202/private-app/contents/?ref=main": []
+  };
+  const result = await testGithubToken({ githubToken: "github_pat_fake_secret", githubRepository: "MNIKevin202/private-app" }, async (url) => {
+    const path = new URL(url).pathname + (new URL(url).search || "");
+    calls.push(path);
+    return { ok: true, status: 200, json: async () => responses[path] };
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.privateAccess, true);
+  assert.equal(result.contentsAccess, true);
+  assert.equal(calls.length, 5);
+});
+
+test("GitHub capability test distinguishes invalid and insufficient tokens", async () => {
+  const { testGithubToken } = require("../src/lib/github");
+  const response = (status) => async () => ({ ok: false, status, json: async () => ({}) });
+  assert.match((await testGithubToken({ githubToken: "github_pat_fake" }, response(401))).message, /invalid or expired/i);
+  assert.match((await testGithubToken({ githubToken: "github_pat_fake" }, response(403))).message, /denied this capability/i);
+});

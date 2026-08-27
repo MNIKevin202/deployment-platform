@@ -6,6 +6,7 @@ const { buildProfile, parseStatus, redactSecrets, validateInstallInput } = requi
 
 let mainWindow = null;
 let activeSession = null;
+const GITHUB_API = "https://api.github.com";
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -63,7 +64,41 @@ function emit(channel, payload) {
 }
 
 function makeSecrets(config) {
-  return [config.sshPassword, config.privateKey, config.sudoPassword, config.adminPassword].filter(Boolean);
+  return [config.sshPassword, config.privateKey, config.sudoPassword, config.adminPassword, config.githubToken].filter(Boolean);
+}
+
+async function githubRequest(token, pathname) {
+  const response = await fetch(`${GITHUB_API}${pathname}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "DeploymentPlatform-Mac-Installer/1.0" }
+  });
+  if (response.status === 401) throw new Error("Token is invalid or expired.");
+  if (response.status === 403) throw new Error("Token is valid, but GitHub denied this capability or rate limit was reached.");
+  if (response.status === 404) throw new Error("The selected repository is outside the token's repository scope.");
+  if (!response.ok) throw new Error("GitHub could not complete the requested check.");
+  return response.json();
+}
+
+async function testGithubToken(input) {
+  const token = String(input.githubToken || "").trim();
+  if (!token) return { success: false, message: "Enter a GitHub fine-grained personal access token." };
+  try {
+    const account = await githubRequest(token, "/user");
+    const repositories = await githubRequest(token, "/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member");
+    if (!Array.isArray(repositories) || repositories.length === 0) {
+      return { success: false, message: `Connected as ${account.login}, but no repositories are accessible.` };
+    }
+    const requested = String(input.githubRepository || "").trim();
+    const candidate = requested.match(/^https?:\/\/github\.com\/([^/]+)\/([^/#?]+)\.git$/i) || requested.match(/^([^/]+)\/([^/]+)$/);
+    const repo = candidate ? repositories.find((item) => item.full_name.toLowerCase() === `${candidate[1]}/${candidate[2]}`.toLowerCase()) : repositories[0];
+    if (candidate && !repo) return { success: false, message: "The selected repository is outside the token's repository scope." };
+    const target = repo || repositories[0];
+    await githubRequest(token, `/repos/${encodeURIComponent(target.owner.login)}/${encodeURIComponent(target.name)}`);
+    await githubRequest(token, `/repos/${encodeURIComponent(target.owner.login)}/${encodeURIComponent(target.name)}/git/ref/heads/${encodeURIComponent(target.default_branch)}`);
+    await githubRequest(token, `/repos/${encodeURIComponent(target.owner.login)}/${encodeURIComponent(target.name)}/contents/?ref=${encodeURIComponent(target.default_branch)}`);
+    return { success: true, account: account.login, repositoryCount: repositories.length, privateAccess: repositories.some((item) => item.private), contentsAccess: true, repositories: repositories.slice(0, 100).map((item) => ({ fullName: item.full_name, private: item.private, defaultBranch: item.default_branch })) };
+  } catch (error) {
+    return { success: false, message: redactSecrets(error.message || "GitHub connection failed.", [token]) };
+  }
 }
 
 class SshTransport {
@@ -211,7 +246,7 @@ function buildInstallScript(config) {
   return `set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 WORK_DIR="$(mktemp -d /tmp/deployment-platform-install.XXXXXX)"
-cleanup() { rm -rf "$WORK_DIR"; }
+cleanup() { rm -rf "$WORK_DIR"; rm -f "/tmp/deployment-platform-github-token"; }
 trap cleanup EXIT
 
 echo "[1/8] Preparing packages..."
@@ -243,13 +278,21 @@ rm -f "$WORK_DIR/admin-password"
 echo "[5/8] Configuring VPS-local automatic updates..."
 ${config.enableAutoUpdates ? installUpdaterScript() : "echo \"Automatic updater skipped by operator.\""}
 
-echo "[6/8] Capturing service status..."
+if [ -s ${shellQuote(config.githubTokenPath || "/tmp/deployment-platform-github-token")} ]; then
+  echo "[6/8] Saving GitHub access in the platform credential store..."
+  deployment-platform configure-github --token-file ${shellQuote(config.githubTokenPath || "/tmp/deployment-platform-github-token")}
+  rm -f ${shellQuote(config.githubTokenPath || "/tmp/deployment-platform-github-token")}
+else
+  echo "[6/8] GitHub access not configured (no token supplied)."
+fi
+
+echo "[7/8] Capturing service status..."
 docker ps -a --format '{{.Names}} {{.Image}} {{.Status}}' | grep '^deployment-platform-' || true
 systemctl status deployment-platform-update.timer --no-pager || true
 
-echo "[7/8] Verifying installation..."
+echo "[8/8] Verifying installation..."
 deployment-platform verify
-echo "[8/8] Installation complete. Open: https://${config.panelDomain}"
+echo "Installation complete. Open: https://${config.panelDomain}"
 `;
 }
 
@@ -264,6 +307,8 @@ echo "__DP_SECTION__:updater"
 systemctl is-enabled deployment-platform-update.timer 2>/dev/null || true
 systemctl is-active deployment-platform-update.timer 2>/dev/null || true
 systemctl list-timers deployment-platform-update.timer --no-pager 2>/dev/null || true
+echo "__DP_SECTION__:github"
+deployment-platform github-status 2>/dev/null || true
 echo "__DP_SECTION__:remote"
 repo="$(jq -r '.sourceRepository // empty' /opt/deployment-platform/state/installer-state.json 2>/dev/null || true)"
 ref="$(jq -r '.sourceRef // empty' /opt/deployment-platform/state/installer-state.json 2>/dev/null || true)"
@@ -358,10 +403,38 @@ ipcMain.handle("ssh:test", async (_event, rawInput) => {
     transport.end();
   }
 });
+ipcMain.handle("github:test", async (_event, rawInput) => testGithubToken(rawInput));
 
 ipcMain.handle("install:start", async (_event, rawInput) => {
   const config = validateInstallInput(rawInput);
-  return runRemote(config, buildInstallScript(config), "install", { profile: buildProfile(config) });
+  const tokenPath = "/tmp/deployment-platform-github-token";
+  config.githubTokenPath = tokenPath;
+  const secrets = makeSecrets(config);
+  const transport = new SshTransport(config, secrets);
+  emit("install:log", { source: "local", text: "Opening SSH connection...\n" });
+  try {
+    await transport.connect();
+    emit("install:log", { source: "local", text: "SSH connection established.\n" });
+    if (config.githubToken) {
+      const tokenCode = await transport.run(`umask 077; install -m 600 /dev/stdin ${shellQuote(tokenPath)}`, config.githubToken);
+      if (tokenCode !== 0) throw new Error("Could not securely transfer the GitHub token to the VPS.");
+    }
+    let output = "";
+    const command = config.sshUser === "root" ? "bash -s" : "sudo -S -p '' bash -s";
+    const installInput = config.sshUser === "root" ? buildInstallScript(config) : String(config.sudoPassword || config.sshPassword) + "\n" + buildInstallScript(config);
+    const code = await transport.run(command, installInput, { stdout: (text) => { output += text; emit("install:log", { source: "stdout", text }); }, stderr: (text) => { output += text; emit("install:log", { source: "stderr", text }); } });
+    if (code === 0) saveProfile(buildProfile({ ...config, githubAccount: rawInput.githubAccount || "", githubRepository: rawInput.githubRepository || "" }));
+    const payload = { code, output, status: parseStatus(output), githubConfigured: Boolean(config.githubToken) };
+    emit("install:done", payload);
+    return payload;
+  } catch (error) {
+    const message = redactSecrets(error.message || String(error), secrets);
+    emit("install:log", { source: "local", text: `ERROR: ${message}\n` });
+    emit("install:done", { code: 1, message, output: "" });
+    return { code: 1, message, output: "" };
+  } finally {
+    transport.end();
+  }
 });
 
 ipcMain.handle("server:status", async (_event, config) => runRemote(connectionConfig(config), buildStatusScript(), "server"));

@@ -61,6 +61,16 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .stage.done { color: #55e5b2; border-color: #1c6d58; background: #102820; }
 .stage span { display: inline-block; width: 22px; }
 .timers { display: flex; justify-content: space-between; color: #cbd4e9; font-weight: 800; }
+.progress-status { display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: start; gap: 16px; color: #cbd4e9; font-weight: 800; }
+.progress-status span:first-child { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.progress-status #elapsed { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.progress-status #current-stage.long { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.github-access { display: grid; gap: 10px; padding-top: 4px; border-top: 1px solid #273149; }
+.section-heading { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.badge { color: #aeb8ce; border: 1px solid #303b55; border-radius: 999px; padding: 3px 8px; font-size: 11px; }
+.helper { margin: 0; color: #95a0b8; font-size: 12px; line-height: 1.45; }
+small { color: #95a0b8; font-weight: 500; }
+select { width: 100%; min-height: 40px; border: 1px solid #303b55; border-radius: 7px; background: #0b101b; color: #f2f5fb; padding: 0 10px; }
 .console-panel { overflow: hidden; }
 .console-header { justify-content: space-between; padding: 14px; border-bottom: 1px solid #273149; flex-wrap: wrap; }
 .console-header h2, .console-header p { margin: 0; }
