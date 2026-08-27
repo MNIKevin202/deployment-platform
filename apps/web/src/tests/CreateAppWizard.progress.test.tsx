@@ -53,7 +53,10 @@ function installEventSourceStub(captured: Captured) {
   return instances;
 }
 
-function installFetchMock(captured: Captured, options: { fail?: boolean } = {}) {
+function installFetchMock(
+  captured: Captured,
+  options: { fail?: boolean; wizardResponse?: Promise<Response> } = {}
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -68,6 +71,10 @@ function installFetchMock(captured: Captured, options: { fail?: boolean } = {}) 
       if (url === "/api/apps/wizard") {
         const headers = new Headers(init?.headers);
         captured.installIds.push(headers.get("X-Install-Id") ?? "");
+
+        if (options.wizardResponse) {
+          return options.wizardResponse;
+        }
 
         if (options.fail) {
           return jsonResponse(502, { success: false, message: "docker exploded" });
@@ -136,7 +143,7 @@ describe("CreateAppWizard — install progress", () => {
   test("renders live percentage from the stream", async () => {
     const captured: Captured = { installIds: [], streamUrls: [], closed: 0 };
     const sources = installEventSourceStub(captured);
-    installFetchMock(captured);
+    installFetchMock(captured, { wizardResponse: new Promise(() => {}) });
 
     const user = userEvent.setup();
     render(<CreateAppWizard open onClose={vi.fn()} onCreated={vi.fn()} />);
@@ -165,6 +172,60 @@ describe("CreateAppWizard — install progress", () => {
     expect(await screen.findByText("62%")).toBeInTheDocument();
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "62");
     expect(screen.getByText(/620 MB of 1.0 GB/)).toBeInTheDocument();
+  });
+
+  test("allows closing progress without cancelling the install", async () => {
+    const captured: Captured = { installIds: [], streamUrls: [], closed: 0 };
+    installEventSourceStub(captured);
+
+    let finishInstall!: (response: Response) => void;
+    const wizardResponse = new Promise<Response>((resolve) => {
+      finishInstall = resolve;
+    });
+    installFetchMock(captured, { wizardResponse });
+
+    const user = userEvent.setup();
+    render(<CreateAppWizard open onClose={vi.fn()} onCreated={vi.fn()} />);
+    await fillAndSubmit(user);
+
+    const progressDialog = await screen.findByRole("dialog", { name: "Installation progress" });
+    await user.click(within(progressDialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog", { name: "Installation progress" })).not.toBeInTheDocument();
+
+    finishInstall(jsonResponse(201, {
+      success: true,
+      message: "App created successfully.",
+      app: {
+        id: 1,
+        name: "demo",
+        containerName: "app-demo",
+        image: "nginx:alpine",
+        containerPort: 3000,
+        domain: "demo.example.com",
+        internalOnly: false,
+        containerId: "c1",
+        status: "running",
+        routingReady: true,
+        environmentVariableCount: 0,
+        secretVariableCount: 0,
+        storageMountCount: 0
+      }
+    }));
+
+    expect(await screen.findByText("demo was created successfully.")).toBeInTheDocument();
+  });
+
+  test("automatically dismisses progress when installation completes", async () => {
+    const captured: Captured = { installIds: [], streamUrls: [], closed: 0 };
+    installEventSourceStub(captured);
+    installFetchMock(captured);
+
+    const user = userEvent.setup();
+    render(<CreateAppWizard open onClose={vi.fn()} onCreated={vi.fn()} />);
+    await fillAndSubmit(user);
+
+    expect(await screen.findByText("demo was created successfully.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Installation progress" })).not.toBeInTheDocument();
   });
 
   test("closes the stream once the request settles", async () => {

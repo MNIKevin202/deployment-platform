@@ -1053,6 +1053,9 @@ export default function CreateAppWizard({
       }
 
       setCreatedApp(result.app);
+      // The server-side install is complete. Reveal the success screen even
+      // if the final SSE frame was delayed or missed before the request ended.
+      setShowInstallProgress(false);
 
       const templateNotice = postInstallNoticeForTemplate(initialTemplate, envRows);
       if (templateNotice) {

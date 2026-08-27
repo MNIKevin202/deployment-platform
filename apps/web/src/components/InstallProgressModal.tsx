@@ -47,8 +47,8 @@ export default function InstallProgressModal({
         : `Installing ${appName}…`;
 
   return (
-    // No backdrop click handler: an install is in flight behind this, and a
-    // stray click must not dismiss the only view of its progress.
+    // No backdrop click handler: progress can be dismissed explicitly without
+    // making an accidental click close it.
     <div className="modal-backdrop">
       <section
         className="form-modal install-progress-modal"
@@ -126,21 +126,17 @@ export default function InstallProgressModal({
             <p className="section-description">Everything is up and running.</p>
           ) : (
             <p className="section-description">
-              Downloading and starting containers. Large images can take several minutes on a
-              small server — leaving this page won't cancel the install.
+              You can close this window while installation continues in the background.
+              Large images can take several minutes on a small server.
             </p>
           )}
         </div>
 
-        {/* Closing is only offered once nothing is in flight, so the dialog
-            can't be dismissed into a state where progress is unobservable. */}
-        {progress?.status !== "running" && (
-          <div className="form-actions">
-            <button className="secondary-button" type="button" onClick={onClose}>
-              Close
-            </button>
-          </div>
-        )}
+        <div className="form-actions">
+          <button className="secondary-button" type="button" onClick={onClose}>
+            Close
+          </button>
+        </div>
       </section>
     </div>
   );

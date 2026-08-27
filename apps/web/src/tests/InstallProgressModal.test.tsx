@@ -123,18 +123,24 @@ describe("InstallProgressModal", () => {
     expect(screen.getByText(/Installing postgres/)).toBeInTheDocument();
   });
 
-  test("cannot be dismissed while the install is still running", () => {
+  test("can be dismissed while the install continues in the background", async () => {
+    const onClose = vi.fn();
     render(
       <InstallProgressModal
         open
         appName="blueprint"
         progress={progress()}
         error=""
-        onClose={() => {}}
+        onClose={onClose}
       />
     );
 
-    expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/close this window while installation continues in the background/i)
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   test("reports completion and allows closing", async () => {
