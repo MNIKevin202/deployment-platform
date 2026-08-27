@@ -94,6 +94,8 @@ run_uninstall() {
         fatal "Confirmation phrase did not match. Nothing was changed."
       fi
     fi
+  elif [ "${NON_INTERACTIVE:-0}" -eq 1 ]; then
+    log_info "Non-interactive uninstall confirmed by the manager."
   elif ! confirm_yes_no "Proceed with uninstall as described above?"; then
     log_info "Uninstall cancelled. Nothing was changed."
     exit 0

@@ -354,7 +354,7 @@ function buildLogScript(kind, follow) {
 }
 
 function buildUninstallScript(options = {}) {
-  const flags = ["--uninstall"];
+  const flags = ["--uninstall", "--non-interactive"];
   if (options.deletePlatformData) flags.push("--delete-platform-data");
   if (options.deleteAppContainers) flags.push("--delete-app-containers");
   if (options.deleteAppVolumes) flags.push("--delete-app-volumes");
