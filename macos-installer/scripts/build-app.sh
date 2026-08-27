@@ -27,7 +27,13 @@ ditto "$ELECTRON_APP" "$APP_PATH"
 rm -rf "$APP_RESOURCE_DIR"
 mkdir -p "$APP_RESOURCE_DIR"
 cp "${ROOT_DIR}/package.json" "$APP_RESOURCE_DIR/package.json"
+cp "${ROOT_DIR}/package-lock.json" "$APP_RESOURCE_DIR/package-lock.json"
 cp -R "${ROOT_DIR}/src" "$APP_RESOURCE_DIR/src"
+mkdir -p "$APP_RESOURCE_DIR/node_modules"
+rsync -a \
+  --exclude='electron/dist/*.zip' \
+  --exclude='electron/dist/Electron.app' \
+  "${ROOT_DIR}/node_modules/" "$APP_RESOURCE_DIR/node_modules/"
 
 codesign --force --deep --sign - "$APP_PATH" >/dev/null
 echo "$APP_PATH"

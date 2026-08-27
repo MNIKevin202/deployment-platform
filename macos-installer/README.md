@@ -1,7 +1,7 @@
 # Deployment Platform macOS Installer
 
-This is the downloadable Mac app for installing Deployment Platform on a fresh
-or existing Ubuntu VPS.
+This is the downloadable Mac app for installing and managing Deployment
+Platform on a fresh or existing Ubuntu VPS.
 
 The app asks for:
 
@@ -14,11 +14,14 @@ The app asks for:
 
 It SSHes into the VPS, clones the configured source repository, runs the
 existing non-interactive installer, and optionally installs a systemd timer that
-checks the same repository/ref for updates every 30 minutes.
+checks the same repository/ref for updates every 30 minutes. After install it
+saves a non-secret local server profile and becomes a lightweight manager for
+status, updates, logs, verification, restarts, and uninstall preview/execution.
 
 The install path is intentionally non-destructive. It does not run uninstall
 commands and does not delete existing platform data, deployed app containers,
-app volumes, or secrets.
+app volumes, or secrets. Removing a profile from the Mac app only removes local
+metadata.
 
 Build the app and DMG:
 

@@ -6,11 +6,16 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/renderer.js && node --test test/*.test.js",
     "build": "bash scripts/build-app.sh",
     "dmg": "bash scripts/build-dmg.sh"
   },
   "devDependencies": {
     "electron": "^38.4.0",
     "electron-packager": "^17.1.2"
+  },
+  "dependencies": {
+    "ssh2": "^1.17.0"
   }
 }

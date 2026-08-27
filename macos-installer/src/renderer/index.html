@@ -3,100 +3,173 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Deployment Platform Installer</title>
+    <title>Deployment Platform Manager</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="shell">
-      <section class="hero">
-        <div>
-          <p class="eyebrow">Deployment Platform</p>
-          <h1>Install on a VPS</h1>
-          <p class="subtle">Connect over SSH, install the platform, and enroll the server for automatic updates.</p>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="mark">DP</div>
+          <div>
+            <strong>Deployment Platform</strong>
+            <span>Manager</span>
+          </div>
         </div>
-        <span class="badge">Install only</span>
-      </section>
+        <nav id="profile-list" class="profiles"></nav>
+        <button id="add-server" class="sidebar-action" type="button">+ Add Server</button>
+      </aside>
 
-      <form id="install-form" class="grid">
-        <section class="panel">
-          <h2>VPS Access</h2>
-          <label>
-            <span>VPS IP or hostname</span>
-            <input name="host" placeholder="46.202.178.170" required />
-          </label>
-          <div class="split">
-            <label>
-              <span>SSH username</span>
-              <input name="sshUser" value="root" required />
-            </label>
-            <label>
-              <span>SSH password</span>
-              <input name="sshPassword" type="password" required />
-            </label>
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" id="section-eyebrow">Installer</p>
+            <h1 id="page-title">Add a server</h1>
+          </div>
+          <div class="top-actions">
+            <button id="open-dashboard" type="button" class="ghost">Open Dashboard</button>
+            <button id="cancel-task" type="button" class="ghost" disabled>Cancel Task</button>
+          </div>
+        </header>
+
+        <section id="install-view" class="view">
+          <div class="stepper" id="stepper"></div>
+          <div class="install-layout">
+            <form id="install-form" class="panel form-panel">
+              <section class="step" data-step="0">
+                <h2>VPS Access</h2>
+                <div class="two">
+                  <label><span>VPS IP or hostname</span><input name="host" placeholder="46.202.178.170" required /></label>
+                  <label><span>SSH username</span><input name="sshUser" value="root" required /></label>
+                </div>
+                <div class="segmented">
+                  <label><input type="radio" name="authMethod" value="password" checked /> Password</label>
+                  <label><input type="radio" name="authMethod" value="key" /> Private key</label>
+                </div>
+                <div class="two">
+                  <label><span>SSH password or key passphrase</span><input name="sshPassword" type="password" /></label>
+                  <label><span>Sudo password if different</span><input name="sudoPassword" type="password" /></label>
+                </div>
+                <label class="key-field"><span>Private key</span><textarea name="privateKey" rows="5" spellcheck="false"></textarea></label>
+                <button id="test-connection" type="button">Test Connection</button>
+                <p id="connection-result" class="inline-state"></p>
+              </section>
+
+              <section class="step hidden" data-step="1">
+                <h2>Platform Setup</h2>
+                <div class="two">
+                  <label><span>Panel domain</span><input name="panelDomain" placeholder="deploy.example.com" required /></label>
+                  <label><span>Apps base domain</span><input name="appsDomain" placeholder="apps.example.com" required /></label>
+                </div>
+                <div class="two">
+                  <label><span>Admin username</span><input name="adminUsername" value="admin" required /></label>
+                  <label><span>Server profile name</span><input name="name" placeholder="Production" /></label>
+                </div>
+                <div class="two">
+                  <label><span>Admin password</span><input name="adminPassword" type="password" minlength="12" required /></label>
+                  <label><span>Confirm admin password</span><input name="adminPasswordConfirm" type="password" minlength="12" required /></label>
+                </div>
+              </section>
+
+              <section class="step hidden" data-step="2">
+                <h2>Source & Updates</h2>
+                <label><span>GitHub repository</span><input name="repository" value="https://github.com/MNIKevin202/deployment-platform.git" required /></label>
+                <div class="two">
+                  <label><span>Branch, tag, or ref</span><input name="sourceRef" value="main" required /></label>
+                  <label class="check"><input name="enableAutoUpdates" type="checkbox" checked /><span>Install VPS-local automatic updater</span></label>
+                </div>
+                <label class="check"><input name="continueWithoutDns" type="checkbox" /><span>Continue if DNS is not ready yet</span></label>
+              </section>
+
+              <section class="step hidden" data-step="3">
+                <h2>Review</h2>
+                <div id="review-summary" class="summary"></div>
+                <div class="notice">Install is non-destructive by default. It will not uninstall CapRover, remove unrelated containers, prune Docker, delete app data, or reset the VPS.</div>
+              </section>
+
+              <section class="step hidden" data-step="4">
+                <h2>Installation</h2>
+                <div id="stage-list" class="stage-list"></div>
+                <div class="timers"><span id="current-stage">Ready</span><span id="elapsed">00:00</span></div>
+              </section>
+
+              <div class="form-actions">
+                <button id="back-step" type="button" class="ghost">Back</button>
+                <button id="next-step" type="button">Continue</button>
+                <button id="install-button" type="submit" class="primary hidden">Install</button>
+              </div>
+            </form>
+
+            <section class="panel console-panel">
+              <div class="console-header">
+                <div>
+                  <h2>Live Console</h2>
+                  <p>Remote stdout and stderr stream here in order.</p>
+                </div>
+                <label class="check compact"><input id="timestamps" type="checkbox" /><span>Timestamps</span></label>
+                <label class="check compact"><input id="autoscroll" type="checkbox" checked /><span>Auto-scroll</span></label>
+                <button id="copy-log" type="button" class="ghost">Copy All</button>
+                <button id="save-log" type="button" class="ghost">Save Log</button>
+                <button id="clear-log" type="button" class="ghost">Clear View</button>
+              </div>
+              <pre id="log" tabindex="0"></pre>
+            </section>
           </div>
         </section>
 
-        <section class="panel">
-          <h2>Platform Setup</h2>
-          <div class="split">
-            <label>
-              <span>Panel domain</span>
-              <input name="panelDomain" placeholder="deploy.example.com" required />
-            </label>
-            <label>
-              <span>Apps base domain</span>
-              <input name="appsDomain" placeholder="apps.example.com" required />
-            </label>
+        <section id="dashboard-view" class="view hidden">
+          <div class="dashboard-grid">
+            <section class="panel status-panel">
+              <h2>Server</h2>
+              <div id="status-cards" class="cards"></div>
+              <div class="button-row">
+                <button data-command="verify" type="button">Verify Installation</button>
+                <button data-command="restart" type="button">Restart Platform</button>
+                <button data-command="update" type="button">Update Now</button>
+                <button data-command="enableUpdates" type="button" class="ghost">Enable Auto Updates</button>
+                <button data-command="disableUpdates" type="button" class="ghost">Disable Auto Updates</button>
+              </div>
+            </section>
+            <section class="panel">
+              <h2>Logs</h2>
+              <div class="button-row wrap">
+                <button data-log="installer" type="button">Installer Log</button>
+                <button data-log="updater" type="button">Updater Log</button>
+                <button data-log="api" type="button">API Logs</button>
+                <button data-log="web" type="button">Web Logs</button>
+                <button data-log="caddy" type="button">Caddy Logs</button>
+                <button data-log="verify" type="button">Verification</button>
+              </div>
+            </section>
+            <section class="panel danger-panel">
+              <h2>Uninstall</h2>
+              <p>Preview first. Safe uninstall preserves database volume, app containers, app volumes, secrets, and backups.</p>
+              <button id="preview-uninstall" type="button" class="ghost">Preview Uninstall</button>
+              <details>
+                <summary>Advanced destructive options</summary>
+                <label class="check"><input id="delete-platform-data" type="checkbox" /><span>Delete platform data</span></label>
+                <label class="check"><input id="delete-app-containers" type="checkbox" /><span>Delete deployed app containers</span></label>
+                <label class="check"><input id="delete-app-volumes" type="checkbox" /><span>Delete deployed app volumes</span></label>
+                <label class="check"><input id="delete-secrets" type="checkbox" /><span>Delete secrets</span></label>
+                <label class="check"><input id="purge-all" type="checkbox" /><span>Full purge</span></label>
+                <input id="confirm-phrase" placeholder="Type DELETE EVERYTHING for full purge" />
+              </details>
+              <button id="run-uninstall" type="button" class="danger">Run Uninstall</button>
+            </section>
           </div>
-          <div class="split">
-            <label>
-              <span>Admin username</span>
-              <input name="adminUsername" value="admin" required />
-            </label>
-            <label>
-              <span>Admin password</span>
-              <input name="adminPassword" type="password" minlength="12" required />
-            </label>
-          </div>
+          <section class="panel console-panel dashboard-console">
+            <div class="console-header">
+              <h2>Console / Logs</h2>
+              <label class="check compact"><input id="dashboard-autoscroll" type="checkbox" checked /><span>Auto-scroll</span></label>
+              <button id="dashboard-copy" type="button" class="ghost">Copy</button>
+              <button id="dashboard-save" type="button" class="ghost">Save</button>
+              <button id="dashboard-clear" type="button" class="ghost">Clear View</button>
+            </div>
+            <pre id="dashboard-log" tabindex="0"></pre>
+          </section>
         </section>
-
-        <section class="panel">
-          <h2>Source & Updates</h2>
-          <label>
-            <span>GitHub repository</span>
-            <input name="repository" value="https://github.com/MNIKevin202/deployment-platform.git" required />
-          </label>
-          <div class="split compact">
-            <label>
-              <span>Branch or tag</span>
-              <input name="sourceRef" value="main" required />
-            </label>
-            <label class="check">
-              <input name="enableAutoUpdates" type="checkbox" checked />
-              <span>Install automatic updater</span>
-            </label>
-          </div>
-          <label class="check">
-            <input name="continueWithoutDns" type="checkbox" />
-            <span>Continue if DNS is not ready yet</span>
-          </label>
-        </section>
-
-        <section class="actions">
-          <button id="install-button" type="submit">Install Deployment Platform</button>
-          <button id="cancel-button" type="button" disabled>Cancel</button>
-          <p id="status" class="status">Ready.</p>
-        </section>
-      </form>
-
-      <section class="console-panel">
-        <div class="console-header">
-          <h2>Install Log</h2>
-          <button id="copy-log" type="button">Copy</button>
-        </div>
-        <pre id="log"></pre>
-      </section>
-    </main>
+      </main>
+    </div>
     <script src="./renderer.js"></script>
   </body>
 </html>
