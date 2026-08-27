@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import AppCard from "../components/AppCard";
 import MissingAppCard from "../components/MissingAppCard";
 import AppTable from "../components/AppTable";
@@ -16,6 +16,7 @@ import type {
   ContainerSummary,
   StoredApp
 } from "../types/api";
+import { appSelectionKey, containerSelectionKey } from "../lib/appSelection";
 
 const FILTER_OPTIONS: { key: AppFilterKey; label: string }[] = [
   { key: "favorites", label: "Favorites" },
@@ -48,6 +49,14 @@ interface AppsPageProps {
   onBrowseTemplates?: () => void;
   onUpdateAll?: (managedApps: ContainerSummary[]) => void;
   updateAllLoading?: boolean;
+  onBulkAction?: (
+    containers: ContainerSummary[],
+    action: "start" | "stop"
+  ) => Promise<boolean>;
+  onBulkDelete?: (
+    containers: ContainerSummary[],
+    missingApps: StoredApp[]
+  ) => Promise<boolean>;
   /** Heading + empty-state copy, so the same list serves both Apps and Databases. */
   eyebrow?: string;
   title?: string;
@@ -69,6 +78,8 @@ export default function AppsPage({
   onBrowseTemplates,
   onUpdateAll,
   updateAllLoading = false,
+  onBulkAction,
+  onBulkDelete,
   eyebrow = "Applications",
   title = "All Managed Apps",
   emptyTitle = "No managed apps yet",
@@ -80,6 +91,7 @@ export default function AppsPage({
   const [search, setSearch] = useState("");
   const [activeFilters, setActiveFilters] = useState<Set<AppFilterKey>>(() => new Set());
   const [sortKey, setSortKey] = useState<AppSortKey>("name");
+  const [selectedAppKeys, setSelectedAppKeys] = useState<Set<string>>(() => new Set());
 
   const toggleFilter = (key: AppFilterKey) => {
     setActiveFilters((previous) => {
@@ -116,6 +128,95 @@ export default function AppsPage({
   const filteredMissingApps = filterAndSortAppEntries(missingEntries, filterOptions)
     .map((entry) => entry.app)
     .filter((app): app is StoredApp => app !== undefined);
+
+  const managedSelection = managedApps.map((container) => {
+    const appName = container.labels["com.deployment-platform.app-name"];
+    const storedApp = appName ? storedAppsByName.get(appName) : undefined;
+    return { key: containerSelectionKey(container, storedApp), container };
+  });
+  const missingSelection = missingApps.map((app) => ({ key: appSelectionKey(app), app }));
+  const selectedContainers = managedSelection
+    .filter((entry) => selectedAppKeys.has(entry.key))
+    .map((entry) => entry.container);
+  const selectedMissingApps = missingSelection
+    .filter((entry) => selectedAppKeys.has(entry.key))
+    .map((entry) => entry.app);
+  const selectedCount = selectedContainers.length + selectedMissingApps.length;
+  const startableContainers = selectedContainers.filter(
+    (container) => container.state !== "running"
+  );
+  const stoppableContainers = selectedContainers.filter(
+    (container) => container.state === "running"
+  );
+  const bulkBusy = actionLoading !== null;
+
+  useEffect(() => {
+    const validKeys = new Set([
+      ...managedSelection.map((entry) => entry.key),
+      ...missingSelection.map((entry) => entry.key)
+    ]);
+    setSelectedAppKeys((previous) => {
+      const next = new Set([...previous].filter((key) => validKeys.has(key)));
+      return next.size === previous.size ? previous : next;
+    });
+  }, [managedApps, missingApps, storedAppsByName]);
+
+  const toggleSelected = (key: string) => {
+    setSelectedAppKeys((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const visibleSelectionKeys = [
+    ...filteredManagedContainers.map((container) => {
+      const appName = container.labels["com.deployment-platform.app-name"];
+      return containerSelectionKey(
+        container,
+        appName ? storedAppsByName.get(appName) : undefined
+      );
+    }),
+    ...filteredMissingApps.map(appSelectionKey)
+  ];
+
+  const toggleAllVisible = () => {
+    setSelectedAppKeys((previous) => {
+      const next = new Set(previous);
+      const allSelected = visibleSelectionKeys.every((key) => next.has(key));
+      for (const key of visibleSelectionKeys) {
+        if (allSelected) {
+          next.delete(key);
+        } else {
+          next.add(key);
+        }
+      }
+      return next;
+    });
+  };
+
+  const runBulkAction = async (action: "start" | "stop") => {
+    const containers = action === "start" ? startableContainers : stoppableContainers;
+    if (!onBulkAction || containers.length === 0) {
+      return;
+    }
+    if (await onBulkAction(containers, action)) {
+      setSelectedAppKeys(new Set());
+    }
+  };
+
+  const runBulkDelete = async () => {
+    if (!onBulkDelete || selectedCount === 0) {
+      return;
+    }
+    if (await onBulkDelete(selectedContainers, selectedMissingApps)) {
+      setSelectedAppKeys(new Set());
+    }
+  };
 
   // Each pill's count reflects the full (unfiltered-by-other-pills) set, so
   // toggling one filter doesn't make the others' counts shift underneath it —
@@ -243,6 +344,48 @@ export default function AppsPage({
                 </button>
               )}
             </div>
+
+            {selectedCount > 0 && onBulkAction && onBulkDelete && (
+              <div className="apps-bulk-actions" role="toolbar" aria-label="Bulk app actions">
+                <strong>
+                  {selectedCount} app{selectedCount === 1 ? "" : "s"} selected
+                </strong>
+                <div className="apps-bulk-action-buttons">
+                  <button
+                    className="primary-button compact"
+                    type="button"
+                    disabled={bulkBusy || startableContainers.length === 0}
+                    onClick={() => void runBulkAction("start")}
+                  >
+                    Start ({startableContainers.length})
+                  </button>
+                  <button
+                    className="secondary-button compact"
+                    type="button"
+                    disabled={bulkBusy || stoppableContainers.length === 0}
+                    onClick={() => void runBulkAction("stop")}
+                  >
+                    Stop ({stoppableContainers.length})
+                  </button>
+                  <button
+                    className="danger-button compact"
+                    type="button"
+                    disabled={bulkBusy}
+                    onClick={() => void runBulkDelete()}
+                  >
+                    Delete ({selectedCount})
+                  </button>
+                  <button
+                    className="secondary-button compact"
+                    type="button"
+                    disabled={bulkBusy}
+                    onClick={() => setSelectedAppKeys(new Set())}
+                  >
+                    Clear selection
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
 
@@ -272,6 +415,9 @@ export default function AppsPage({
             onViewApp={onViewApp}
             favoriteAppIds={favoriteAppIds}
             onToggleFavorite={toggleFavorite}
+            selectedAppKeys={selectedAppKeys}
+            onToggleSelected={toggleSelected}
+            onToggleAllVisible={toggleAllVisible}
           />
         ) : (
           <div className="container-grid">
@@ -291,6 +437,10 @@ export default function AppsPage({
                   onViewApp={onViewApp}
                   isFavorite={Boolean(storedApp && favoriteAppIds.has(storedApp.id))}
                   onToggleFavorite={toggleFavorite}
+                  selected={selectedAppKeys.has(containerSelectionKey(container, storedApp))}
+                  onToggleSelected={() =>
+                    toggleSelected(containerSelectionKey(container, storedApp))
+                  }
                 />
               );
             })}
@@ -304,6 +454,8 @@ export default function AppsPage({
                 onDeleteApp={onDeleteMissingApp}
                 isFavorite={favoriteAppIds.has(storedApp.id)}
                 onToggleFavorite={toggleFavorite}
+                selected={selectedAppKeys.has(appSelectionKey(storedApp))}
+                onToggleSelected={() => toggleSelected(appSelectionKey(storedApp))}
               />
             ))}
           </div>

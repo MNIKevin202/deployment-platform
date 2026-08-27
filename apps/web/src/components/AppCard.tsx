@@ -14,6 +14,8 @@ interface AppCardProps {
   onViewApp?: (storedApp: StoredApp) => void;
   isFavorite?: boolean;
   onToggleFavorite?: (appId: number) => void;
+  selected?: boolean;
+  onToggleSelected?: () => void;
 }
 
 /**
@@ -77,7 +79,9 @@ export default function AppCard({
   onDeleteApp,
   onViewApp,
   isFavorite = false,
-  onToggleFavorite
+  onToggleFavorite,
+  selected = false,
+  onToggleSelected
 }: AppCardProps) {
   const isRunning = container.state === "running";
   const containerName = displayAppName(storedApp?.name, container.names[0], container.shortId);
@@ -90,12 +94,22 @@ export default function AppCard({
   // most useful next step for its current state — so hierarchy comes from
   // color/weight, not from making buttons different sizes.
   const highlightStart = canStart && !canOpenApp;
+  const bulkBusy = actionLoading?.startsWith("bulk:") ?? false;
 
   return (
-    <article className="container-card">
+    <article className={`container-card${selected ? " selected" : ""}`}>
       <div className="container-card-header">
         <div>
           <div className="title-row">
+            {onToggleSelected && (
+              <input
+                type="checkbox"
+                aria-label={`Select ${containerName}`}
+                checked={selected}
+                onChange={onToggleSelected}
+                disabled={bulkBusy}
+              />
+            )}
             {storedApp && onToggleFavorite && (
               <button
                 type="button"
@@ -244,7 +258,7 @@ export default function AppCard({
           <button
             className={highlightStart ? "primary-button" : undefined}
             onClick={() => onAction(container, "start")}
-            disabled={actionLoading === `${container.id}:start`}
+            disabled={bulkBusy || actionLoading === `${container.id}:start`}
           >
             {actionLoading === `${container.id}:start` ? "Starting..." : "Start"}
           </button>
@@ -253,7 +267,7 @@ export default function AppCard({
         {!container.isSystemContainer && isRunning && (
           <button
             onClick={() => onAction(container, "stop")}
-            disabled={actionLoading === `${container.id}:stop`}
+            disabled={bulkBusy || actionLoading === `${container.id}:stop`}
           >
             {actionLoading === `${container.id}:stop` ? "Stopping..." : "Stop"}
           </button>
@@ -263,7 +277,7 @@ export default function AppCard({
           <button
             onClick={() => onAction(container, "restart")}
             disabled={
-              !isRunning || actionLoading === `${container.id}:restart`
+              bulkBusy || !isRunning || actionLoading === `${container.id}:restart`
             }
           >
             {actionLoading === `${container.id}:restart`
@@ -278,7 +292,7 @@ export default function AppCard({
           <button
             className="danger-button"
             onClick={() => onDeleteApp(container)}
-            disabled={actionLoading === `${container.id}:delete`}
+            disabled={bulkBusy || actionLoading === `${container.id}:delete`}
           >
             {actionLoading === `${container.id}:delete` ? "Deleting..." : "Delete"}
           </button>

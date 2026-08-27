@@ -5,6 +5,7 @@ import { formatRelativeTimeFromIso } from "../lib/formatTime";
 import { inferAppCategory } from "../lib/appKind";
 import { displayAppName } from "../lib/appName";
 import CopyButton from "./CopyButton";
+import { appSelectionKey, containerSelectionKey } from "../lib/appSelection";
 
 interface AppTableProps {
   managedApps: ContainerSummary[];
@@ -18,6 +19,9 @@ interface AppTableProps {
   onViewApp: (storedApp: StoredApp) => void;
   favoriteAppIds?: ReadonlySet<number>;
   onToggleFavorite?: (appId: number) => void;
+  selectedAppKeys?: ReadonlySet<string>;
+  onToggleSelected?: (key: string) => void;
+  onToggleAllVisible?: () => void;
 }
 
 function favoriteButton(
@@ -110,16 +114,39 @@ export default function AppTable({
   onDeleteMissingApp,
   onViewApp,
   favoriteAppIds,
-  onToggleFavorite
+  onToggleFavorite,
+  selectedAppKeys = new Set(),
+  onToggleSelected,
+  onToggleAllVisible
 }: AppTableProps) {
   const deployProgress = useDeployProgress();
+  const bulkBusy = actionLoading?.startsWith("bulk:") ?? false;
+  const visibleKeys = [
+    ...managedApps.map((container) => {
+      const appName = container.labels["com.deployment-platform.app-name"];
+      return containerSelectionKey(container, appName ? storedAppsByName.get(appName) : undefined);
+    }),
+    ...missingApps.map(appSelectionKey)
+  ];
+  const allVisibleSelected =
+    visibleKeys.length > 0 && visibleKeys.every((key) => selectedAppKeys.has(key));
 
   return (
     <div className="table-wrap">
       <table className="env-table apps-table">
         <thead>
           <tr>
-            <th aria-label="Favorite" />
+            <th aria-label="Select and favorite">
+              {onToggleSelected && onToggleAllVisible && (
+                <input
+                  type="checkbox"
+                  aria-label="Select all visible apps"
+                  checked={allVisibleSelected}
+                  onChange={onToggleAllVisible}
+                  disabled={bulkBusy}
+                />
+              )}
+            </th>
             <th>App</th>
             <th>Status</th>
             <th>Image</th>
@@ -137,10 +164,28 @@ export default function AppTable({
             const canOpen = Boolean(storedApp?.domain && storedApp.routingReady);
             const name = displayAppName(storedApp?.name, container.names[0], container.shortId);
             const deploying = storedApp ? deployProgress.get(storedApp.id) : undefined;
+            const selectionKey = containerSelectionKey(container, storedApp);
 
             return (
-              <tr key={container.id}>
-                <td>{favoriteButton(storedApp?.id ?? -1, Boolean(storedApp && favoriteAppIds?.has(storedApp.id)), storedApp ? onToggleFavorite : undefined)}</td>
+              <tr
+                key={container.id}
+                className={selectedAppKeys.has(selectionKey) ? "apps-table-selected-row" : undefined}
+                aria-selected={selectedAppKeys.has(selectionKey)}
+              >
+                <td>
+                  <div className="apps-table-selection-cell">
+                    {onToggleSelected && (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${name}`}
+                        checked={selectedAppKeys.has(selectionKey)}
+                        onChange={() => onToggleSelected(selectionKey)}
+                        disabled={bulkBusy}
+                      />
+                    )}
+                    {favoriteButton(storedApp?.id ?? -1, Boolean(storedApp && favoriteAppIds?.has(storedApp.id)), storedApp ? onToggleFavorite : undefined)}
+                  </div>
+                </td>
                 <td>
                   {storedApp ? (
                     <button className="table-name-button apps-table-app-button" type="button" onClick={() => onViewApp(storedApp)}>
@@ -205,7 +250,7 @@ export default function AppTable({
                         className="secondary-button compact"
                         type="button"
                         onClick={() => onAction(container, "stop")}
-                        disabled={actionLoading === `${container.id}:stop`}
+                        disabled={bulkBusy || actionLoading === `${container.id}:stop`}
                       >
                         Stop
                       </button>
@@ -214,7 +259,7 @@ export default function AppTable({
                         className="primary-button compact"
                         type="button"
                         onClick={() => onAction(container, "start")}
-                        disabled={actionLoading === `${container.id}:start`}
+                        disabled={bulkBusy || actionLoading === `${container.id}:start`}
                       >
                         Start
                       </button>
@@ -225,7 +270,7 @@ export default function AppTable({
                       aria-label="Restart"
                       title="Restart"
                       onClick={() => onAction(container, "restart")}
-                      disabled={!isRunning || actionLoading === `${container.id}:restart`}
+                      disabled={bulkBusy || !isRunning || actionLoading === `${container.id}:restart`}
                     >
                       ↻
                     </button>
@@ -244,7 +289,7 @@ export default function AppTable({
                       aria-label="Delete"
                       title="Delete"
                       onClick={() => onDeleteApp(container)}
-                      disabled={actionLoading === `${container.id}:delete`}
+                      disabled={bulkBusy || actionLoading === `${container.id}:delete`}
                     >
                       🗑
                     </button>
@@ -255,8 +300,29 @@ export default function AppTable({
           })}
 
           {missingApps.map((storedApp) => (
-            <tr key={`missing-${storedApp.id}`} className="apps-table-missing-row">
-              <td>{favoriteButton(storedApp.id, Boolean(favoriteAppIds?.has(storedApp.id)), onToggleFavorite)}</td>
+            <tr
+              key={`missing-${storedApp.id}`}
+              className={`apps-table-missing-row${
+                selectedAppKeys.has(appSelectionKey(storedApp))
+                  ? " apps-table-selected-row"
+                  : ""
+              }`}
+              aria-selected={selectedAppKeys.has(appSelectionKey(storedApp))}
+            >
+              <td>
+                <div className="apps-table-selection-cell">
+                  {onToggleSelected && (
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${displayAppName(storedApp.name, storedApp.containerName)}`}
+                      checked={selectedAppKeys.has(appSelectionKey(storedApp))}
+                      onChange={() => onToggleSelected(appSelectionKey(storedApp))}
+                      disabled={bulkBusy}
+                    />
+                  )}
+                  {favoriteButton(storedApp.id, Boolean(favoriteAppIds?.has(storedApp.id)), onToggleFavorite)}
+                </div>
+              </td>
               <td>
                 <button className="table-name-button apps-table-app-button" type="button" onClick={() => onViewApp(storedApp)}>
                   {appCategoryCell(displayAppName(storedApp.name, storedApp.containerName), storedApp.image, storedApp.internalOnly, Boolean(storedApp.domain))}
@@ -290,7 +356,7 @@ export default function AppTable({
                     className="danger-button compact"
                     type="button"
                     onClick={() => onDeleteMissingApp(storedApp)}
-                    disabled={actionLoading === `app-${storedApp.id}:delete`}
+                    disabled={bulkBusy || actionLoading === `app-${storedApp.id}:delete`}
                   >
                     Delete
                   </button>

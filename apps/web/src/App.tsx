@@ -363,6 +363,51 @@ function App() {
     }
   };
 
+  const runBulkAction = async (
+    selectedContainers: ContainerSummary[],
+    action: "start" | "stop"
+  ): Promise<boolean> => {
+    setError("");
+    setNotice("");
+    setActionLoading(`bulk:${action}`);
+
+    let succeeded = 0;
+    const failed: string[] = [];
+
+    try {
+      for (const container of selectedContainers) {
+        const name = (container.names[0] ?? container.shortId).replace(/^\//, "");
+        try {
+          const response = await fetch(`/api/containers/${container.id}/${action}`, {
+            method: "POST"
+          });
+          if (!response.ok) {
+            throw new Error(await getApiError(response, `Unable to ${action} app`));
+          }
+          succeeded += 1;
+        } catch {
+          failed.push(name);
+        }
+      }
+
+      await loadDashboard();
+
+      if (failed.length === 0) {
+        setNotice(
+          `${action === "start" ? "Started" : "Stopped"} ${succeeded} app${succeeded === 1 ? "" : "s"}.`
+        );
+        return true;
+      }
+
+      setError(
+        `${action === "start" ? "Started" : "Stopped"} ${succeeded}, but failed for: ${failed.join(", ")}.`
+      );
+      return false;
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const redeployApp = async (storedApp: StoredApp) => {
     try {
       setError("");
@@ -467,6 +512,76 @@ function App() {
       setError(
         deleteError instanceof Error ? deleteError.message : "Unable to delete app"
       );
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const deleteAppsBulk = async (
+    selectedContainers: ContainerSummary[],
+    selectedMissingApps: StoredApp[]
+  ): Promise<boolean> => {
+    const names = [
+      ...selectedContainers.map((container) =>
+        (container.names[0] ?? container.shortId).replace(/^\//, "")
+      ),
+      ...selectedMissingApps.map((app) => app.name)
+    ];
+
+    const confirmed = window.confirm(
+      `Delete ${names.length} selected app${names.length === 1 ? "" : "s"}?\n\n${names.join(", ")}\n\nTheir containers, anonymous volumes, and saved app configuration will be removed.`
+    );
+    if (!confirmed) {
+      return false;
+    }
+
+    setError("");
+    setNotice("");
+    setActionLoading("bulk:delete");
+
+    let succeeded = 0;
+    const failed: string[] = [];
+
+    try {
+      for (const container of selectedContainers) {
+        const name = (container.names[0] ?? container.shortId).replace(/^\//, "");
+        try {
+          const response = await fetch(`/api/apps/${container.id}`, {
+            method: "DELETE",
+            headers: { "Idempotency-Key": crypto.randomUUID() }
+          });
+          if (!response.ok) {
+            throw new Error(await getApiError(response, "Unable to delete app"));
+          }
+          succeeded += 1;
+        } catch {
+          failed.push(name);
+        }
+      }
+
+      for (const storedApp of selectedMissingApps) {
+        try {
+          const response = await fetch(`/api/apps/by-app-id/${storedApp.id}`, {
+            method: "DELETE"
+          });
+          if (!response.ok) {
+            throw new Error(await getApiError(response, "Unable to delete app"));
+          }
+          succeeded += 1;
+        } catch {
+          failed.push(storedApp.name);
+        }
+      }
+
+      await loadDashboard();
+
+      if (failed.length === 0) {
+        setNotice(`Deleted ${succeeded} app${succeeded === 1 ? "" : "s"}.`);
+        return true;
+      }
+
+      setError(`Deleted ${succeeded}, but failed for: ${failed.join(", ")}.`);
+      return false;
     } finally {
       setActionLoading(null);
     }
@@ -633,6 +748,8 @@ function App() {
           onBrowseTemplates={() => goToSection("templates")}
           onUpdateAll={(list) => void updateAllApps(list)}
           updateAllLoading={actionLoading === "update-all"}
+          onBulkAction={runBulkAction}
+          onBulkDelete={deleteAppsBulk}
         />
       ) : section === "databases" ? (
         <AppsPage
@@ -648,6 +765,8 @@ function App() {
           onCreateApp={openCreateApp}
           onUpdateAll={(list) => void updateAllApps(list)}
           updateAllLoading={actionLoading === "update-all"}
+          onBulkAction={runBulkAction}
+          onBulkDelete={deleteAppsBulk}
           eyebrow="Data stores"
           title="Managed Databases"
           emptyTitle="No databases yet"

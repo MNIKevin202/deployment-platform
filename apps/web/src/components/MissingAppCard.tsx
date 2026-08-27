@@ -8,6 +8,8 @@ interface MissingAppCardProps {
   onDeleteApp: (storedApp: StoredApp) => void;
   isFavorite?: boolean;
   onToggleFavorite?: (appId: number) => void;
+  selected?: boolean;
+  onToggleSelected?: () => void;
 }
 
 /**
@@ -24,15 +26,27 @@ export default function MissingAppCard({
   onViewApp,
   onDeleteApp,
   isFavorite = false,
-  onToggleFavorite
+  onToggleFavorite,
+  selected = false,
+  onToggleSelected
 }: MissingAppCardProps) {
   const cardName = displayAppName(storedApp.name, storedApp.containerName);
+  const bulkBusy = actionLoading?.startsWith("bulk:") ?? false;
 
   return (
-    <article className="container-card missing-app-card">
+    <article className={`container-card missing-app-card${selected ? " selected" : ""}`}>
       <div className="container-card-header">
         <div>
           <div className="title-row">
+            {onToggleSelected && (
+              <input
+                type="checkbox"
+                aria-label={`Select ${cardName}`}
+                checked={selected}
+                onChange={onToggleSelected}
+                disabled={bulkBusy}
+              />
+            )}
             {onToggleFavorite && (
               <button
                 type="button"
@@ -100,7 +114,7 @@ export default function MissingAppCard({
           className="danger-button"
           type="button"
           onClick={() => onDeleteApp(storedApp)}
-          disabled={actionLoading === `app-${storedApp.id}:delete`}
+          disabled={bulkBusy || actionLoading === `app-${storedApp.id}:delete`}
         >
           {actionLoading === `app-${storedApp.id}:delete` ? "Deleting..." : "Delete"}
         </button>
