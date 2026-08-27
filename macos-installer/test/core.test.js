@@ -157,3 +157,12 @@ test("initial source clone uses the temporary GitHub credential helper", () => {
   assert.match(main, /cat "\$GITHUB_TOKEN_FILE"/);
   assert.match(main, /git "\\\$\{git_auth\[@\]\}" clone/);
 });
+
+test("installer and manager scripts run without a PTY so completion closes SSH", () => {
+  const { readFileSync } = require("node:fs");
+  const main = readFileSync(require.resolve("../src/main.js"), "utf8");
+  const installHandler = main.slice(main.indexOf('ipcMain.handle("install:start"'), main.indexOf('ipcMain.handle("server:status"'));
+  const runRemote = main.slice(main.indexOf("async function runRemote"), main.indexOf("function connectionConfig"));
+  assert.match(installHandler, /installInput[\s\S]*\{ pty: false \}/);
+  assert.match(runRemote, /transport\.run\([\s\S]*\}, \{ pty: false \}\)/);
+});

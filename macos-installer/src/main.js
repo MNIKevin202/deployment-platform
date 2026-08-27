@@ -409,7 +409,7 @@ async function runRemote(config, script, eventPrefix, options = {}) {
     const code = await transport.run(command, input, {
       stdout: (text) => { output += text; emit(`${eventPrefix}:log`, { source: "stdout", text }); },
       stderr: (text) => { output += text; emit(`${eventPrefix}:log`, { source: "stderr", text }); }
-    });
+    }, { pty: false });
     if (code === 0 && options.profile) saveProfile(options.profile);
     const payload = { code, output, status: parseStatus(output) };
     emit(`${eventPrefix}:done`, payload);
@@ -490,7 +490,12 @@ ipcMain.handle("install:start", async (_event, rawInput) => {
     let output = "";
     const command = config.sshUser === "root" ? "bash -s" : "sudo -S -p '' bash -s";
     const installInput = config.sshUser === "root" ? buildInstallScript(config) : String(config.sudoPassword || config.sshPassword) + "\n" + buildInstallScript(config);
-    const code = await transport.run(command, installInput, { stdout: (text) => { output += text; emit("install:log", { source: "stdout", text }); }, stderr: (text) => { output += text; emit("install:log", { source: "stderr", text }); } });
+    const code = await transport.run(
+      command,
+      installInput,
+      { stdout: (text) => { output += text; emit("install:log", { source: "stdout", text }); }, stderr: (text) => { output += text; emit("install:log", { source: "stderr", text }); } },
+      { pty: false }
+    );
     if (code === 0) saveProfile(buildProfile({ ...config, githubAccount: rawInput.githubAccount || "", githubRepository: rawInput.githubRepository || "" }));
     const payload = { code, output, status: parseStatus(output), githubConfigured: Boolean(config.githubToken) };
     emit("install:done", payload);
