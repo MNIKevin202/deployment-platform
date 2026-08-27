@@ -105,6 +105,10 @@ pre { height: 420px; margin: 0; padding: 14px; overflow: auto; background: #070a
 .danger-panel { grid-column: 1 / -1; }
 .danger-panel h2 { margin-bottom: 8px; }
 .danger-panel .form-actions { justify-content: flex-start; }
+.task-status { min-height: 20px; margin: 12px 0 0; font-size: 13px; font-weight: 800; }
+.task-status.running { color: #efcf70; }
+.task-status.success { color: #50e2ad; }
+.task-status.error { color: #ff9aa9; }
 .icon-button { width: 34px; min-height: 34px; padding: 0; font-size: 21px; line-height: 1; }
 .modal { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 24px; background: rgba(3, 5, 10, .72); }
 .modal-sheet { width: min(680px, 100%); display: grid; gap: 14px; padding: 22px; background: #131927; border: 1px solid #3a4662; border-radius: 8px; box-shadow: 0 24px 80px rgba(0, 0, 0, .45); }

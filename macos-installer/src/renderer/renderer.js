@@ -6,6 +6,8 @@ let selectedProfile = null;
 let running = false;
 let startedAt = null;
 let selectedCredentials = {};
+let uninstallRunning = false;
+let uninstallMode = "";
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -290,12 +292,29 @@ $$("[data-log]").forEach((button) => button.addEventListener("click", () => {
 }));
 $("#preview-uninstall").addEventListener("click", () => {
   if (!selectedProfile) return;
+  if (uninstallRunning) return;
+  uninstallMode = "preview";
+  uninstallRunning = true;
+  $("#preview-uninstall").disabled = true;
+  $("#run-uninstall").disabled = true;
+  $("#uninstall-status").textContent = "Preparing uninstall preview...";
+  $("#uninstall-status").className = "task-status running";
   dashboardLog.textContent = "";
+  append(dashboardLog, { source: "local", text: "Starting uninstall preview...\n" });
   window.installer.previewUninstall(selectedConfig());
 });
 $("#run-uninstall").addEventListener("click", () => {
   if (!selectedProfile) return;
+  if (uninstallRunning) return;
+  uninstallMode = "run";
+  uninstallRunning = true;
+  $("#preview-uninstall").disabled = true;
+  $("#run-uninstall").disabled = true;
+  $("#run-uninstall").textContent = "Uninstalling...";
+  $("#uninstall-status").textContent = "Uninstall in progress. Keep this window open while the VPS is being changed...";
+  $("#uninstall-status").className = "task-status running";
   dashboardLog.textContent = "";
+  append(dashboardLog, { source: "local", text: "Starting uninstall...\n" });
   window.installer.uninstall({
     config: selectedConfig(),
     options: {
@@ -337,6 +356,22 @@ $("#test-github").addEventListener("click", async () => {
 window.installer.onServerLog((payload) => append(dashboardLog, payload));
 window.installer.onLogsLog((payload) => append(dashboardLog, payload));
 window.installer.onUninstallLog((payload) => append(dashboardLog, payload));
+window.installer.onUninstallDone(({ code }) => {
+  uninstallRunning = false;
+  $("#preview-uninstall").disabled = false;
+  $("#run-uninstall").disabled = false;
+  $("#run-uninstall").textContent = "Run Uninstall";
+  const status = $("#uninstall-status");
+  if (code === 0) {
+    status.textContent = uninstallMode === "preview" ? "Preview complete. No changes were made." : "Uninstall completed successfully.";
+    status.className = "task-status success";
+    append(dashboardLog, { source: "local", text: uninstallMode === "preview" ? "\nUninstall preview complete. No changes were made.\n" : "\nUninstall completed successfully.\n" });
+  } else {
+    status.textContent = uninstallMode === "preview" ? "Preview failed. Review the console for details." : "Uninstall failed. Review the console for details.";
+    status.className = "task-status error";
+    append(dashboardLog, { source: "local", text: uninstallMode === "preview" ? "\nUninstall preview failed.\n" : "\nUninstall failed.\n" });
+  }
+});
 window.installer.onDone(async ({ code }) => {
   setRunning(false);
   append(log, { source: "local", text: code === 0 ? "\nInstall finished successfully.\n" : `\nInstall failed with exit code ${code}.\n` });
