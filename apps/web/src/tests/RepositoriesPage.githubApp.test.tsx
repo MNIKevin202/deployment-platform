@@ -86,13 +86,18 @@ describe("RepositoriesPage — GitHub App connect/connected states", () => {
     window.history.replaceState(null, "", "/");
   });
 
-  test("not configured: shows a 'not configured' message, no Connect button", async () => {
+  test("not configured: shows the token connection path first, no GitHub App connect button", async () => {
     installFetchMock({ configured: false, missing: ["GITHUB_APP_ID"], installations: [] });
 
     render(<RepositoriesPage onSelectRepository={vi.fn()} />);
 
-    await screen.findByText(/not been configured on this server/);
+    await screen.findByText(/Paste a fine-grained GitHub token/);
+    expect(screen.getByRole("link", { name: "Create fine-grained token on GitHub" })).toHaveAttribute(
+      "href",
+      "https://github.com/settings/personal-access-tokens/new"
+    );
     expect(screen.queryByRole("link", { name: "Connect GitHub" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Optional server setup/)).toBeInTheDocument();
   });
 
   test("configured, no installation: shows the primary Connect GitHub action", async () => {

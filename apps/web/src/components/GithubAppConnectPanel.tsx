@@ -71,14 +71,14 @@ export default function GithubAppConnectPanel({
     return (
       <div className="env-scope-block">
         <div className="env-scope-heading">
-          <h3>GitHub Integration</h3>
+          <h3>GitHub App Setup</h3>
           <StatusBadge label="Not configured" tone="neutral" />
         </div>
         <p className="section-description">
-          The GitHub App has not been configured on this server yet. An operator needs to register a
-          GitHub App and set {missing.length > 0 ? missing.join(", ") : "the required environment variables"} before
-          Connect GitHub is available. The advanced personal-access-token option below still works in
-          the meantime.
+          Optional for this server. A GitHub App enables the one-click Connect GitHub flow, but the
+          token connection above is enough to browse repositories and deploy apps. To enable the app
+          flow later, register a GitHub App and set{" "}
+          {missing.length > 0 ? missing.join(", ") : "the required environment variables"}.
         </p>
       </div>
     );

@@ -174,23 +174,47 @@ export default function RepositoriesPage({ onSelectRepository }: RepositoriesPag
       {callbackError && <div className="error-banner">{callbackError}</div>}
 
       <section className="page-section">
-        <GithubAppConnectPanel
-          configured={githubAppConfigured}
-          missing={githubAppMissing}
-          installations={installations}
-          repositoryCount={connectedViaApp ? repos.length : null}
-          onDisconnected={() => {
-            void loadInstallations();
-            resetRepos();
-          }}
-          onRefreshRepositories={refreshRepos}
-          refreshing={loading}
-        />
+        {githubAppConfigured ? (
+          <>
+            <GithubAppConnectPanel
+              configured={githubAppConfigured}
+              missing={githubAppMissing}
+              installations={installations}
+              repositoryCount={connectedViaApp ? repos.length : null}
+              onDisconnected={() => {
+                void loadInstallations();
+                resetRepos();
+              }}
+              onRefreshRepositories={refreshRepos}
+              refreshing={loading}
+            />
 
-        <details className="advanced-disclosure">
-          <summary>Advanced: connect with a fine-grained personal access token</summary>
-          <GitHubSettingsPanel onConnectionChanged={() => void loadConnection()} />
-        </details>
+            <details className="advanced-disclosure">
+              <summary>Advanced: connect with a fine-grained personal access token</summary>
+              <GitHubSettingsPanel onConnectionChanged={() => void loadConnection()} />
+            </details>
+          </>
+        ) : (
+          <>
+            <GitHubSettingsPanel onConnectionChanged={() => void loadConnection()} />
+
+            <details className="advanced-disclosure">
+              <summary>Optional server setup: enable one-click GitHub App connection</summary>
+              <GithubAppConnectPanel
+                configured={githubAppConfigured}
+                missing={githubAppMissing}
+                installations={installations}
+                repositoryCount={null}
+                onDisconnected={() => {
+                  void loadInstallations();
+                  resetRepos();
+                }}
+                onRefreshRepositories={refreshRepos}
+                refreshing={loading}
+              />
+            </details>
+          </>
+        )}
       </section>
 
       {(connectedViaApp || connectedViaPat) && (

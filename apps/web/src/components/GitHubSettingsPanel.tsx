@@ -201,10 +201,21 @@ export default function GitHubSettingsPanel({ onConnectionChanged }: GitHubSetti
       </div>
 
       <p className="section-description">
-        GitHub remains the source of truth for your repositories — this platform never hosts or
-        clones them. A fine-grained personal access token with read-only repository access is
-        recommended.
+        Paste a fine-grained GitHub token to let this server read your repositories. The token only
+        needs <strong>Contents: Read-only</strong> and <strong>Metadata: Read-only</strong>, and it is
+        stored encrypted after saving.
       </p>
+
+      <div className="form-actions form-actions-start">
+        <a
+          className="secondary-button compact"
+          href="https://github.com/settings/personal-access-tokens/new"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Create fine-grained token on GitHub
+        </a>
+      </div>
 
       {notice && <div className="notice-banner">{notice}</div>}
       {saveError && <div className="error-banner">{saveError}</div>}
@@ -268,7 +279,7 @@ export default function GitHubSettingsPanel({ onConnectionChanged }: GitHubSetti
             onClick={() => void testConnection()}
             disabled={!token || testing || saving || connection.setupRequired}
           >
-            {testing ? "Testing..." : connection.connected ? "Test Again" : "Test Connection"}
+            {testing ? "Testing..." : connection.connected ? "Test Again" : "Test Token"}
           </button>
           <button
             className="primary-button"
@@ -276,7 +287,7 @@ export default function GitHubSettingsPanel({ onConnectionChanged }: GitHubSetti
             onClick={() => void saveConnection()}
             disabled={!token || saving || testing || connection.setupRequired}
           >
-            {saving ? "Saving..." : connection.connected ? "Replace Token" : "Save Connection"}
+            {saving ? "Saving..." : connection.connected ? "Replace Token" : "Save Token"}
           </button>
           {connection.connected && (
             <button
