@@ -360,7 +360,13 @@ function buildUninstallScript(options = {}) {
   if (options.deleteAppVolumes) flags.push("--delete-app-volumes");
   if (options.deleteSecrets) flags.push("--delete-secrets");
   if (options.purgeAll && options.confirmPhrase === "DELETE EVERYTHING") flags.push("--purge-all", "--confirm-purge");
-  return `bash /opt/deployment-platform/installer/install.sh ${flags.join(" ")}`;
+  const confirmation = flags.includes("--purge-all") ? "DELETE EVERYTHING\n" : "y\n";
+  return `printf ${shellQuote(confirmation)} | bash /opt/deployment-platform/installer/install.sh ${flags.join(" ")}`;
+}
+
+function shellInput(script) {
+  const value = String(script || "");
+  return value.endsWith("\n") ? value : `${value}\n`;
 }
 
 async function runRemote(config, script, eventPrefix, options = {}) {
@@ -372,7 +378,7 @@ async function runRemote(config, script, eventPrefix, options = {}) {
     await transport.connect();
     emit(`${eventPrefix}:log`, { source: "local", text: "SSH connection established.\n" });
     const command = config.sshUser === "root" ? "bash -s" : "sudo -S -p '' bash -s";
-    const input = config.sshUser === "root" ? script : `${config.sudoPassword || config.sshPassword}\n${script}`;
+    const input = config.sshUser === "root" ? shellInput(script) : `${config.sudoPassword || config.sshPassword}\n${shellInput(script)}`;
     const code = await transport.run(command, input, {
       stdout: (text) => { output += text; emit(`${eventPrefix}:log`, { source: "stdout", text }); },
       stderr: (text) => { output += text; emit(`${eventPrefix}:log`, { source: "stderr", text }); }
