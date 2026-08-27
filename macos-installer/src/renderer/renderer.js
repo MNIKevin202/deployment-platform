@@ -267,8 +267,15 @@ form.addEventListener("submit", async (event) => {
 $("#cancel-task").addEventListener("click", () => window.installer.cancel());
 $("#clear-log").addEventListener("click", () => { log.textContent = ""; });
 $("#dashboard-clear").addEventListener("click", () => { dashboardLog.textContent = ""; });
-$("#copy-log").addEventListener("click", () => navigator.clipboard.writeText(log.textContent));
-$("#dashboard-copy").addEventListener("click", () => navigator.clipboard.writeText(dashboardLog.textContent));
+function copyWithFeedback(button, text) {
+  const original = button.textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    button.textContent = "Copied";
+    window.setTimeout(() => { button.textContent = original; }, 2200);
+  });
+}
+$("#copy-log").addEventListener("click", (event) => copyWithFeedback(event.currentTarget, log.textContent));
+$("#dashboard-copy").addEventListener("click", (event) => copyWithFeedback(event.currentTarget, dashboardLog.textContent));
 $("#save-log").addEventListener("click", () => window.installer.saveLog(log.textContent));
 $("#dashboard-save").addEventListener("click", () => window.installer.saveLog(dashboardLog.textContent));
 

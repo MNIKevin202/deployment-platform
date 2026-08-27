@@ -2474,6 +2474,66 @@ done
 assert_eq "state file contains no secret field names" "1" "$NO_SECRET_LEAK"
 
 echo
+echo "=== Installer CLI uninstall mode dispatch ==="
+FAKE_UNINSTALL_BIN="$TMP_ROOT/fakebin-uninstall"
+mkdir -p "$FAKE_UNINSTALL_BIN"
+cat > "$FAKE_UNINSTALL_BIN/id" <<'FAKEID'
+#!/usr/bin/env bash
+if [ "${1:-}" = "-u" ]; then
+  echo 0
+  exit 0
+fi
+/usr/bin/id "$@"
+FAKEID
+cat > "$FAKE_UNINSTALL_BIN/docker" <<'FAKEDOCKER'
+#!/usr/bin/env bash
+case "${1:-}" in
+  inspect) exit 1 ;;
+  network) exit 1 ;;
+  images) exit 0 ;;
+  rm|rmi|volume) exit 0 ;;
+  *) exit 0 ;;
+esac
+FAKEDOCKER
+cat > "$FAKE_UNINSTALL_BIN/rm" <<'FAKERM'
+#!/usr/bin/env bash
+exit 0
+FAKERM
+chmod +x "$FAKE_UNINSTALL_BIN/id" "$FAKE_UNINSTALL_BIN/docker" "$FAKE_UNINSTALL_BIN/rm"
+
+run_installer_cli_fixture() {
+  local output_file="$1"
+  shift
+  PATH="$FAKE_UNINSTALL_BIN:$REAL_PATH" PROMPT_OUTPUT_PATH="$output_file" bash "$INSTALLER_DIR/install.sh" "$@" >"$output_file.stdout" 2>"$output_file.stderr"
+}
+
+UNINSTALL_CLI_OUTPUT="$TMP_ROOT/uninstall-cli-output"
+printf 'y\n' | run_installer_cli_fixture "$UNINSTALL_CLI_OUTPUT" --uninstall
+UNINSTALL_CLI_STATUS=$?
+assert_eq "install.sh --uninstall exits successfully with confirmation input" "0" "$UNINSTALL_CLI_STATUS"
+assert_not_contains "plain uninstall does not require panel domain" "$(cat "$UNINSTALL_CLI_OUTPUT" "$UNINSTALL_CLI_OUTPUT.stderr" 2>/dev/null)" "--panel-domain"
+
+UNINSTALL_NONINTERACTIVE_OUTPUT="$TMP_ROOT/uninstall-noninteractive-output"
+run_installer_cli_fixture "$UNINSTALL_NONINTERACTIVE_OUTPUT" --uninstall --non-interactive
+UNINSTALL_NONINTERACTIVE_STATUS=$?
+assert_eq "install.sh --uninstall --non-interactive exits successfully" "0" "$UNINSTALL_NONINTERACTIVE_STATUS"
+assert_not_contains "non-interactive uninstall does not require panel domain" "$(cat "$UNINSTALL_NONINTERACTIVE_OUTPUT" "$UNINSTALL_NONINTERACTIVE_OUTPUT.stderr" 2>/dev/null)" "--panel-domain"
+
+UNINSTALL_DELETE_DATA_OUTPUT="$TMP_ROOT/uninstall-delete-data-output"
+run_installer_cli_fixture "$UNINSTALL_DELETE_DATA_OUTPUT" --uninstall --non-interactive --delete-platform-data
+UNINSTALL_DELETE_DATA_STATUS=$?
+assert_eq "install.sh --uninstall --non-interactive --delete-platform-data exits successfully" "0" "$UNINSTALL_DELETE_DATA_STATUS"
+assert_not_contains "non-interactive uninstall with destructive flag does not require panel domain" "$(cat "$UNINSTALL_DELETE_DATA_OUTPUT" "$UNINSTALL_DELETE_DATA_OUTPUT.stderr" 2>/dev/null)" "--panel-domain"
+
+INSTALL_NONINTERACTIVE_OUTPUT="$TMP_ROOT/install-noninteractive-output"
+if run_installer_cli_fixture "$INSTALL_NONINTERACTIVE_OUTPUT" --non-interactive; then
+  INSTALL_NONINTERACTIVE_STATUS=0
+else
+  INSTALL_NONINTERACTIVE_STATUS=$?
+fi
+assert_failure "install.sh --non-interactive without install arguments still fails" test "$INSTALL_NONINTERACTIVE_STATUS" -eq 0
+
+echo
 echo "=== ShellCheck (if available) ==="
 if command -v shellcheck >/dev/null 2>&1; then
   SHELLCHECK_FAILURES=0

@@ -131,7 +131,7 @@ EOF
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --non-interactive) MODE="install"; NON_INTERACTIVE=1; shift ;;
+    --non-interactive) NON_INTERACTIVE=1; shift ;;
     --resume) MODE="resume"; shift ;;
     --verify-only) MODE="verify"; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -162,6 +162,10 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$MODE" = "interactive" ] && [ "$NON_INTERACTIVE" -eq 1 ]; then
+  MODE="install"
+fi
 
 if [ "$MODE" != "uninstall-preview" ]; then
   install_trap_handlers
