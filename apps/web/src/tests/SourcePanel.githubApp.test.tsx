@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import SourcePanel from "../components/SourcePanel";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -48,7 +49,7 @@ interface MockOptions {
 }
 
 function installFetchMock({ patConnected, installationCount }: MockOptions) {
-  const impl = vi.fn(async (input: RequestInfo | URL) => {
+  const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
 
     if (url === "/api/apps/1/source") {
@@ -72,6 +73,13 @@ function installFetchMock({ patConnected, installationCount }: MockOptions) {
     }
     if (url === "/api/apps/1/deploy/github/status") {
       return jsonResponse(200, { inProgress: false });
+    }
+    if (url === "/api/apps/1/deploy/github" && init?.method === "POST") {
+      return jsonResponse(200, {
+        success: true,
+        message: "Deployment succeeded",
+        commitSha: "abc1234"
+      });
     }
 
     throw new Error(`Unhandled fetch in test: ${url}`);
@@ -142,5 +150,26 @@ describe("SourcePanel — GitHub App installation satisfies the connection check
     await screen.findByText("MNIKevin202/DeploymentPlatformInstaller");
 
     expect(screen.getByRole("button", { name: "Validate Again" })).not.toBeDisabled();
+  });
+
+  test("Reset Deployment confirms preserved data and requests a cache-free fresh deployment", async () => {
+    const user = userEvent.setup();
+    const fetchMock = installFetchMock({ patConnected: false, installationCount: 1 });
+
+    render(<SourcePanel appId={1} />);
+    await screen.findByText("MNIKevin202/DeploymentPlatformInstaller");
+    await user.click(screen.getByRole("button", { name: "Reset Deployment" }));
+
+    expect(screen.getByText(/Environment variables, persistent volumes and their data, domain, and repository settings are preserved/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reset and redownload" }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) => url === "/api/apps/1/deploy/github" && init?.method === "POST"
+      );
+      expect(call).toBeTruthy();
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ noCache: true });
+    });
+    expect(await screen.findByText(/Deployment reset \(abc1234\)/)).toBeInTheDocument();
   });
 });

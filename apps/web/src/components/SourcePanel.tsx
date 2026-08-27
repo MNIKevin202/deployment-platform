@@ -132,7 +132,7 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
   const [deployInProgress, setDeployInProgress] = useState(false);
   const [showDeployConfirm, setShowDeployConfirm] = useState(false);
   const [deploying, setDeploying] = useState(false);
-  const [deployNoCache, setDeployNoCache] = useState(false);
+  const [deployMode, setDeployMode] = useState<"normal" | "reset">("normal");
   const [deployError, setDeployError] = useState("");
   const [savingAutoDeploy, setSavingAutoDeploy] = useState(false);
 
@@ -230,10 +230,10 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
       const response = await fetch(`/api/apps/${appId}/deploy/github`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // noCache is the operator's escape hatch for a corrupt Docker build
-        // cache (the "parent snapshot does not exist" failure). Only sent
-        // when ticked, so a normal deploy is unchanged.
-        body: JSON.stringify(deployNoCache ? { noCache: true } : {})
+        // Reset is the explicit repair path: every deployment already starts
+        // from a fresh GitHub checkout, and disabling Docker's build cache
+        // ensures no stale image layer can survive into the replacement.
+        body: JSON.stringify(deployMode === "reset" ? { noCache: true } : {})
       });
 
       const result = (await response.json().catch(() => ({}))) as Partial<GithubDeployResponse>;
@@ -243,7 +243,10 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
       }
 
       setShowDeployConfirm(false);
-      setNotice(`Deployment succeeded (${result.commitSha ? result.commitSha.slice(0, 7) : "unknown commit"}).`);
+      setNotice(
+        `${deployMode === "reset" ? "Deployment reset" : "Deployment succeeded"} ` +
+        `(${result.commitSha ? result.commitSha.slice(0, 7) : "unknown commit"}).`
+      );
       await load();
     } catch (error) {
       setDeployError(error instanceof Error ? error.message : "Deployment failed");
@@ -570,7 +573,10 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
               <button
                 className="primary-button compact"
                 type="button"
-                onClick={() => setShowDeployConfirm(true)}
+                onClick={() => {
+                  setDeployMode("normal");
+                  setShowDeployConfirm(true);
+                }}
                 disabled={!githubUsable || deployInProgress}
                 title={
                   !githubUsable
@@ -581,6 +587,18 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
                 }
               >
                 {deployInProgress ? "Deploying..." : "Deploy from GitHub"}
+              </button>
+              <button
+                className="secondary-button compact"
+                type="button"
+                onClick={() => {
+                  setDeployMode("reset");
+                  setShowDeployConfirm(true);
+                }}
+                disabled={!githubUsable || deployInProgress}
+                title={!githubUsable ? "Connect GitHub before resetting this deployment." : undefined}
+              >
+                Reset Deployment
               </button>
               <button
                 className="secondary-button compact"
@@ -604,37 +622,39 @@ export default function SourcePanel({ appId }: SourcePanelProps) {
       {source && (
         <ConfirmationDialog
           open={showDeployConfirm}
-          title="Deploy from GitHub?"
+          title={deployMode === "reset" ? "Reset GitHub deployment?" : "Deploy from GitHub?"}
           message={
             <p>
-              This builds and deploys <strong>{source.repositoryOwner}/{source.repositoryName}</strong>{" "}
-              at branch <strong>{source.branch}</strong>
-              {source.latestRemoteCommitSha && (
+              {deployMode === "reset" ? (
                 <>
-                  {" "}(latest known commit <code>{shortSha(source.latestRemoteCommitSha)}</code>)
+                  This downloads a fresh copy of <strong>{source.repositoryOwner}/{source.repositoryName}</strong>{" "}
+                  from branch <strong>{source.branch}</strong>, rebuilds it without Docker cache,
+                  and replaces the current deployment after the new container passes verification.
+                  Environment variables, persistent volumes and their data, domain, and repository
+                  settings are preserved. If the reset fails, the current container remains running
+                  or is restored automatically.
+                </>
+              ) : (
+                <>
+                  This builds and deploys <strong>{source.repositoryOwner}/{source.repositoryName}</strong>{" "}
+                  at branch <strong>{source.branch}</strong>
+                  {source.latestRemoteCommitSha && (
+                    <>
+                      {" "}(latest known commit <code>{shortSha(source.latestRemoteCommitSha)}</code>)
+                    </>
+                  )}
+                  . The current container is preserved and automatically restored if the build or
+                  health verification fails.
                 </>
               )}
-              . The current container is preserved and automatically restored if the build or
-              health verification fails.
-              <label className="checkbox-field" style={{ marginTop: 12 }}>
-                <input
-                  type="checkbox"
-                  checked={deployNoCache}
-                  onChange={(event) => setDeployNoCache(event.target.checked)}
-                />
-                <span>
-                  Build without cache — slower, but clears a corrupt build cache (use this if a
-                  deploy fails with "parent snapshot … does not exist").
-                </span>
-              </label>
             </p>
           }
-          confirmLabel={deployNoCache ? "Deploy without cache" : "Deploy"}
+          confirmLabel={deployMode === "reset" ? "Reset and redownload" : "Deploy"}
           confirming={deploying}
           onConfirm={() => void confirmDeploy()}
           onCancel={() => {
             setShowDeployConfirm(false);
-            setDeployNoCache(false);
+            setDeployMode("normal");
           }}
         />
       )}
