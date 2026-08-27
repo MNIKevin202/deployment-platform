@@ -83,10 +83,39 @@ pre { height: 420px; margin: 0; padding: 14px; overflow: auto; background: #070a
 .wrap { flex-wrap: wrap; }
 .dashboard-console { margin-top: 14px; }
 .dashboard-console pre { height: 260px; }
+.dashboard-heading { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
+.dashboard-heading h2 { margin: 0 0 4px; font-size: 24px; }
+.dashboard-heading .eyebrow { margin-bottom: 4px; }
+.subtle { margin: 0; color: #8995ae; font-size: 13px; overflow-wrap: anywhere; }
+.section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.section-title h2 { margin-bottom: 0; }
+.status-panel { margin-bottom: 14px; }
+.status-rows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
+.status-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 54px; border-top: 1px solid #273149; }
+.status-label { color: #8995ae; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .5px; }
+.status-value { min-width: 0; display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.status-value i { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #768196; }
+.status-value.healthy i { background: #50e2ad; }.status-value.warning i { background: #efcf70; }.status-value.failed i { background: #ff7184; }
+.action-panel h2 { margin: 0 0 9px; color: #8995ae; font-size: 12px; letter-spacing: .6px; text-transform: uppercase; }
+.action-panel h2:not(:first-child) { margin-top: 20px; }
+.logs-panel .section-title { margin-bottom: 18px; }
+.log-tabs { display: flex; flex-wrap: wrap; gap: 7px; }
+.log-tabs button { min-height: 34px; padding: 0 11px; font-size: 12px; }
+.log-tabs button.active { color: #f7f9ff; border-color: #676eff; background: #24295d; }
+.danger-panel { grid-column: 1 / -1; }
+.danger-panel h2 { margin-bottom: 8px; }
+.danger-panel .form-actions { justify-content: flex-start; }
+.icon-button { width: 34px; min-height: 34px; padding: 0; font-size: 21px; line-height: 1; }
+.modal { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 24px; background: rgba(3, 5, 10, .72); }
+.modal-sheet { width: min(680px, 100%); display: grid; gap: 14px; padding: 22px; background: #131927; border: 1px solid #3a4662; border-radius: 8px; box-shadow: 0 24px 80px rgba(0, 0, 0, .45); }
+.modal-sheet h2 { margin: 0; }
 details { margin: 12px 0; color: #d7def0; }
 summary { cursor: pointer; font-weight: 850; margin-bottom: 10px; }
 @media (max-width: 980px) {
   .app-shell, .install-layout, .dashboard-grid, .two { grid-template-columns: 1fr; }
   .sidebar { min-height: auto; }
   .stepper { grid-template-columns: 1fr 1fr; }
+  .dashboard-heading { align-items: start; flex-direction: column; }
+  .status-rows { grid-template-columns: 1fr; }
+  .danger-panel { grid-column: auto; }
 }

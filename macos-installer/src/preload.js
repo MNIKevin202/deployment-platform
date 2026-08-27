@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld("installer", {
   cancel: () => ipcRenderer.invoke("task:cancel"),
   listProfiles: () => ipcRenderer.invoke("profiles:list"),
   saveProfile: (profile) => ipcRenderer.invoke("profiles:save", profile),
+  getCredentials: (id) => ipcRenderer.invoke("profiles:credentials", id),
+  saveCredentials: (input) => ipcRenderer.invoke("profiles:saveCredentials", input),
   removeProfile: (id) => ipcRenderer.invoke("profiles:remove", id),
   serverStatus: (config) => ipcRenderer.invoke("server:status", config),
   serverCommand: (input) => ipcRenderer.invoke("server:command", input),

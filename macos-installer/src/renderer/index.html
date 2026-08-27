@@ -130,33 +130,30 @@
         </section>
 
         <section id="dashboard-view" class="view hidden">
+          <div class="dashboard-heading">
+            <div><p class="eyebrow">Server status</p><h2 id="dashboard-name">Production</h2><p id="dashboard-domain" class="subtle"></p></div>
+            <div class="button-row"><button id="open-dashboard-inline" type="button" class="primary">Open Dashboard</button><button id="refresh-status" type="button" class="ghost">Refresh Status</button></div>
+          </div>
+          <section class="panel status-panel">
+            <div class="section-title"><h2>Server Status</h2><span id="status-updated" class="subtle"></span></div>
+            <div id="status-cards" class="status-rows"></div>
+          </section>
           <div class="dashboard-grid">
-            <section class="panel status-panel">
-              <h2>Server</h2>
-              <div id="status-cards" class="cards"></div>
-              <div class="button-row">
-                <button data-command="verify" type="button">Verify Installation</button>
-                <button data-command="restart" type="button">Restart Platform</button>
-                <button data-command="update" type="button">Update Now</button>
-                <button data-command="enableUpdates" type="button" class="ghost">Enable Auto Updates</button>
-                <button data-command="disableUpdates" type="button" class="ghost">Disable Auto Updates</button>
-                <button id="change-github" type="button" class="ghost">Change GitHub Token</button>
-              </div>
+            <section class="panel action-panel">
+              <h2>Platform</h2>
+              <div class="button-row wrap"><button data-command="verify" type="button">Verify Installation</button><button data-command="restart" type="button">Restart Platform</button><button data-command="update" type="button">Update Now</button></div>
+              <h2>Connections</h2>
+              <div class="button-row wrap"><button id="edit-credentials" type="button" class="ghost">Edit VPS Credentials</button><button id="change-github" type="button" class="ghost">Change GitHub Token</button><button id="test-github-dashboard" type="button" class="ghost">Test GitHub Connection</button></div>
+              <h2>Updates</h2>
+              <div class="button-row"><button id="toggle-updates" data-command="disableUpdates" type="button" class="ghost">Disable Auto Updates</button></div>
             </section>
-            <section class="panel">
-              <h2>Logs</h2>
-              <div class="button-row wrap">
-                <button data-log="installer" type="button">Installer Log</button>
-                <button data-log="updater" type="button">Updater Log</button>
-                <button data-log="api" type="button">API Logs</button>
-                <button data-log="web" type="button">Web Logs</button>
-                <button data-log="caddy" type="button">Caddy Logs</button>
-                <button data-log="verify" type="button">Verification</button>
-              </div>
+            <section class="panel logs-panel">
+              <div class="section-title"><h2>Logs & Diagnostics</h2><button data-command="verify" type="button" class="ghost">Run Verification</button></div>
+              <div class="log-tabs"><button data-log="installer" type="button" class="active">Installer</button><button data-log="updater" type="button">Updater</button><button data-log="api" type="button">API</button><button data-log="web" type="button">Web</button><button data-log="caddy" type="button">Caddy</button></div>
             </section>
             <section class="panel danger-panel">
-              <h2>Uninstall</h2>
-              <p>Preview first. Safe uninstall preserves database volume, app containers, app volumes, secrets, and backups.</p>
+              <h2>Uninstall Deployment Platform</h2>
+              <p>Safe uninstall preserves database data, deployed apps, volumes, credentials, and backups.</p>
               <button id="preview-uninstall" type="button" class="ghost">Preview Uninstall</button>
               <details>
                 <summary>Advanced destructive options</summary>
@@ -182,6 +179,19 @@
           </section>
         </section>
       </main>
+    </div>
+    <div id="credentials-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="credentials-title">
+      <form id="credentials-form" class="modal-sheet">
+        <div class="section-title"><div><p class="eyebrow">Secure credentials</p><h2 id="credentials-title">Edit VPS Credentials</h2></div><button id="close-credentials" type="button" class="icon-button" aria-label="Close">×</button></div>
+        <div class="two"><label><span>VPS hostname or IP</span><input name="credentialHost" required /></label><label><span>SSH username</span><input name="credentialUser" required /></label></div>
+        <div class="segmented"><label><input type="radio" name="credentialAuth" value="password" checked /> Password</label><label><input type="radio" name="credentialAuth" value="key" /> Private Key</label></div>
+        <label id="credential-password-field"><span>SSH password <small>(blank keeps existing)</small></span><input name="credentialPassword" type="password" autocomplete="off" /></label>
+        <label id="credential-key-field" class="hidden"><span>Private key <small>(blank keeps existing)</small></span><textarea name="credentialKey" rows="5" spellcheck="false"></textarea></label>
+        <label id="credential-passphrase-field" class="hidden"><span>Key passphrase <small>(optional)</small></span><input name="credentialPassphrase" type="password" autocomplete="off" /></label>
+        <label><span>Sudo password <small>(blank keeps existing)</small></span><input name="credentialSudo" type="password" autocomplete="off" /></label>
+        <p id="credential-result" class="inline-state" aria-live="polite"></p>
+        <div class="form-actions"><button id="test-credentials" type="button">Test Connection</button><button id="save-credentials" type="submit" class="primary">Save Credentials</button><button id="cancel-credentials" type="button" class="ghost">Cancel</button></div>
+      </form>
     </div>
     <script src="./renderer.js"></script>
   </body>

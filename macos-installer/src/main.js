@@ -1,6 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
+const { execFileSync } = require("node:child_process");
 const { Client } = require("ssh2");
 const { buildProfile, parseStatus, redactSecrets, validateInstallInput } = require("./lib/core");
 
@@ -44,6 +45,28 @@ function readProfiles() {
 function writeProfiles(profiles) {
   fs.mkdirSync(path.dirname(profilesPath()), { recursive: true });
   fs.writeFileSync(profilesPath(), JSON.stringify(profiles, null, 2), { mode: 0o600 });
+}
+
+const KEYCHAIN_SERVICE = "com.deploymentplatform.manager";
+function keychainAccount(id) {
+  return String(id).replace(/[^A-Za-z0-9._-]/g, "_");
+}
+function readProfileCredentials(id) {
+  try {
+    return JSON.parse(execFileSync("/usr/bin/security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", keychainAccount(id), "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+  } catch {
+    return {};
+  }
+}
+function writeProfileCredentials(id, credentials) {
+  const existing = readProfileCredentials(id);
+  const payload = JSON.stringify({
+    authMethod: credentials.authMethod || existing.authMethod || "password",
+    sshPassword: String(credentials.sshPassword || existing.sshPassword || ""),
+    privateKey: String(credentials.privateKey || existing.privateKey || ""),
+    sudoPassword: String(credentials.sudoPassword || existing.sudoPassword || "")
+  });
+  execFileSync("/usr/bin/security", ["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", keychainAccount(id), "-w", payload], { stdio: "ignore" });
 }
 
 function saveProfile(profile) {
@@ -385,6 +408,11 @@ ipcMain.handle("profiles:remove", (_event, id) => {
   return readProfiles();
 });
 ipcMain.handle("profiles:save", (_event, profile) => saveProfile(profile));
+ipcMain.handle("profiles:credentials", (_event, id) => readProfileCredentials(id));
+ipcMain.handle("profiles:saveCredentials", (_event, { id, credentials }) => {
+  writeProfileCredentials(id, credentials);
+  return { saved: true };
+});
 
 ipcMain.handle("ssh:test", async (_event, rawInput) => {
   const config = connectionConfig(rawInput);

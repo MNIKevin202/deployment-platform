@@ -5,6 +5,7 @@ let profiles = [];
 let selectedProfile = null;
 let running = false;
 let startedAt = null;
+let selectedCredentials = {};
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -42,7 +43,9 @@ function selectedConfig() {
     ...selectedProfile,
     sshPassword: $("[name='sshPassword']").value,
     sudoPassword: $("[name='sudoPassword']").value,
-    privateKey: $("[name='privateKey']").value
+    privateKey: selectedCredentials.privateKey || $("[name='privateKey']").value,
+    sshPassword: selectedCredentials.sshPassword || $("[name='sshPassword']").value,
+    sudoPassword: selectedCredentials.sudoPassword || $("[name='sudoPassword']").value
   };
 }
 
@@ -117,8 +120,9 @@ function showInstall(profile = null) {
   }
 }
 
-function showDashboard(profile) {
+async function showDashboard(profile) {
   selectedProfile = profile;
+  selectedCredentials = await window.installer.getCredentials(profile.id);
   $("#install-view").classList.add("hidden");
   $("#dashboard-view").classList.remove("hidden");
   $("#section-eyebrow").textContent = "Manager";
@@ -132,14 +136,13 @@ function showDashboard(profile) {
 function renderStatusCards(status = {}) {
   const profile = selectedProfile || {};
   $("#status-cards").innerHTML = [
-    ["Panel", profile.panelDomain ? `https://${profile.panelDomain}` : "Not set"],
-    ["VPS", profile.host || "Not set"],
-    ["Source", `${profile.repository || "repo"} @ ${profile.sourceRef || "main"}`],
-    ["API", status.api?.state || "Unknown"],
-    ["Web", status.web?.state || "Unknown"],
-    ["Caddy", status.caddy?.state || "Unknown"],
-    ["GitHub", status.github?.connected ? "Connected as " + (status.github.username || "account") : "Disconnected"]
-  ].map(([label, value]) => `<article class="card"><span>${label}</span><strong>${value}</strong></article>`).join("");
+    ["Panel", profile.panelDomain ? `https://${profile.panelDomain}` : "Not set", "healthy"],
+    ["VPS", profile.host || "Not set", "neutral"],
+    ["Platform", status.api?.state || "Unknown", status.api?.state?.toLowerCase().includes("up") ? "healthy" : "warning"],
+    ["GitHub", status.github?.connected ? "Connected as " + (status.github.username || "account") : "Disconnected", status.github?.connected ? "healthy" : "warning"],
+    ["Auto Updates", status.updater?.enabled ? "Enabled" : "Unknown", status.updater?.enabled ? "healthy" : "warning"],
+    ["Installed Version", status.api?.image || "Unknown", "neutral"]
+  ].map(([label, value, tone]) => `<div class="status-row"><span class="status-label">${label}</span><strong class="status-value ${tone}"><i></i>${value}</strong></div>`).join("");
 }
 
 async function refreshStatus() {
@@ -147,6 +150,10 @@ async function refreshStatus() {
   dashboardLog.textContent = "";
   const result = await window.installer.serverStatus(selectedConfig());
   if (result.status) renderStatusCards(result.status);
+  $("#status-updated").textContent = "Updated just now";
+  const enabled = result.output?.includes("active") || result.output?.includes("enabled");
+  $("#toggle-updates").dataset.command = enabled ? "disableUpdates" : "enableUpdates";
+  $("#toggle-updates").textContent = enabled ? "Disable Auto Updates" : "Enable Auto Updates";
 }
 
 function setRunning(value) {
@@ -187,6 +194,58 @@ $("#change-github").addEventListener("click", () => {
   showInstall(profile);
   currentStep = 2;
   renderStepper();
+});
+async function openCredentialEditor() {
+  if (!selectedProfile) return;
+  const stored = await window.installer.getCredentials(selectedProfile.id);
+  const editor = $("#credentials-form");
+  editor.credentialHost.value = selectedProfile.host || "";
+  editor.credentialUser.value = selectedProfile.sshUser || "";
+  editor.credentialPassword.value = "";
+  editor.credentialKey.value = "";
+  editor.credentialSudo.value = "";
+  editor.dataset.profileId = selectedProfile.id;
+  $("#credential-result").textContent = stored ? "Existing secrets are stored securely. Blank fields keep them unchanged." : "";
+  $("#credentials-modal").classList.remove("hidden");
+}
+function closeCredentialEditor() { $("#credentials-modal").classList.add("hidden"); }
+function credentialInput() {
+  const data = new FormData($("#credentials-form"));
+  return { host: data.get("credentialHost"), sshUser: data.get("credentialUser"), authMethod: data.get("credentialAuth"), sshPassword: data.get("credentialPassword"), privateKey: data.get("credentialKey"), sudoPassword: data.get("credentialSudo") };
+}
+$("#edit-credentials").addEventListener("click", openCredentialEditor);
+$("#close-credentials").addEventListener("click", closeCredentialEditor);
+$("#cancel-credentials").addEventListener("click", closeCredentialEditor);
+$$("#credentials-form input[name='credentialAuth']").forEach((input) => input.addEventListener("change", () => {
+  const key = input.value === "key";
+  $("#credential-password-field").classList.toggle("hidden", key);
+  $("#credential-key-field").classList.toggle("hidden", !key);
+  $("#credential-passphrase-field").classList.toggle("hidden", !key);
+}));
+$("#test-credentials").addEventListener("click", async () => {
+  const result = await window.installer.testConnection(credentialInput());
+  $("#credential-result").textContent = result.success ? "Connection succeeded." : "Connection failed: " + result.message;
+  $("#credential-result").className = "inline-state " + (result.success ? "success" : "error");
+});
+$("#credentials-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const input = credentialInput();
+  const resultNode = $("#credential-result");
+  const test = await window.installer.testConnection(input);
+  if (!test.success) {
+    resultNode.textContent = "Test the new credentials successfully before saving.";
+    resultNode.className = "inline-state error";
+    return;
+  }
+  await window.installer.saveCredentials({ id: $("#credentials-form").dataset.profileId, credentials: input });
+  selectedCredentials = input;
+  selectedProfile.host = input.host;
+  selectedProfile.sshUser = input.sshUser;
+  profiles = profiles.map((profile) => profile.id === selectedProfile.id ? { ...profile, host: input.host, sshUser: input.sshUser } : profile);
+  await window.installer.saveProfile(selectedProfile);
+  renderProfiles();
+  closeCredentialEditor();
+  refreshStatus();
 });
 $("#test-connection").addEventListener("click", async () => {
   $("#connection-result").textContent = "Testing...";
@@ -284,6 +343,7 @@ window.installer.onDone(async ({ code }) => {
   profiles = await window.installer.listProfiles();
   selectedProfile = profiles[profiles.length - 1] || null;
   renderProfiles();
+  if (code === 0 && selectedProfile) await window.installer.saveCredentials({ id: selectedProfile.id, credentials: formObject() });
   if (code === 0 && selectedProfile) showDashboard(selectedProfile);
 });
 window.installer.onServerDone(({ status }) => { if (status) renderStatusCards(status); });
