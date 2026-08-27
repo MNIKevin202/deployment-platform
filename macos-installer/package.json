@@ -1,0 +1,16 @@
+{
+  "name": "@deployment-platform/macos-installer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "macOS installer for Deployment Platform VPS hosts",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "bash scripts/build-app.sh",
+    "dmg": "bash scripts/build-dmg.sh"
+  },
+  "devDependencies": {
+    "electron": "^38.4.0",
+    "electron-packager": "^17.1.2"
+  }
+}

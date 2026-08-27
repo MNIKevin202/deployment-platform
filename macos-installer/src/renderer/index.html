@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deployment Platform Installer</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Deployment Platform</p>
+          <h1>Install on a VPS</h1>
+          <p class="subtle">Connect over SSH, install the platform, and enroll the server for automatic updates.</p>
+        </div>
+        <span class="badge">Install only</span>
+      </section>
+
+      <form id="install-form" class="grid">
+        <section class="panel">
+          <h2>VPS Access</h2>
+          <label>
+            <span>VPS IP or hostname</span>
+            <input name="host" placeholder="46.202.178.170" required />
+          </label>
+          <div class="split">
+            <label>
+              <span>SSH username</span>
+              <input name="sshUser" value="root" required />
+            </label>
+            <label>
+              <span>SSH password</span>
+              <input name="sshPassword" type="password" required />
+            </label>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Platform Setup</h2>
+          <div class="split">
+            <label>
+              <span>Panel domain</span>
+              <input name="panelDomain" placeholder="deploy.example.com" required />
+            </label>
+            <label>
+              <span>Apps base domain</span>
+              <input name="appsDomain" placeholder="apps.example.com" required />
+            </label>
+          </div>
+          <div class="split">
+            <label>
+              <span>Admin username</span>
+              <input name="adminUsername" value="admin" required />
+            </label>
+            <label>
+              <span>Admin password</span>
+              <input name="adminPassword" type="password" minlength="12" required />
+            </label>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Source & Updates</h2>
+          <label>
+            <span>GitHub repository</span>
+            <input name="repository" value="https://github.com/MNIKevin202/deployment-platform.git" required />
+          </label>
+          <div class="split compact">
+            <label>
+              <span>Branch or tag</span>
+              <input name="sourceRef" value="main" required />
+            </label>
+            <label class="check">
+              <input name="enableAutoUpdates" type="checkbox" checked />
+              <span>Install automatic updater</span>
+            </label>
+          </div>
+          <label class="check">
+            <input name="continueWithoutDns" type="checkbox" />
+            <span>Continue if DNS is not ready yet</span>
+          </label>
+        </section>
+
+        <section class="actions">
+          <button id="install-button" type="submit">Install Deployment Platform</button>
+          <button id="cancel-button" type="button" disabled>Cancel</button>
+          <p id="status" class="status">Ready.</p>
+        </section>
+      </form>
+
+      <section class="console-panel">
+        <div class="console-header">
+          <h2>Install Log</h2>
+          <button id="copy-log" type="button">Copy</button>
+        </div>
+        <pre id="log"></pre>
+      </section>
+    </main>
+    <script src="./renderer.js"></script>
+  </body>
+</html>
