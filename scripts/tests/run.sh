@@ -979,6 +979,9 @@ assert_contains "the staged copy is syntax-checked before going live" "$REMOTE_T
 assert_contains "the previous installer copy is kept" "$REMOTE_TEXT" "installer.backup-"
 assert_contains "the CLI wrapper is refreshed too" "$REMOTE_TEXT" "/usr/local/bin/deployment-platform"
 assert_contains "the CLI wrapper is backed up" "$REMOTE_TEXT" 'CLI_BACKUP="${CLI_TARGET}.backup-'
+assert_contains "the VPS updater is refreshed too" "$REMOTE_TEXT" "/usr/local/bin/deployment-platform-update"
+assert_contains "the VPS updater is backed up" "$REMOTE_TEXT" 'UPDATE_BACKUP="${UPDATE_TARGET}.backup-'
+assert_contains "the VPS updater template is syntax-checked" "$REMOTE_TEXT" "deployment-platform-update.template"
 assert_contains "an identical installer copy is a no-op" "$REMOTE_TEXT" "already identical to this release"
 assert_contains "installer restore is wired into the automatic rollback path" "$REMOTE_TEXT" "restore_installer_on_failure"
 

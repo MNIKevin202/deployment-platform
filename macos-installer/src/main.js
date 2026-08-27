@@ -185,65 +185,7 @@ class SshTransport {
 }
 
 function installUpdaterScript() {
-  return `install -m 755 /dev/stdin /usr/local/bin/deployment-platform-update <<'DP_UPDATE_SCRIPT'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-INSTALL_ROOT="/opt/deployment-platform"
-STATE_FILE="\${INSTALL_ROOT}/state/installer-state.json"
-LOG_FILE="\${INSTALL_ROOT}/logs/update.log"
-mkdir -p "\${INSTALL_ROOT}/logs"
-exec > >(tee -a "$LOG_FILE") 2>&1
-echo "===== $(date -u +%Y-%m-%dT%H:%M:%SZ) deployment-platform update ====="
-
-json_field() { jq -r --arg f "$1" '.[$f] // empty' "$STATE_FILE"; }
-current_image_tag() { docker inspect --format '{{.Config.Image}}' "$1" 2>/dev/null | awk -F: '{print $NF}'; }
-is_semver() { [[ "$1" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; }
-next_version() {
-  local current="$1"
-  if is_semver "$current"; then IFS=. read -r major minor patch <<< "$current"; printf '%s.%s.%s' "$major" "$minor" "$((patch + 1))"; else printf '0.1.0'; fi
-}
-
-repo="$(json_field sourceRepository)"
-ref="$(json_field sourceRef)"
-panel_domain="$(json_field panelDomain)"
-current_commit="$(json_field sourceCommit)"
-[ -n "$repo" ] && [ -n "$ref" ] || { echo "No source repository/ref recorded; cannot auto-update."; exit 0; }
-
-latest_commit="$(git ls-remote "$repo" "refs/heads/$ref" | awk '{print $1}' | head -n 1)"
-[ -n "$latest_commit" ] || latest_commit="$(git ls-remote "$repo" "$ref" | awk '{print $1}' | head -n 1)"
-[ -n "$latest_commit" ] || { echo "Could not resolve latest commit for $repo@$ref."; exit 1; }
-[ "$latest_commit" != "$current_commit" ] || { echo "Already current at $current_commit."; exit 0; }
-
-tmp="$(mktemp -d /tmp/deployment-platform-update.XXXXXX)"
-cleanup() { rm -rf "$tmp"; }
-trap cleanup EXIT
-git clone --branch "$ref" --depth 1 --single-branch -- "$repo" "$tmp/source"
-timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-short_commit="\${latest_commit:0:12}"
-release_dir="\${INSTALL_ROOT}/source/releases/release-\${timestamp}-\${short_commit}"
-mkdir -p "$release_dir"
-rsync -a --exclude=.git --exclude=node_modules --exclude='**/dist' "$tmp/source/" "$release_dir/"
-
-previous_api="$(current_image_tag deployment-platform-api)"
-previous_web="$(current_image_tag deployment-platform-web)"
-next_api="$(next_version "$previous_api")"
-next_web="$(next_version "$previous_web")"
-
-bash "$release_dir/scripts/release-remote.sh" \\
-  --mode both --source-dir "$release_dir" \\
-  --auth-file "\${INSTALL_ROOT}/config/auth.env" \\
-  --platform-env-file "\${INSTALL_ROOT}/config/platform.env" \\
-  --caddy-routes-dir "\${INSTALL_ROOT}/caddy/routes" \\
-  --deploy-installer --install-root "$INSTALL_ROOT" \\
-  --api-container deployment-platform-api --web-container deployment-platform-web \\
-  --api-image-repo deployment-platform-api --web-image-repo deployment-platform-web \\
-  --platform-network deployment-platform --apps-network deployment-apps \\
-  --api-data-volume deployment-platform-api-data \\
-  --api-version "$next_api" --web-version "$next_web" \\
-  --previous-api-version "$previous_api" --previous-web-version "$previous_web" \\
-  --url-panel "https://\${panel_domain}" \\
-  --current-symlink "\${INSTALL_ROOT}/source/current"
-DP_UPDATE_SCRIPT
+  return `install -m 755 /opt/deployment-platform/installer/templates/deployment-platform-update.template /usr/local/bin/deployment-platform-update
 
 cat > /etc/systemd/system/deployment-platform-update.service <<'DP_UPDATE_SERVICE'
 [Unit]

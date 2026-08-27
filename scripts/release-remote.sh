@@ -1701,8 +1701,26 @@ INSTALLER_REPLACED=0
 CLI_BACKUP=""
 CLI_REPLACED=0
 CLI_TARGET="/usr/local/bin/deployment-platform"
+UPDATE_BACKUP=""
+UPDATE_REPLACED=0
+UPDATE_HAD_PREVIOUS=0
+UPDATE_TARGET="/usr/local/bin/deployment-platform-update"
 
 restore_installer_on_failure() {
+  if [ "${UPDATE_REPLACED}" -eq 1 ]; then
+    if [ "${UPDATE_HAD_PREVIOUS}" -eq 1 ] && [ -n "${UPDATE_BACKUP}" ] && [ -f "${UPDATE_BACKUP}" ]; then
+      if cp "${UPDATE_BACKUP}" "${UPDATE_TARGET}" 2>/dev/null; then
+        chmod 755 "${UPDATE_TARGET}" 2>/dev/null || true
+        info "Previous ${UPDATE_TARGET} restored."
+        UPDATE_REPLACED=0
+      else
+        info "WARNING: could not restore ${UPDATE_TARGET}. It is preserved at ${UPDATE_BACKUP}"
+      fi
+    else
+      rm -f "${UPDATE_TARGET}" 2>/dev/null || true
+      UPDATE_REPLACED=0
+    fi
+  fi
   if [ "${CLI_REPLACED}" -eq 1 ] && [ -n "${CLI_BACKUP}" ] && [ -f "${CLI_BACKUP}" ]; then
     if cp "${CLI_BACKUP}" "${CLI_TARGET}" 2>/dev/null; then
       chmod 755 "${CLI_TARGET}" 2>/dev/null || true
@@ -1758,13 +1776,18 @@ if [ "${DEPLOY_INSTALLER}" -eq 1 ]; then
     info "ERROR: syntax check failed for the deployment-platform CLI template."
     installer_syntax_ok=0
   fi
+  if ! bash -n "${INSTALLER_STAGING}/templates/deployment-platform-update.template" 2>/dev/null; then
+    info "ERROR: syntax check failed for the deployment-platform update template."
+    installer_syntax_ok=0
+  fi
   if [ "${installer_syntax_ok}" -ne 1 ]; then
     rm -rf "${INSTALLER_STAGING}"
     fail "The new installer copy failed syntax validation; nothing was changed."
   fi
 
   if diff -r -q "${INSTALL_ROOT}/installer" "${INSTALLER_STAGING}" >/dev/null 2>&1 &&
-     cmp -s "${INSTALLER_STAGING}/templates/deployment-platform-cli.template" "${CLI_TARGET}"; then
+     cmp -s "${INSTALLER_STAGING}/templates/deployment-platform-cli.template" "${CLI_TARGET}" &&
+     cmp -s "${INSTALLER_STAGING}/templates/deployment-platform-update.template" "${UPDATE_TARGET}"; then
     rm -rf "${INSTALLER_STAGING}"
     info "Installed installer copy is already identical to this release — nothing to refresh."
   else
@@ -1795,6 +1818,19 @@ if [ "${DEPLOY_INSTALLER}" -eq 1 ]; then
     chmod 755 "${CLI_TARGET}"
     CLI_REPLACED=1
     info "Management command refreshed: ${CLI_TARGET}"
+
+    if [ -f "${UPDATE_TARGET}" ]; then
+      UPDATE_HAD_PREVIOUS=1
+      UPDATE_BACKUP="${UPDATE_TARGET}.backup-${RELEASE_TIMESTAMP}"
+      cp "${UPDATE_TARGET}" "${UPDATE_BACKUP}"
+    fi
+    if ! cp "${INSTALL_ROOT}/installer/templates/deployment-platform-update.template" "${UPDATE_TARGET}"; then
+      restore_installer_on_failure
+      fail "Could not install ${UPDATE_TARGET}; the previous installer copy was restored."
+    fi
+    chmod 755 "${UPDATE_TARGET}"
+    UPDATE_REPLACED=1
+    info "Update command refreshed: ${UPDATE_TARGET}"
   fi
 fi
 

@@ -55,6 +55,7 @@ setup_filesystem() {
 
   install_installer_copy
   install_cli_command
+  install_update_command
 
   log_pass "Filesystem layout ready at $INSTALL_ROOT"
 }
@@ -82,4 +83,15 @@ install_cli_command() {
   cp "${DEPLOYMENT_PLATFORM_INSTALLER_ROOT}/templates/deployment-platform-cli.template" "$target"
   chmod 755 "$target"
   log_pass "Installed management command: $target"
+}
+
+install_update_command() {
+  local target="/usr/local/bin/deployment-platform-update"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log_info "[dry-run] Would install $target"
+    return 0
+  fi
+  cp "${DEPLOYMENT_PLATFORM_INSTALLER_ROOT}/templates/deployment-platform-update.template" "$target"
+  chmod 755 "$target"
+  log_pass "Installed update command: $target"
 }

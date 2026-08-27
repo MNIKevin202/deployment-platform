@@ -35,8 +35,8 @@ export default function UpdatesSettings() {
       </div>
 
       <p className="text-faint">
-        Checks whether a newer version of the panel has been deployed than the one this tab is running.
-        Updating isn't required — reloading loads the new version. Everything is checked in your browser.
+        Checks whether this browser tab matches the panel currently installed on this server.
+        Server updates run separately in the background. Reloading is only needed when this tab is older than the installed panel.
       </p>
 
       {error && <div className="error-banner">{error}</div>}
@@ -46,7 +46,7 @@ export default function UpdatesSettings() {
           <p className={status.updateAvailable ? "update-status update-status-available" : "update-status update-status-current"}>
             {status.updateAvailable
               ? "A new version is available."
-              : "You're running the latest version."}
+              : "This tab matches the version installed on this server."}
           </p>
         )}
         {checkedAt && <p className="text-faint">Last checked {checkedAt.toLocaleTimeString()}.</p>}
