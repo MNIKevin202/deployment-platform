@@ -43,12 +43,14 @@ interface AuthGateProps {
 export default function AuthGate({ children }: AuthGateProps) {
   const [checkingSession, setCheckingSession] = useState(true);
   const [username, setUsername] = useState("");
-  const [loginUsername, setLoginUsername] = useState("kevin");
+  const [loginUsername, setLoginUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    setLoginUsername("");
+
     const checkSession = async () => {
       try {
         const response = await fetch("/api/auth/session", {
