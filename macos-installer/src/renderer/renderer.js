@@ -29,6 +29,8 @@ function formObject() {
     adminUsername: data.get("adminUsername"),
     adminPassword: data.get("adminPassword"),
     adminPasswordConfirm: data.get("adminPasswordConfirm"),
+    environmentExportPassword: data.get("environmentExportPassword"),
+    environmentExportPasswordConfirm: data.get("environmentExportPasswordConfirm"),
     repository: data.get("repository"),
   sourceRef: data.get("sourceRef"),
     githubToken: data.get("githubToken"),

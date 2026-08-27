@@ -43,6 +43,23 @@ test("validateInstallInput rejects mismatched administrator passwords", () => {
   );
 });
 
+test("validateInstallInput validates the environment export password", () => {
+  const base = {
+    host: "host.example.com", sshUser: "root", sshPassword: "server-password",
+    panelDomain: "deploy.example.com", appsDomain: "apps.example.com", adminUsername: "admin",
+    adminPassword: "long-password", adminPasswordConfirm: "long-password",
+    repository: "https://github.com/MNIKevin202/deployment-platform.git", sourceRef: "main"
+  };
+  assert.throws(
+    () => validateInstallInput({ ...base, environmentExportPassword: "short", environmentExportPasswordConfirm: "short" }),
+    /export password must be at least 12/i
+  );
+  assert.throws(
+    () => validateInstallInput({ ...base, environmentExportPassword: "export-password-123", environmentExportPasswordConfirm: "different-password" }),
+    /export passwords do not match/i
+  );
+});
+
 test("redactSecrets removes explicit secrets, tokens, and terminal control codes", () => {
   const output = redactSecrets(
     "\u001b[31mpassword=super-secret token: ghp_abc123 SESSION_SECRET=abc\u001b[0m",

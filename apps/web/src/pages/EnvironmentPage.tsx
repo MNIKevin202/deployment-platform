@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import EnvVarDialog from "../components/EnvVarDialog";
 import EnvVarTable from "../components/EnvVarTable";
 import ConfirmationDialog from "../components/ConfirmationDialog";
+import EnvironmentExportDialog from "../components/EnvironmentExportDialog";
 import type { ApiError, EnvVarFormValues, MaskedGlobalEnvVar } from "../types/api";
 
 interface GlobalEnvVarsResponse {
@@ -38,6 +39,30 @@ export default function EnvironmentPage({ refreshKey = 0 }: EnvironmentPageProps
 
   const [deleteTarget, setDeleteTarget] = useState<MaskedGlobalEnvVar | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+
+  const copyAllVariables = async (password: string) => {
+    try {
+      setExporting(true);
+      setExportError("");
+      const response = await fetch("/api/environment/global/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password })
+      });
+      if (!response.ok) throw new Error(await readApiError(response, "Unable to copy variables"));
+      const result = (await response.json()) as { content: string };
+      await navigator.clipboard.writeText(result.content);
+      setShowExportDialog(false);
+      setNotice("All global variables were copied, including secret values.");
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "Unable to copy variables");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const loadVariables = useCallback(async () => {
     try {
@@ -179,9 +204,14 @@ export default function EnvironmentPage({ refreshKey = 0 }: EnvironmentPageProps
             </p>
           </div>
 
-          <button className="primary-button compact" type="button" onClick={openCreateDialog}>
-            Add Variable
-          </button>
+          <div className="section-heading-actions">
+            <button className="secondary-button compact" type="button" onClick={() => { setExportError(""); setShowExportDialog(true); }}>
+              Copy All
+            </button>
+            <button className="primary-button compact" type="button" onClick={openCreateDialog}>
+              Add Variable
+            </button>
+          </div>
         </div>
 
         {notice && <div className="notice-banner">{notice}</div>}
@@ -239,6 +269,14 @@ export default function EnvironmentPage({ refreshKey = 0 }: EnvironmentPageProps
         confirming={deleting}
         onConfirm={() => void confirmDelete()}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      <EnvironmentExportDialog
+        open={showExportDialog}
+        submitting={exporting}
+        error={exportError}
+        onSubmit={(password) => void copyAllVariables(password)}
+        onCancel={() => setShowExportDialog(false)}
       />
     </div>
   );

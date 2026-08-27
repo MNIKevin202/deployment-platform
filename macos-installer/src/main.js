@@ -88,7 +88,7 @@ function emit(channel, payload) {
 }
 
 function makeSecrets(config) {
-  return [config.sshPassword, config.privateKey, config.sudoPassword, config.adminPassword, config.githubToken].filter(Boolean);
+  return [config.sshPassword, config.privateKey, config.sudoPassword, config.adminPassword, config.environmentExportPassword, config.githubToken].filter(Boolean);
 }
 
 async function githubRequest(token, pathname) {
@@ -317,6 +317,11 @@ cat > "$WORK_DIR/admin-password" <<'DP_ADMIN_PASSWORD'
 ${config.adminPassword}
 DP_ADMIN_PASSWORD
 chmod 600 "$WORK_DIR/admin-password"
+install -m 600 /dev/null "$WORK_DIR/environment-export-password"
+cat > "$WORK_DIR/environment-export-password" <<'DP_ENVIRONMENT_EXPORT_PASSWORD'
+${config.environmentExportPassword}
+DP_ENVIRONMENT_EXPORT_PASSWORD
+chmod 600 "$WORK_DIR/environment-export-password"
 
 echo "[4/8] Running non-destructive platform installer..."
 bash "$WORK_DIR/source/installer/install.sh" \\
@@ -325,10 +330,11 @@ bash "$WORK_DIR/source/installer/install.sh" \\
   --apps-domain ${shellQuote(config.appsDomain)} \\
   --admin-username ${shellQuote(config.adminUsername)} \\
   --admin-password-file "$WORK_DIR/admin-password" \\
+  --environment-export-password-file "$WORK_DIR/environment-export-password" \\
   --source-repository ${shellQuote(config.repository)} \\
   --source-ref ${shellQuote(config.sourceRef)} \\
   ${continueFlag}
-rm -f "$WORK_DIR/admin-password"
+rm -f "$WORK_DIR/admin-password" "$WORK_DIR/environment-export-password"
 
 echo "[5/8] Configuring VPS-local automatic updates..."
 ${config.enableAutoUpdates ? installUpdaterScript() : "echo \"Automatic updater skipped by operator.\""}

@@ -89,6 +89,33 @@ export function buildContainerEnvArray(
   return Array.from(merged.entries()).map(([key, value]) => `${key}=${value}`);
 }
 
+function formatExportValue(value: string): string {
+  return /^[A-Za-z0-9_./:@%+,-]*$/.test(value) ? value : JSON.stringify(value);
+}
+
+/**
+ * Password-gated .env-style export. This is only returned by the dedicated
+ * export routes; ordinary environment responses remain masked.
+ */
+export function buildEnvironmentExport(
+  globalVars: StoredGlobalEnvVar[],
+  appVars: StoredAppEnvVar[] = []
+): string {
+  const merged = new Map<string, string>();
+
+  for (const variable of globalVars) {
+    if (variable.enabled) merged.set(variable.key, variable.value);
+  }
+  for (const variable of appVars) {
+    if (variable.enabled) merged.set(variable.key, variable.value);
+  }
+
+  return Array.from(merged.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${formatExportValue(value)}`)
+    .join("\n");
+}
+
 /**
  * Docker can't update a running container's environment in place. An app's
  * environment is "pending" whenever something relevant changed more

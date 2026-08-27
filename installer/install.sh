@@ -75,6 +75,7 @@ OPT_PANEL_DOMAIN=""
 OPT_APPS_DOMAIN=""
 OPT_ADMIN_USERNAME=""
 OPT_ADMIN_PASSWORD_FILE=""
+OPT_ENVIRONMENT_EXPORT_PASSWORD_FILE=""
 OPT_SOURCE_PATH=""
 OPT_SOURCE_REPOSITORY=""
 OPT_SOURCE_REF="main"
@@ -109,6 +110,8 @@ Non-interactive options:
   --apps-domain DOMAIN
   --admin-username NAME
   --admin-password-file PATH     Never pass a password directly as an argument.
+  --environment-export-password-file PATH
+                                 Password required to copy secret environment values.
   --source-path PATH             Build from an already-checked-out local copy.
   --source-repository URL        Clone from a Git repository (https:// only).
   --source-ref REF               Branch/tag to clone (default: main).
@@ -142,6 +145,7 @@ while [ "$#" -gt 0 ]; do
     --apps-domain) OPT_APPS_DOMAIN="$2"; shift 2 ;;
     --admin-username) OPT_ADMIN_USERNAME="$2"; shift 2 ;;
     --admin-password-file) OPT_ADMIN_PASSWORD_FILE="$2"; shift 2 ;;
+    --environment-export-password-file) OPT_ENVIRONMENT_EXPORT_PASSWORD_FILE="$2"; shift 2 ;;
     --source-path) OPT_SOURCE_PATH="$2"; shift 2 ;;
     --source-repository) OPT_SOURCE_REPOSITORY="$2"; shift 2 ;;
     --source-ref) OPT_SOURCE_REF="$2"; shift 2 ;;
@@ -234,6 +238,11 @@ elif [ "$NON_INTERACTIVE" -eq 1 ]; then
   [ -n "$OPT_ADMIN_USERNAME" ] || fatal "--non-interactive requires --admin-username."
   [ -n "$OPT_ADMIN_PASSWORD_FILE" ] || fatal "--non-interactive requires --admin-password-file (a plaintext password is never accepted as a command-line argument)."
   [ -f "$OPT_ADMIN_PASSWORD_FILE" ] || fatal "Admin password file not found: $OPT_ADMIN_PASSWORD_FILE"
+  if [ -n "$OPT_ENVIRONMENT_EXPORT_PASSWORD_FILE" ]; then
+    [ -f "$OPT_ENVIRONMENT_EXPORT_PASSWORD_FILE" ] || fatal "Environment export password file not found: $OPT_ENVIRONMENT_EXPORT_PASSWORD_FILE"
+  else
+    OPT_ENVIRONMENT_EXPORT_PASSWORD_FILE="$OPT_ADMIN_PASSWORD_FILE"
+  fi
 
   if ! OPT_PANEL_DOMAIN="$(validate_domain "$OPT_PANEL_DOMAIN")"; then
     fatal "Invalid --panel-domain: $OPT_PANEL_DOMAIN"
@@ -267,6 +276,13 @@ else
   unset ADMIN_PASSWORD_PLAINTEXT
   track_temp_dir "$OPT_ADMIN_PASSWORD_FILE"
 
+  ENVIRONMENT_EXPORT_PASSWORD_PLAINTEXT="$(prompt_password "Environment export password (required to copy hidden values, min. 12 characters)")"
+  OPT_ENVIRONMENT_EXPORT_PASSWORD_FILE="$(mktemp)"
+  chmod 600 "$OPT_ENVIRONMENT_EXPORT_PASSWORD_FILE"
+  printf '%s' "$ENVIRONMENT_EXPORT_PASSWORD_PLAINTEXT" > "$OPT_ENVIRONMENT_EXPORT_PASSWORD_FILE"
+  unset ENVIRONMENT_EXPORT_PASSWORD_PLAINTEXT
+  track_temp_dir "$OPT_ENVIRONMENT_EXPORT_PASSWORD_FILE"
+
   source_method="$(prompt_choice "Source installation method:" \
     "Build from this checked-out repository" \
     "Clone from a Git repository and ref" \
@@ -299,6 +315,7 @@ else
   echo "Apps base domain:    $OPT_APPS_DOMAIN"
   echo "Administrator user:  $OPT_ADMIN_USERNAME"
   echo "Administrator pass:  [hidden]"
+  echo "Environment export:   [password protected]"
   echo "Source:              ${OPT_SOURCE_PATH:-${OPT_SOURCE_REPOSITORY} @ ${OPT_SOURCE_REF}}"
   echo "Automatic backups:   $([ "$OPT_BACKUPS_ENABLED" -eq 1 ] && echo "enabled, retaining ${OPT_BACKUP_RETENTION} days" || echo "disabled")"
   echo
@@ -339,8 +356,9 @@ setup_filesystem
 state_set_stage "filesystem-complete"
 
 INSTALLER_FAILED_STAGE="secrets"
-generate_secrets "$OPT_ADMIN_USERNAME" "$OPT_ADMIN_PASSWORD_FILE"
+generate_secrets "$OPT_ADMIN_USERNAME" "$OPT_ADMIN_PASSWORD_FILE" "${OPT_ENVIRONMENT_EXPORT_PASSWORD_FILE:-$OPT_ADMIN_PASSWORD_FILE}"
 [ -f "${OPT_ADMIN_PASSWORD_FILE:-}" ] && rm -f "$OPT_ADMIN_PASSWORD_FILE"
+[ -f "${OPT_ENVIRONMENT_EXPORT_PASSWORD_FILE:-}" ] && rm -f "$OPT_ENVIRONMENT_EXPORT_PASSWORD_FILE"
 state_set_stage "secrets-complete"
 
 INSTALLER_FAILED_STAGE="source"

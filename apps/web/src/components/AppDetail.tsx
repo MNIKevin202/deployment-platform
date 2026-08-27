@@ -20,6 +20,7 @@ import Tabs from "./Tabs";
 import EnvVarTable from "./EnvVarTable";
 import EnvVarDialog from "./EnvVarDialog";
 import BulkEnvVarDialog from "./BulkEnvVarDialog";
+import EnvironmentExportDialog from "./EnvironmentExportDialog";
 import DomainDialog from "./DomainDialog";
 import StorageTable from "./StorageTable";
 import StorageDialog from "./StorageDialog";
@@ -195,6 +196,30 @@ export default function AppDetail({
   const [showBulkEnvDialog, setShowBulkEnvDialog] = useState(false);
   const [bulkEnvSubmitting, setBulkEnvSubmitting] = useState(false);
   const [bulkEnvError, setBulkEnvError] = useState("");
+  const [showEnvExportDialog, setShowEnvExportDialog] = useState(false);
+  const [envExporting, setEnvExporting] = useState(false);
+  const [envExportError, setEnvExportError] = useState("");
+
+  const copyEffectiveEnvironment = async (password: string) => {
+    try {
+      setEnvExporting(true);
+      setEnvExportError("");
+      const response = await fetch(`/api/apps/${appId}/environment/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password })
+      });
+      if (!response.ok) throw new Error(await readApiError(response, "Unable to copy variables"));
+      const result = (await response.json()) as { content: string };
+      await navigator.clipboard.writeText(result.content);
+      setShowEnvExportDialog(false);
+      setNotice("The effective environment was copied, including secret values.");
+    } catch (error) {
+      setEnvExportError(error instanceof Error ? error.message : "Unable to copy variables");
+    } finally {
+      setEnvExporting(false);
+    }
+  };
 
   const [showDomainDialog, setShowDomainDialog] = useState(false);
   const [domainSubmitting, setDomainSubmitting] = useState(false);
@@ -1072,10 +1097,19 @@ export default function AppDetail({
           <div className="env-scope-block">
             <div className="env-scope-heading">
               <h3>Effective Environment</h3>
-              <StatusBadge
-                label={isConfigPending ? "Changes Pending" : "Applied"}
-                tone={isConfigPending ? "warning" : "positive"}
-              />
+              <div className="env-scope-heading-actions">
+                <StatusBadge
+                  label={isConfigPending ? "Changes Pending" : "Applied"}
+                  tone={isConfigPending ? "warning" : "positive"}
+                />
+                <button
+                  className="secondary-button compact"
+                  type="button"
+                  onClick={() => { setEnvExportError(""); setShowEnvExportDialog(true); }}
+                >
+                  Copy All
+                </button>
+              </div>
             </div>
             <p className="section-description">
               {isConfigPending
@@ -1336,6 +1370,14 @@ export default function AppDetail({
         error={bulkEnvError}
         onSubmit={(variables) => void submitBulkEnvDialog(variables)}
         onCancel={() => setShowBulkEnvDialog(false)}
+      />
+
+      <EnvironmentExportDialog
+        open={showEnvExportDialog}
+        submitting={envExporting}
+        error={envExportError}
+        onSubmit={(password) => void copyEffectiveEnvironment(password)}
+        onCancel={() => setShowEnvExportDialog(false)}
       />
 
       <DomainDialog

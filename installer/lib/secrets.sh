@@ -261,6 +261,7 @@ generate_secrets() {
 
   local admin_username="$1"
   local admin_password_file="$2"
+  local environment_export_password_file="${3:-$2}"
 
   if auth_file_looks_valid; then
     log_pass "Existing valid secrets found at $AUTH_FILE_PATH — reusing them. CREDENTIAL_ENCRYPTION_KEY is never silently rotated: doing so would make any already-stored provider credentials unreadable."
@@ -292,6 +293,12 @@ generate_secrets() {
     fatal "Administrator password hashing failed — no secrets were generated or written."
   fi
 
+  log_info "Computing environment export password hash (scrypt, inside a sandboxed helper container)."
+  local environment_export_password_hash
+  if ! environment_export_password_hash="$(compute_password_hash "$environment_export_password_file")"; then
+    fatal "Environment export password hashing failed — no secrets were generated or written."
+  fi
+
   log_info "Generating CREDENTIAL_ENCRYPTION_KEY (32 random bytes, base64) via openssl."
   local encryption_key
   encryption_key="$(openssl rand -base64 32)"
@@ -311,6 +318,7 @@ generate_secrets() {
   sed \
     -e "s|__ADMIN_USERNAME__|${admin_username}|" \
     -e "s|__ADMIN_PASSWORD_HASH__|${password_hash}|" \
+    -e "s|__ENVIRONMENT_EXPORT_PASSWORD_HASH__|${environment_export_password_hash}|" \
     -e "s|__SESSION_SECRET__|${session_secret}|" \
     -e "s|__CREDENTIAL_ENCRYPTION_KEY__|${encryption_key}|" \
     "$template_file" > "$tmp_auth_file"
@@ -323,7 +331,7 @@ generate_secrets() {
   # never printed — but bash cannot force early memory zeroing, so the
   # real safety property here is "never written to argv, env dump, or
   # a log line", which the code above already guarantees.
-  unset encryption_key session_secret password_hash
+  unset encryption_key session_secret password_hash environment_export_password_hash
 
   log_pass "Secrets generated and stored at $AUTH_FILE_PATH (mode 600). Values are never printed or logged."
 }

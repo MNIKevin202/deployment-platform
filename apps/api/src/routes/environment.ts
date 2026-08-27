@@ -12,11 +12,14 @@ import {
 } from "../schemas/environment.js";
 import {
   buildEffectiveEnvironment,
+  buildEnvironmentExport,
   computeEnvironmentStatus
 } from "../services/environment-service.js";
+import { verifyPassword } from "../auth.js";
 
 interface RegisterEnvironmentRoutesOptions {
   appDatabase: AppDatabase;
+  exportPasswordHash?: string;
 }
 
 const idParamSchema = z.object({
@@ -26,6 +29,10 @@ const idParamSchema = z.object({
 const nestedIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
   variableId: z.coerce.number().int().positive()
+});
+
+const exportSchema = z.object({
+  password: z.string().min(1).max(500)
 });
 
 interface AppIdParams {
@@ -71,13 +78,50 @@ function maskAppVar(variable: StoredAppEnvVar) {
 
 export async function registerEnvironmentRoutes(
   fastify: FastifyInstance,
-  { appDatabase }: RegisterEnvironmentRoutesOptions
+  { appDatabase, exportPasswordHash }: RegisterEnvironmentRoutesOptions
 ): Promise<void> {
+  const effectiveExportPasswordHash =
+    exportPasswordHash ||
+    process.env.ENVIRONMENT_EXPORT_PASSWORD_HASH ||
+    process.env.ADMIN_PASSWORD_HASH ||
+    "";
+
+  function authorizeExport(requestBody: unknown): boolean {
+    const parsed = exportSchema.safeParse(requestBody);
+    return Boolean(
+      parsed.success &&
+      effectiveExportPasswordHash &&
+      verifyPassword(parsed.data.password, effectiveExportPasswordHash)
+    );
+  }
+
   fastify.get("/environment/global", async () => {
     return {
       variables: appDatabase.listGlobalEnvVars().map(maskGlobalVar)
     };
   });
+
+  fastify.post(
+    "/environment/global/export",
+    {
+      config: {
+        rateLimit: { max: 5, timeWindow: "1 minute" }
+      }
+    },
+    async (request, reply) => {
+      if (!authorizeExport(request.body)) {
+        return reply.code(401).send({
+          success: false,
+          message: "Invalid environment export password"
+        });
+      }
+
+      return {
+        success: true,
+        content: buildEnvironmentExport(appDatabase.listGlobalEnvVars())
+      };
+    }
+  );
 
   fastify.post("/environment/global", async (request, reply) => {
     const parsedBody = createEnvVarSchema.safeParse(request.body);
@@ -208,6 +252,42 @@ export async function registerEnvironmentRoutes(
 
       return {
         variables: appDatabase.listAppEnvVars(app.id).map(maskAppVar)
+      };
+    }
+  );
+
+  fastify.post<{ Params: AppIdParams }>(
+    "/apps/:id/environment/export",
+    {
+      config: {
+        rateLimit: { max: 5, timeWindow: "1 minute" }
+      }
+    },
+    async (request, reply) => {
+      const parsedParams = idParamSchema.safeParse(request.params);
+
+      if (!parsedParams.success) {
+        return reply.code(400).send({ success: false, message: "Invalid app id" });
+      }
+
+      const app = appDatabase.getAppById(parsedParams.data.id);
+      if (!app) {
+        return reply.code(404).send({ success: false, message: "App not found" });
+      }
+
+      if (!authorizeExport(request.body)) {
+        return reply.code(401).send({
+          success: false,
+          message: "Invalid environment export password"
+        });
+      }
+
+      return {
+        success: true,
+        content: buildEnvironmentExport(
+          appDatabase.listGlobalEnvVars(),
+          appDatabase.listAppEnvVars(app.id)
+        )
       };
     }
   );

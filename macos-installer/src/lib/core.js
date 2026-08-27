@@ -107,6 +107,8 @@ function validateInstallInput(input) {
   const adminUsername = requireField(input, "adminUsername", "Admin username");
   const adminPassword = String(input.adminPassword ?? "");
   const adminPasswordConfirm = String(input.adminPasswordConfirm ?? input.adminPassword ?? "");
+  const environmentExportPassword = String(input.environmentExportPassword ?? input.adminPassword ?? "");
+  const environmentExportPasswordConfirm = String(input.environmentExportPasswordConfirm ?? input.environmentExportPassword ?? input.adminPassword ?? "");
   const repository = requireField(input, "repository", "GitHub repository");
   const sourceRef = requireField(input, "sourceRef", "Branch/tag/ref");
 
@@ -121,6 +123,12 @@ function validateInstallInput(input) {
   }
   if (adminPassword !== adminPasswordConfirm) {
     throw new Error("Administrator passwords do not match.");
+  }
+  if (environmentExportPassword.length < 12) {
+    throw new Error("Environment export password must be at least 12 characters.");
+  }
+  if (environmentExportPassword !== environmentExportPasswordConfirm) {
+    throw new Error("Environment export passwords do not match.");
   }
   validateDomain(panelDomain, "Panel domain");
   validateDomain(appsDomain, "Apps base domain");
@@ -145,6 +153,7 @@ function validateInstallInput(input) {
     appsDomain,
     adminUsername,
     adminPassword,
+    environmentExportPassword,
     repository,
     sourceRef,
     githubToken: String(input.githubToken ?? "").trim(),
