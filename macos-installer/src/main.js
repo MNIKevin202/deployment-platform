@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const { Client } = require("ssh2");
 const { buildProfile, parseStatus, redactSecrets, validateInstallInput } = require("./lib/core");
+const { buildUninstallPreviewScript, buildUninstallScript } = require("./lib/uninstall");
 
 let mainWindow = null;
 let activeSession = null;
@@ -353,17 +354,6 @@ function buildLogScript(kind, follow) {
   return "deployment-platform verify";
 }
 
-function buildUninstallScript(options = {}) {
-  const flags = ["--uninstall", "--non-interactive"];
-  if (options.deletePlatformData) flags.push("--delete-platform-data");
-  if (options.deleteAppContainers) flags.push("--delete-app-containers");
-  if (options.deleteAppVolumes) flags.push("--delete-app-volumes");
-  if (options.deleteSecrets) flags.push("--delete-secrets");
-  if (options.purgeAll && options.confirmPhrase === "DELETE EVERYTHING") flags.push("--purge-all", "--confirm-purge");
-  const confirmation = flags.includes("--purge-all") ? "DELETE EVERYTHING\n" : "y\n";
-  return `printf ${shellQuote(confirmation)} | bash /opt/deployment-platform/installer/install.sh ${flags.join(" ")}`;
-}
-
 function shellInput(script) {
   const value = String(script || "");
   return value.endsWith("\n") ? value : `${value}\n`;
@@ -483,7 +473,7 @@ ipcMain.handle("server:command", async (_event, { config, command }) => {
   return runRemote(connectionConfig(config), commands[command] || commands.verify, "server");
 });
 ipcMain.handle("logs:start", async (_event, { config, kind, follow }) => runRemote(connectionConfig(config), buildLogScript(kind, follow), "logs"));
-ipcMain.handle("uninstall:preview", async (_event, config) => runRemote(connectionConfig(config), "bash /opt/deployment-platform/installer/install.sh --uninstall-preview", "uninstall"));
+ipcMain.handle("uninstall:preview", async (_event, config) => runRemote(connectionConfig(config), buildUninstallPreviewScript(), "uninstall"));
 ipcMain.handle("uninstall:start", async (_event, { config, options }) => runRemote(connectionConfig(config), buildUninstallScript(options), "uninstall"));
 ipcMain.handle("dialog:saveLog", async (_event, text) => {
   const result = await dialog.showSaveDialog(mainWindow, { title: "Save Log", defaultPath: "deployment-platform.log" });
