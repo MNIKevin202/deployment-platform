@@ -30,10 +30,9 @@ function buildUninstallScript(options = {}, paths = {}, preview = false) {
   const installerPath = paths.installerPath || `${installRoot}/installer/install.sh`;
   const reusableCheckout = paths.reusableCheckout || `${installRoot}/source/repository`;
   const flags = uninstallFlags(options);
-  const confirmation = flags.includes("--purge-all") ? "DELETE EVERYTHING\n" : "y\n";
   const runCommand = preview
     ? 'bash "$INSTALLER_PATH" --uninstall-preview'
-    : `printf ${shellQuote(confirmation)} | bash "$INSTALLER_PATH" ${flags.join(" ")}`;
+    : `bash "$INSTALLER_PATH" ${flags.join(" ")}`;
 
   return `set -Eeuo pipefail
 INSTALL_ROOT=${shellQuote(installRoot)}
@@ -80,22 +79,47 @@ fi
 
 git_auth=()
 [ -z "$credential_helper" ] || git_auth=(-c "credential.helper=$credential_helper")
-fresh_installer="$WORK_DIR/install.sh"
+fresh_installer_dir="$WORK_DIR/fresh-installer"
 if [ -d "$REUSABLE_CHECKOUT/.git" ] && [ "$(git -C "$REUSABLE_CHECKOUT" remote get-url origin 2>/dev/null || true)" = "$repo" ]; then
   git "\${git_auth[@]}" -C "$REUSABLE_CHECKOUT" fetch --quiet --depth 1 origin "$ref" || refresh_failed
-  git -C "$REUSABLE_CHECKOUT" show FETCH_HEAD:installer/install.sh > "$fresh_installer" || refresh_failed
+  mkdir -p "$fresh_installer_dir"
+  git -C "$REUSABLE_CHECKOUT" archive FETCH_HEAD installer | tar -x -C "$WORK_DIR" || refresh_failed
+  mv "$WORK_DIR/installer" "$fresh_installer_dir/source" || refresh_failed
 else
   checkout="$WORK_DIR/source"
   git "\${git_auth[@]}" clone --quiet --branch "$ref" --depth 1 --single-branch --no-tags -- "$repo" "$checkout" || refresh_failed
-  [ -f "$checkout/installer/install.sh" ] || refresh_failed
-  cp "$checkout/installer/install.sh" "$fresh_installer" || refresh_failed
+  mkdir -p "$fresh_installer_dir"
+  cp -a "$checkout/installer" "$fresh_installer_dir/source" || refresh_failed
 fi
 
-[ -s "$fresh_installer" ] || refresh_failed
-mkdir -p "$(dirname "$INSTALLER_PATH")" || refresh_failed
-install -m 755 "$fresh_installer" "$INSTALLER_PATH.new" || refresh_failed
-mv -f "$INSTALLER_PATH.new" "$INSTALLER_PATH" || refresh_failed
-[ -x "$INSTALLER_PATH" ] || refresh_failed
+[ -s "$fresh_installer_dir/source/install.sh" ] || refresh_failed
+[ -s "$fresh_installer_dir/source/lib/uninstall.sh" ] || refresh_failed
+staged_installer="$WORK_DIR/installer-staged"
+if [ -d "$(dirname "$INSTALLER_PATH")" ]; then
+  cp -a "$(dirname "$INSTALLER_PATH")" "$staged_installer" || refresh_failed
+else
+  cp -a "$fresh_installer_dir/source" "$staged_installer" || refresh_failed
+fi
+install -m 755 "$fresh_installer_dir/source/install.sh" "$staged_installer/install.sh" || refresh_failed
+rm -rf "$staged_installer/lib"
+cp -a "$fresh_installer_dir/source/lib" "$staged_installer/lib" || refresh_failed
+find "$staged_installer/lib" -type f -name '*.sh' -exec chmod 755 {} + || refresh_failed
+bash -n "$staged_installer/install.sh" || refresh_failed
+for library in "$staged_installer"/lib/*.sh; do bash -n "$library" || refresh_failed; done
+
+installer_dir="$(dirname "$INSTALLER_PATH")"
+previous_installer="$WORK_DIR/installer-previous"
+mkdir -p "$(dirname "$installer_dir")" || refresh_failed
+if [ -d "$installer_dir" ]; then mv "$installer_dir" "$previous_installer" || refresh_failed; fi
+if ! mv "$staged_installer" "$installer_dir"; then
+  [ ! -d "$previous_installer" ] || mv "$previous_installer" "$installer_dir"
+  refresh_failed
+fi
+if [ ! -x "$INSTALLER_PATH" ]; then
+  rm -rf "$installer_dir"
+  [ ! -d "$previous_installer" ] || mv "$previous_installer" "$installer_dir"
+  refresh_failed
+fi
 echo "Deployment Platform uninstaller refreshed."
 
 ${runCommand}`;

@@ -313,6 +313,7 @@ $("#preview-uninstall").addEventListener("click", () => {
 $("#run-uninstall").addEventListener("click", () => {
   if (!selectedProfile) return;
   if (uninstallRunning) return;
+  if (!window.confirm("Are you sure you want to uninstall Deployment Platform from this VPS?")) return;
   uninstallMode = "run";
   uninstallRunning = true;
   $("#preview-uninstall").disabled = true;

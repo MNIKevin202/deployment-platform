@@ -118,3 +118,11 @@ test("GitHub capability test distinguishes invalid and insufficient tokens", asy
   assert.match((await testGithubToken({ githubToken: "github_pat_fake" }, response(401))).message, /invalid or expired/i);
   assert.match((await testGithubToken({ githubToken: "github_pat_fake" }, response(403))).message, /denied this capability/i);
 });
+
+test("manager requires final confirmation before starting uninstall", () => {
+  const { readFileSync } = require("node:fs");
+  const renderer = readFileSync(require.resolve("../src/renderer/renderer.js"), "utf8");
+  const handler = renderer.slice(renderer.indexOf('$("#run-uninstall").addEventListener'), renderer.indexOf("window.installer.onLog"));
+  assert.match(handler, /window\.confirm\("Are you sure you want to uninstall Deployment Platform from this VPS\?"\)/);
+  assert.ok(handler.indexOf("window.confirm") < handler.indexOf("window.installer.uninstall"));
+});

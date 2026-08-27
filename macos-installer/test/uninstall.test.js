@@ -10,15 +10,18 @@ function fixture() {
   const root = mkdtempSync(join(tmpdir(), "manager-uninstall-test-"));
   const installRoot = join(root, "platform");
   const fakeBin = join(root, "bin");
-  const sourceInstaller = join(root, "latest-install.sh");
+  const sourceInstaller = join(root, "latest-installer");
   const marker = join(root, "marker");
   mkdirSync(join(installRoot, "state"), { recursive: true });
-  mkdirSync(join(installRoot, "installer"), { recursive: true });
+  mkdirSync(join(installRoot, "installer", "lib"), { recursive: true });
+  mkdirSync(join(sourceInstaller, "lib"), { recursive: true });
   mkdirSync(fakeBin);
   writeFileSync(join(installRoot, "state", "installer-state.json"), JSON.stringify({ sourceRepository: "https://github.com/example/private.git", sourceRef: "main" }));
   writeFileSync(join(installRoot, "installer", "install.sh"), `#!/bin/sh\necho stale > ${JSON.stringify(marker)}\n`);
-  writeFileSync(sourceInstaller, `#!/bin/sh\necho latest > ${JSON.stringify(marker)}\n`);
-  chmodSync(sourceInstaller, 0o755);
+  writeFileSync(join(installRoot, "installer", "lib", "uninstall.sh"), "# stale uninstall library\n");
+  writeFileSync(join(sourceInstaller, "install.sh"), `#!/bin/sh\necho latest > ${JSON.stringify(marker)}\n`);
+  writeFileSync(join(sourceInstaller, "lib", "uninstall.sh"), "# latest uninstall library\n");
+  chmodSync(join(sourceInstaller, "install.sh"), 0o755);
 
   writeFileSync(join(fakeBin, "docker"), `#!/bin/sh\nif [ "$1" = inspect ]; then exit 0; fi\nprintf '%s' 'github_pat_TEST_SECRET_12345678901234567890'\n`);
   writeFileSync(join(fakeBin, "git"), `#!/bin/sh
@@ -32,7 +35,7 @@ done
 if [ "\${FAIL_GIT:-0}" = 1 ]; then exit 42; fi
 [ -z "$helper" ] || "$helper" get > "$CREDENTIAL_CAPTURE"
 mkdir -p "$last/installer"
-cp "$FAKE_SOURCE_INSTALLER" "$last/installer/install.sh"
+cp -R "$FAKE_SOURCE_INSTALLER/." "$last/installer/"
 `);
   chmodSync(join(fakeBin, "docker"), 0o755);
   chmodSync(join(fakeBin, "git"), 0o755);
@@ -58,6 +61,7 @@ test("refreshes a stale installer, preserves executable mode, and runs the lates
   assert.equal(result.status, 0, result.stderr);
   assert.equal(readFileSync(item.marker, "utf8").trim(), "latest");
   assert.notEqual(statSync(join(item.installRoot, "installer", "install.sh")).mode & 0o111, 0);
+  assert.match(readFileSync(join(item.installRoot, "installer", "lib", "uninstall.sh"), "utf8"), /latest uninstall library/);
   assert.match(readFileSync(item.env.GIT_ARGS_FILE, "utf8"), /credential\.helper=.*git-credential-helper\.sh/);
   assert.match(readFileSync(item.env.CREDENTIAL_CAPTURE, "utf8"), /password=github_pat_TEST_SECRET/);
   assert.doesNotMatch(result.stdout + result.stderr, /github_pat_TEST_SECRET/);
@@ -92,9 +96,9 @@ test("credential-bearing source URLs are rejected without logging the credential
   assert.match(result.stderr, /Uninstall was not started/);
 });
 
-test("destructive uninstall flags retain the existing explicit confirmation contract", () => {
+test("destructive uninstall flags retain the existing explicit confirmation contract without stdin piping", () => {
   const script = buildUninstallScript({ purgeAll: true, confirmPhrase: "DELETE EVERYTHING", deleteSecrets: true });
   assert.match(script, /--purge-all --confirm-purge/);
   assert.match(script, /--delete-secrets/);
-  assert.match(script, /DELETE EVERYTHING/);
+  assert.doesNotMatch(script, /printf .*\| bash/);
 });
