@@ -149,17 +149,28 @@ class SshTransport {
     });
   }
 
-  run(command, input, handlers = {}) {
+  run(command, input, handlers = {}, options = {}) {
     return new Promise((resolve, reject) => {
-      this.client.exec(command, { pty: true }, (error, stream) => {
+      this.client.exec(command, { pty: options.pty !== false }, (error, stream) => {
         if (error) {
           reject(error);
           return;
         }
+        let settled = false;
+        const timeout = options.timeoutMs ? setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          activeSession = null;
+          stream.close();
+          reject(new Error("Remote command timed out."));
+        }, options.timeoutMs) : null;
         activeSession = stream;
         stream.on("data", (chunk) => handlers.stdout?.(redactSecrets(chunk.toString(), this.secrets)));
         stream.stderr.on("data", (chunk) => handlers.stderr?.(redactSecrets(chunk.toString(), this.secrets)));
         stream.on("close", (code) => {
+          if (settled) return;
+          settled = true;
+          if (timeout) clearTimeout(timeout);
           activeSession = null;
           resolve(code ?? 0);
         });
@@ -267,18 +278,38 @@ echo "Automatic updater installed and enabled."
 
 function buildInstallScript(config) {
   const continueFlag = config.continueWithoutDns ? "--continue-without-dns" : "";
+  const githubTokenPath = config.githubTokenPath || "/tmp/deployment-platform-github-token";
   return `set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 WORK_DIR="$(mktemp -d /tmp/deployment-platform-install.XXXXXX)"
 cleanup() { rm -rf "$WORK_DIR"; rm -f "/tmp/deployment-platform-github-token"; }
 trap cleanup EXIT
+SOURCE_REPOSITORY=${shellQuote(config.repository)}
+GITHUB_TOKEN_FILE=${shellQuote(githubTokenPath)}
 
 echo "[1/8] Preparing packages..."
 apt-get update
 apt-get install -y git curl ca-certificates jq rsync
 
 echo "[2/8] Cloning Deployment Platform source..."
-git clone --branch ${shellQuote(config.sourceRef)} --depth 1 --single-branch -- ${shellQuote(config.repository)} "$WORK_DIR/source"
+git_auth=()
+repo_authority="\${SOURCE_REPOSITORY#https://}"
+repo_authority="\${repo_authority%%/*}"
+if [ "$repo_authority" = "github.com" ] && [ -s "$GITHUB_TOKEN_FILE" ]; then
+  credential_helper="$WORK_DIR/git-credential-helper.sh"
+  cat > "$credential_helper" <<DP_INSTALL_GIT_HELPER
+#!/bin/sh
+if [ "\\$1" = "get" ]; then
+  printf 'username=x-access-token\\npassword='
+  cat "$GITHUB_TOKEN_FILE"
+  printf '\\n'
+fi
+exit 0
+DP_INSTALL_GIT_HELPER
+  chmod 700 "$credential_helper"
+  git_auth=(-c "credential.helper=$credential_helper")
+fi
+git "\${git_auth[@]}" clone --branch ${shellQuote(config.sourceRef)} --depth 1 --single-branch --no-tags -- "$SOURCE_REPOSITORY" "$WORK_DIR/source"
 
 echo "[3/8] Writing temporary administrator password file..."
 install -m 600 /dev/null "$WORK_DIR/admin-password"
@@ -446,8 +477,15 @@ ipcMain.handle("install:start", async (_event, rawInput) => {
     await transport.connect();
     emit("install:log", { source: "local", text: "SSH connection established.\n" });
     if (config.githubToken) {
-      const tokenCode = await transport.run(`umask 077; install -m 600 /dev/stdin ${shellQuote(tokenPath)}`, config.githubToken);
+      emit("install:log", { source: "local", text: "Transferring GitHub credential securely...\n" });
+      const tokenCode = await transport.run(
+        `umask 077; cat > ${shellQuote(tokenPath)}; chmod 600 ${shellQuote(tokenPath)}`,
+        config.githubToken,
+        {},
+        { pty: false, timeoutMs: 30000 }
+      );
       if (tokenCode !== 0) throw new Error("Could not securely transfer the GitHub token to the VPS.");
+      emit("install:log", { source: "local", text: "GitHub credential transferred.\n" });
     }
     let output = "";
     const command = config.sshUser === "root" ? "bash -s" : "sudo -S -p '' bash -s";

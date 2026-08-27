@@ -140,3 +140,20 @@ test("manager hides management options when the platform is not installed", () =
   assert.match(renderer, /installed-options.*classList\.toggle\("hidden", !installed\)/s);
   assert.match(renderer, /not-installed-view.*classList\.toggle\("hidden", installed !== false\)/s);
 });
+
+test("installer transfers GitHub credentials without a PTY and bounds the transfer time", () => {
+  const { readFileSync } = require("node:fs");
+  const main = readFileSync(require.resolve("../src/main.js"), "utf8");
+  assert.match(main, /\{ pty: options\.pty !== false \}/);
+  assert.match(main, /\{ pty: false, timeoutMs: 30000 \}/);
+  assert.match(main, /cat > \$\{shellQuote\(tokenPath\)\}/);
+  assert.doesNotMatch(main, /install -m 600 \/dev\/stdin/);
+});
+
+test("initial source clone uses the temporary GitHub credential helper", () => {
+  const { readFileSync } = require("node:fs");
+  const main = readFileSync(require.resolve("../src/main.js"), "utf8");
+  assert.match(main, /credential\.helper=\$credential_helper/);
+  assert.match(main, /cat "\$GITHUB_TOKEN_FILE"/);
+  assert.match(main, /git "\\\$\{git_auth\[@\]\}" clone/);
+});
