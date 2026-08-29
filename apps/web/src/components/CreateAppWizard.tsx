@@ -5,6 +5,7 @@ import type {
   BuildBriefResponse,
   BuildBriefRuntime,
   BuildStrategy,
+  CopyableEnvironmentVariable,
   CreateAppWizardPayload,
   CreateAppWizardResponse,
   CreatedAppSummary,
@@ -18,6 +19,8 @@ import type {
   RestartPolicy,
   SourceBranch,
   SourceRepository,
+  StoredApp,
+  StoredAppsResponse,
   SuggestPortResponse,
   WizardEnvVarInput,
   WizardVolumeInput,
@@ -289,6 +292,15 @@ export default function CreateAppWizard({
 
   const [globalVars, setGlobalVars] = useState<MaskedGlobalEnvVar[]>([]);
   const [globalVarsLoaded, setGlobalVarsLoaded] = useState(false);
+  const [copySourceApps, setCopySourceApps] = useState<StoredApp[]>([]);
+  const [copySourceAppId, setCopySourceAppId] = useState("");
+  const [copySourcePassword, setCopySourcePassword] = useState("");
+  const [copySourceVariables, setCopySourceVariables] = useState<CopyableEnvironmentVariable[]>([]);
+  const [copySourceLoaded, setCopySourceLoaded] = useState(false);
+  const [selectedCopyKeys, setSelectedCopyKeys] = useState<Set<string>>(new Set());
+  const [copySourceLoading, setCopySourceLoading] = useState(false);
+  const [copySourceError, setCopySourceError] = useState("");
+  const [copySourceNotice, setCopySourceNotice] = useState("");
 
   // Extra services a multi-service template deploys with this app. Held as
   // template definitions rather than resolved payloads because their real
@@ -357,6 +369,14 @@ export default function CreateAppWizard({
     setStartCommand("");
     setHealthCheckPath("");
     setEnvRows([]);
+    setCopySourceAppId("");
+    setCopySourcePassword("");
+    setCopySourceVariables([]);
+    setCopySourceLoaded(false);
+    setSelectedCopyKeys(new Set());
+    setCopySourceLoading(false);
+    setCopySourceError("");
+    setCopySourceNotice("");
     setVolumeRows([]);
     setPortRows([]);
     setTemplateCompanions([]);
@@ -485,6 +505,31 @@ export default function CreateAppWizard({
       cancelled = true;
     };
   }, [open, globalVarsLoaded]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/apps");
+        if (!response.ok || cancelled) return;
+        const result = (await response.json()) as StoredAppsResponse;
+        if (!cancelled) {
+          setCopySourceApps([...result.apps].sort((left, right) => left.name.localeCompare(right.name)));
+        }
+      } catch {
+        if (!cancelled) setCopySourceApps([]);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -823,28 +868,110 @@ export default function CreateAppWizard({
   const removeEnvRow = (rowId: number) =>
     setEnvRows((rows) => rows.filter((row) => row.rowId !== rowId));
 
-  // Merge bulk-pasted variables into the rows: existing keys are updated in
-  // place, new keys are appended — matching BulkEnvVarDialog's own wording.
-  const applyBulkEnv = (variables: { key: string; value: string; isSecret: boolean }[]) => {
+  // Merge imported variables into the rows: existing keys are updated in
+  // place and new keys are appended. This is shared by bulk paste and copy.
+  const mergeEnvVariables = (
+    variables: Array<{ key: string; value: string; isSecret: boolean; enabled?: boolean }>
+  ) => {
     setEnvRows((rows) => {
       const next = [...rows];
       for (const variable of variables) {
         const index = next.findIndex((row) => row.key === variable.key);
         if (index >= 0) {
-          next[index] = { ...next[index], value: variable.value, isSecret: variable.isSecret, enabled: true };
+          next[index] = {
+            ...next[index],
+            value: variable.value,
+            isSecret: variable.isSecret,
+            enabled: variable.enabled ?? true
+          };
         } else {
           next.push({
             rowId: nextRowId++,
             key: variable.key,
             value: variable.value,
             isSecret: variable.isSecret,
-            enabled: true
+            enabled: variable.enabled ?? true
           });
         }
       }
       return next;
     });
+  };
+
+  const applyBulkEnv = (variables: { key: string; value: string; isSecret: boolean }[]) => {
+    mergeEnvVariables(variables);
     setShowBulkEnv(false);
+  };
+
+  const changeCopySourceApp = (appId: string) => {
+    setCopySourceAppId(appId);
+    setCopySourceVariables([]);
+    setCopySourceLoaded(false);
+    setSelectedCopyKeys(new Set());
+    setCopySourceError("");
+    setCopySourceNotice("");
+  };
+
+  const loadCopySourceVariables = async () => {
+    if (!copySourceAppId) {
+      setCopySourceError("Choose an app to copy from.");
+      return;
+    }
+    if (!copySourcePassword) {
+      setCopySourceError("Enter the environment export password.");
+      return;
+    }
+
+    try {
+      setCopySourceLoading(true);
+      setCopySourceError("");
+      setCopySourceNotice("");
+      const response = await fetch(`/api/apps/${copySourceAppId}/environment/copy-source`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: copySourcePassword })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Unable to load variables"));
+      }
+      const result = (await response.json()) as {
+        success: true;
+        variables: CopyableEnvironmentVariable[];
+      };
+      setCopySourceVariables(result.variables);
+      setCopySourceLoaded(true);
+      setSelectedCopyKeys(new Set());
+    } catch (error) {
+      setCopySourceVariables([]);
+      setCopySourceLoaded(false);
+      setSelectedCopyKeys(new Set());
+      setCopySourceError(error instanceof Error ? error.message : "Unable to load variables");
+    } finally {
+      setCopySourcePassword("");
+      setCopySourceLoading(false);
+    }
+  };
+
+  const toggleCopyVariable = (key: string) => {
+    setSelectedCopyKeys((selected) => {
+      const next = new Set(selected);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const copySelectedVariables = () => {
+    const selected = copySourceVariables.filter((variable) => selectedCopyKeys.has(variable.key));
+    if (selected.length === 0) {
+      setCopySourceError("Select at least one variable to copy.");
+      return;
+    }
+    mergeEnvVariables(selected);
+    setCopySourceError("");
+    setCopySourceNotice(
+      `${selected.length} variable${selected.length === 1 ? "" : "s"} copied. Existing keys were updated.`
+    );
   };
 
   const existingEnvSecrets = new Map<string, boolean>();
@@ -2009,6 +2136,143 @@ export default function CreateAppWizard({
                       variable below with the same key to override it for this
                       app only.
                     </p>
+                  </div>
+
+                  <div className="env-scope-block env-copy-source">
+                    <div className="env-scope-heading">
+                      <h3>Copy from Another App</h3>
+                    </div>
+                    <p className="section-description">
+                      Load app-specific variables from an existing app, then choose exactly which ones to copy.
+                      Global variables are already inherited automatically.
+                    </p>
+
+                    <div className="env-copy-source-controls">
+                      <label>
+                        <span>Source app</span>
+                        <select
+                          className="wizard-select"
+                          value={copySourceAppId}
+                          onChange={(event) => changeCopySourceApp(event.target.value)}
+                        >
+                          <option value="">Choose an app</option>
+                          {copySourceApps.length === 0 && (
+                            <option value="" disabled>No existing apps available</option>
+                          )}
+                          {copySourceApps.map((app) => (
+                            <option key={app.id} value={app.id}>
+                              {app.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Environment export password</span>
+                        <input
+                          type="password"
+                          value={copySourcePassword}
+                          onChange={(event) => setCopySourcePassword(event.target.value)}
+                          autoComplete="off"
+                          placeholder="Required to load secret values"
+                        />
+                      </label>
+                      <button
+                        className="secondary-button compact"
+                        type="button"
+                        disabled={copySourceLoading || !copySourceAppId}
+                        onClick={() => void loadCopySourceVariables()}
+                      >
+                        {copySourceLoading ? "Loading…" : "Load Variables"}
+                      </button>
+                    </div>
+
+                    {copySourceError && <div className="error-banner">{copySourceError}</div>}
+                    {copySourceNotice && <div className="notice-banner">{copySourceNotice}</div>}
+
+                    {copySourceLoaded && copySourceVariables.length === 0 && (
+                      <div className="empty-state">This app has no app-specific variables to copy.</div>
+                    )}
+
+                    {copySourceVariables.length > 0 && (
+                      <>
+                        <div className="env-copy-selection-actions">
+                          <span className="text-faint">
+                            {selectedCopyKeys.size} of {copySourceVariables.length} selected
+                          </span>
+                          <button
+                            className="secondary-button compact"
+                            type="button"
+                            onClick={() => setSelectedCopyKeys(new Set(copySourceVariables.map((variable) => variable.key)))}
+                          >
+                            Select All
+                          </button>
+                          <button
+                            className="secondary-button compact"
+                            type="button"
+                            disabled={selectedCopyKeys.size === 0}
+                            onClick={() => setSelectedCopyKeys(new Set())}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                        <div className="table-wrap">
+                          <table className="env-table env-copy-table">
+                            <thead>
+                              <tr>
+                                <th aria-label="Select variable" />
+                                <th>Key</th>
+                                <th>Value</th>
+                                <th>Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {copySourceVariables.map((variable) => (
+                                <tr key={variable.key}>
+                                  <td>
+                                    <input
+                                      type="checkbox"
+                                      aria-label={`Copy ${variable.key}`}
+                                      checked={selectedCopyKeys.has(variable.key)}
+                                      onChange={() => toggleCopyVariable(variable.key)}
+                                    />
+                                  </td>
+                                  <td className="env-key-cell">
+                                    <code>{variable.key}</code>
+                                    {variable.isSecret && (
+                                      <span className="status-badge warning compact">Secret</span>
+                                    )}
+                                  </td>
+                                  <td className="env-value-cell">
+                                    {variable.isSecret ? (
+                                      <span className="masked-value">••••••••</span>
+                                    ) : variable.value ? (
+                                      <code>{variable.value}</code>
+                                    ) : (
+                                      <span className="text-faint">Empty</span>
+                                    )}
+                                  </td>
+                                  <td>
+                                    <span className={`status-badge compact ${variable.enabled ? "positive" : "neutral"}`}>
+                                      {variable.enabled ? "Enabled" : "Disabled"}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="form-actions form-actions-start">
+                          <button
+                            className="primary-button compact"
+                            type="button"
+                            disabled={selectedCopyKeys.size === 0}
+                            onClick={copySelectedVariables}
+                          >
+                            Copy Selected ({selectedCopyKeys.size})
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   <div className="env-scope-block">

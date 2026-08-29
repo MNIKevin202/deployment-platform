@@ -163,6 +163,13 @@ export interface EffectiveEnvironmentResponse {
   status: EnvironmentStatus;
 }
 
+export interface CopyableEnvironmentVariable {
+  key: string;
+  value: string;
+  isSecret: boolean;
+  enabled: boolean;
+}
+
 export interface EnvVarFormValues {
   key: string;
   value: string;

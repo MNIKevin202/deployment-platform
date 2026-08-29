@@ -1768,6 +1768,59 @@ code {
   gap: 10px;
 }
 
+.env-copy-source {
+  padding-block: 18px;
+  border-top: 1px solid var(--color-border-soft);
+  border-bottom: 1px solid var(--color-border-soft);
+}
+
+.env-copy-source-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.env-copy-source-controls label {
+  display: grid;
+  gap: 6px;
+}
+
+.env-copy-source-controls label > span {
+  color: var(--color-text-faint);
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.env-copy-source-controls input,
+.env-copy-source-controls select {
+  width: 100%;
+}
+
+.env-copy-selection-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.env-copy-selection-actions .text-faint {
+  margin-right: auto;
+}
+
+.env-copy-table th:first-child,
+.env-copy-table td:first-child {
+  width: 44px;
+  padding-right: 0;
+  text-align: center;
+}
+
+.env-copy-table input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
 .github-token-section {
   display: grid;
   gap: 16px;
@@ -2482,6 +2535,20 @@ code {
 
   .wizard-footer-right {
     justify-content: flex-end;
+  }
+
+  .env-copy-source-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .env-copy-selection-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .env-copy-selection-actions .text-faint {
+    width: 100%;
+    margin-right: 0;
   }
 }
 

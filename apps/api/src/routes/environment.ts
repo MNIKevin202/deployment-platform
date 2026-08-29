@@ -45,9 +45,9 @@ interface AppVariableParams {
 }
 
 /**
- * `value` is only included when the variable isn't a secret — secrets are
- * write-only over the API from this point on: creation, listing, and
- * lookups never return the stored value, only whether one is set.
+ * `value` is only included when the variable isn't a secret — ordinary
+ * listing and lookup routes never return stored secret values. The two
+ * password-gated export/copy routes below are the deliberate exceptions.
  */
 function maskGlobalVar(variable: StoredGlobalEnvVar) {
   return {
@@ -288,6 +288,44 @@ export async function registerEnvironmentRoutes(
           appDatabase.listGlobalEnvVars(),
           appDatabase.listAppEnvVars(app.id)
         )
+      };
+    }
+  );
+
+  fastify.post<{ Params: AppIdParams }>(
+    "/apps/:id/environment/copy-source",
+    {
+      config: {
+        rateLimit: { max: 5, timeWindow: "1 minute" }
+      }
+    },
+    async (request, reply) => {
+      const parsedParams = idParamSchema.safeParse(request.params);
+
+      if (!parsedParams.success) {
+        return reply.code(400).send({ success: false, message: "Invalid app id" });
+      }
+
+      const app = appDatabase.getAppById(parsedParams.data.id);
+      if (!app) {
+        return reply.code(404).send({ success: false, message: "App not found" });
+      }
+
+      if (!authorizeExport(request.body)) {
+        return reply.code(401).send({
+          success: false,
+          message: "Invalid environment export password"
+        });
+      }
+
+      return {
+        success: true,
+        variables: appDatabase.listAppEnvVars(app.id).map((variable) => ({
+          key: variable.key,
+          value: variable.value,
+          isSecret: variable.isSecret,
+          enabled: variable.enabled
+        }))
       };
     }
   );

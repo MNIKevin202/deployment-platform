@@ -24,6 +24,11 @@ function installFetchMock() {
       if (url === "/api/environment/global") {
         return jsonResponse(200, { variables: [] });
       }
+      if (url === "/api/apps") {
+        return jsonResponse(200, {
+          apps: [{ id: 12, name: "source-app" }]
+        });
+      }
       if (url === "/api/integrations/github") {
         return jsonResponse(200, { connected: false });
       }
@@ -101,5 +106,57 @@ describe("CreateAppWizard — name slug + bulk env", () => {
     await user.click(screen.getByRole("button", { name: "Generate available port" }));
 
     await waitFor(() => expect(portInput.value).toBe("4321"));
+  });
+
+  test("copies selected app-specific variables from another app", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/environment/global") return jsonResponse(200, { variables: [] });
+      if (url === "/api/apps") return jsonResponse(200, { apps: [{ id: 12, name: "source-app" }] });
+      if (url === "/api/integrations/github") return jsonResponse(200, { connected: false });
+      if (url === "/api/apps/12/environment/copy-source") {
+        expect(JSON.parse(String(init?.body))).toEqual({ password: "export-password-123" });
+        return jsonResponse(200, {
+          success: true,
+          variables: [
+            { key: "API_TOKEN", value: "secret-value", isSecret: true, enabled: true },
+            { key: "PUBLIC_URL", value: "https://example.com", isSecret: false, enabled: true },
+            { key: "DISABLED", value: "not-enabled", isSecret: false, enabled: false }
+          ]
+        });
+      }
+      if (url === "/api/apps/wizard/brief") {
+        return jsonResponse(200, { domain: "x.apps.devminted.com", brief: "brief" });
+      }
+      throw new Error(`Unhandled fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<CreateAppWizard open onClose={() => {}} onCreated={() => {}} />);
+
+    await user.click(await screen.findByRole("button", { name: "Continue" }));
+    await user.type(await screen.findByLabelText("App name", { exact: false }), "copy-test");
+    await user.type(screen.getByLabelText("Docker image", { exact: false }), "nginx:alpine");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(await screen.findByRole("button", { name: "Continue" }));
+
+    await user.selectOptions(await screen.findByLabelText("Source app"), "12");
+    await user.type(screen.getByLabelText("Environment export password"), "export-password-123");
+    await user.click(screen.getByRole("button", { name: "Load Variables" }));
+
+    expect(await screen.findByRole("checkbox", { name: "Copy API_TOKEN" })).not.toBeChecked();
+    expect(screen.getByText("PUBLIC_URL")).toBeInTheDocument();
+    expect(screen.queryByText("secret-value")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Select All" }));
+    expect(screen.getByRole("checkbox", { name: "Copy API_TOKEN" })).toBeChecked();
+    await user.click(screen.getByRole("checkbox", { name: "Copy DISABLED" }));
+    await user.click(screen.getByRole("button", { name: "Copy Selected (2)" }));
+
+    expect(await screen.findByDisplayValue("API_TOKEN")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("secret-value")).toHaveAttribute("type", "password");
+    expect(screen.getByDisplayValue("PUBLIC_URL")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("DISABLED")).not.toBeInTheDocument();
+    expect(screen.getByText("2 variables copied. Existing keys were updated.")).toBeInTheDocument();
   });
 });
