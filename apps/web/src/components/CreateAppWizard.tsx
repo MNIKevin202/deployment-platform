@@ -40,11 +40,13 @@ import {
 import BulkEnvVarDialog from "./BulkEnvVarDialog";
 import InstallProgressModal from "./InstallProgressModal";
 import {
+  APP_TEMPLATES,
   companionAppName,
   generateNameSuffix,
   generateSecret,
   resolveTemplatePlaceholders,
   type AppTemplate,
+  type TemplateCategory,
   type TemplateCompanion
 } from "../lib/appTemplates";
 import { useGithubRepositories } from "../hooks/useGithubRepositories";
@@ -93,6 +95,23 @@ const RUNTIME_OPTIONS: Array<{ value: BuildBriefRuntime; label: string }> = [
   { value: "docker", label: "Generic / pre-built Docker image" },
   { value: "other", label: "Other" }
 ];
+
+// The "common app" dropdown shown in the manual Basics step, so an operator
+// can pick "Nginx" or "PostgreSQL" by name instead of knowing an image string.
+// Limited to plain single-container templates (no guided setup screen, no
+// companion services) so a pick behaves predictably in the manual flow; the
+// full Templates browser still covers everything else.
+const COMMON_APP_CATEGORY_ORDER: TemplateCategory[] = ["Apps", "Databases", "Tools"];
+const COMMON_APP_GROUPS: Array<{ category: TemplateCategory; templates: AppTemplate[] }> =
+  COMMON_APP_CATEGORY_ORDER.map((category) => ({
+    category,
+    templates: APP_TEMPLATES.filter(
+      (template) =>
+        template.category === category &&
+        !template.guided &&
+        !(template.companions && template.companions.length > 0)
+    ).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+  })).filter((group) => group.templates.length > 0);
 
 const RESTART_POLICY_OPTIONS: Array<{ value: RestartPolicy; label: string }> = [
   { value: "unless-stopped", label: "Unless stopped (recommended)" },
@@ -262,6 +281,9 @@ export default function CreateAppWizard({
 
   const [name, setName] = useState("");
   const [image, setImage] = useState("");
+  // Which "common app" the Basics-step dropdown currently reflects. "" = a
+  // custom image typed by hand; otherwise the id of the picked template.
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
 
   const [containerPort, setContainerPort] = useState("3000");
   // Mirrors SourcePanel.tsx's containerPort tracking: null/"manual" both
@@ -359,6 +381,7 @@ export default function CreateAppWizard({
     setGithubBuildContext(".");
     setName("");
     setImage("");
+    setSelectedTemplateId("");
     setContainerPort("3000");
     setContainerPortSource(null);
     setContainerPortConfidence(null);
@@ -416,60 +439,72 @@ export default function CreateAppWizard({
     }
   }, [open, resetWizard]);
 
+  // Applies a catalog template to the manual-image flow: fills the image,
+  // port, env, volumes, published ports, and routing from the template. Shared
+  // by two callers — the initial-template effect below, and the "common app"
+  // dropdown in the Basics step — so both stay in lockstep.
+  const applyTemplate = useCallback(
+    (template: AppTemplate, model: string | null = null) => {
+      setSourceType("manual");
+      setGuidedMode(Boolean(template.guided));
+      setName(
+        template.guided
+          ? `${sanitizeAppName(template.suggestedName)}-${generateNameSuffix()}`
+          : sanitizeAppName(template.suggestedName)
+      );
+      setImage(template.image);
+      setContainerPort(String(template.containerPort));
+      setContainerPortManuallySet(true);
+      setEnvRows(
+        template.env.map((envVar) => ({
+          rowId: nextRowId++,
+          key: envVar.key,
+          value:
+            envVar.generate === "password"
+              ? generateSecret(envVar.generateLength ?? 24)
+              : envVar.value ?? "",
+          isSecret: Boolean(envVar.secret),
+          enabled: true
+        }))
+      );
+      setVolumeRows(
+        (template.volumes ?? []).map((containerPath) => ({
+          rowId: nextRowId++,
+          containerPath,
+          volumeName: "",
+          readOnly: false,
+          // Declared by a curated template, so a reserved path it genuinely
+          // needs (e.g. RustDesk's /root) is allowed here but still not typeable.
+          fromTemplate: true
+        }))
+      );
+      setPortRows(
+        (template.publishedPorts ?? []).map((port) => ({
+          rowId: nextRowId++,
+          hostPort: String(port.hostPort),
+          containerPort: String(port.containerPort),
+          protocol: port.protocol
+        }))
+      );
+      setTemplateCompanions(template.companions ?? []);
+      setPendingModel(model);
+      // Game/raw-TCP servers have no meaningful HTTP route — a template can opt
+      // out of a public domain so it's reached purely via its published port.
+      if (template.internalOnly) {
+        setRoutingChoice("internal");
+      }
+    },
+    []
+  );
+
   // Seed the manual-image flow from a catalog template. Runs after the reset
   // effect above (declared later), so it overrides the cleared defaults.
   useEffect(() => {
     if (!open || !initialTemplate) {
       return;
     }
-    setSourceType("manual");
-    setGuidedMode(Boolean(initialTemplate.guided));
-    setName(
-      initialTemplate.guided
-        ? `${sanitizeAppName(initialTemplate.suggestedName)}-${generateNameSuffix()}`
-        : sanitizeAppName(initialTemplate.suggestedName)
-    );
-    setImage(initialTemplate.image);
-    setContainerPort(String(initialTemplate.containerPort));
-    setContainerPortManuallySet(true);
-    setEnvRows(
-      initialTemplate.env.map((envVar) => ({
-        rowId: nextRowId++,
-        key: envVar.key,
-        value:
-          envVar.generate === "password"
-            ? generateSecret(envVar.generateLength ?? 24)
-            : envVar.value ?? "",
-        isSecret: Boolean(envVar.secret),
-        enabled: true
-      }))
-    );
-    setVolumeRows(
-      (initialTemplate.volumes ?? []).map((containerPath) => ({
-        rowId: nextRowId++,
-        containerPath,
-        volumeName: "",
-        readOnly: false,
-        // Declared by a curated template, so a reserved path it genuinely
-        // needs (e.g. RustDesk's /root) is allowed here but still not typeable.
-        fromTemplate: true
-      }))
-    );
-    setPortRows(
-      (initialTemplate.publishedPorts ?? []).map((port) => ({
-        rowId: nextRowId++,
-        hostPort: String(port.hostPort),
-        containerPort: String(port.containerPort),
-        protocol: port.protocol
-      }))
-    );
-    setTemplateCompanions(initialTemplate.companions ?? []);
-    setPendingModel(initialModel ?? null);
-    // Game/raw-TCP servers have no meaningful HTTP route — a template can opt
-    // out of a public domain so it's reached purely via its published port.
-    if (initialTemplate.internalOnly) {
-      setRoutingChoice("internal");
-    }
+    applyTemplate(initialTemplate, initialModel ?? null);
+    setSelectedTemplateId(initialTemplate.id);
     setStep(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialTemplate, initialModel]);
@@ -1908,11 +1943,50 @@ export default function CreateAppWizard({
                     <small>Lowercase letters, numbers, and hyphens only.</small>
                   </label>
 
+                  {sourceType !== "github" && (
+                    <label>
+                      <span>Common app</span>
+                      <select
+                        value={selectedTemplateId}
+                        onChange={(event) => {
+                          const id = event.target.value;
+                          setSelectedTemplateId(id);
+                          if (id === "") {
+                            return;
+                          }
+                          const template = APP_TEMPLATES.find((item) => item.id === id);
+                          if (template) {
+                            applyTemplate(template);
+                          }
+                        }}
+                      >
+                        <option value="">Custom image — I'll enter my own</option>
+                        {COMMON_APP_GROUPS.map((group) => (
+                          <optgroup key={group.category} label={group.category}>
+                            {group.templates.map((template) => (
+                              <option key={template.id} value={template.id}>
+                                {template.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                      <small>
+                        Pick a common app to fill in its image, port, and settings —
+                        or choose “Custom image” to enter your own below.
+                      </small>
+                    </label>
+                  )}
+
                   <label>
                     <span>Docker image</span>
                     <input
                       value={image}
-                      onChange={(event) => setImage(event.target.value)}
+                      onChange={(event) => {
+                        setImage(event.target.value);
+                        // A hand-typed image no longer matches the picked app.
+                        setSelectedTemplateId("");
+                      }}
                       placeholder="nginx:alpine"
                       disabled={sourceType === "github"}
                     />

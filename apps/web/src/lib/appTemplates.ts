@@ -641,6 +641,24 @@ export const APP_TEMPLATES: AppTemplate[] = [
     volumes: ["/data"]
   },
   {
+    id: "nginx",
+    name: "Nginx",
+    category: "Apps",
+    icon: "🌐",
+    description: "Fast, lightweight web server for static sites and proxying.",
+    longDescription:
+      "Nginx is a high-performance web server, widely used to serve static websites and as a reverse proxy. This runs the official Alpine image on port 80 — a clean starting point you can point a volume of static files at, or build your own image on top of.",
+    highlights: [
+      "Serves static websites out of the box",
+      "Tiny, battle-tested Alpine image",
+      "A solid base for a custom web image"
+    ],
+    image: "nginx:alpine",
+    containerPort: 80,
+    suggestedName: "nginx",
+    env: []
+  },
+  {
     id: "valkey",
     name: "Valkey",
     category: "Databases",
