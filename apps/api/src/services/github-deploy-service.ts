@@ -390,6 +390,12 @@ export async function deployFromGithub(
   let replacementContainerId: string | null = null;
   /** Whatever name the replacement container currently sits under — the temp name until the swap rename succeeds, then the app's real container name. */
   let replacementCurrentName: string | null = null;
+  /**
+   * Immutable Docker-network address captured before the name swap. Using it
+   * for the internal probe avoids daemon/version-specific DNS behavior while
+   * the old and new containers are renamed in quick succession.
+   */
+  let replacementInternalAddress: string | null = null;
   let anySwapPerformed = false;
   /**
    * True only once the *previous* live container has been safely stopped and
@@ -705,6 +711,7 @@ export async function deployFromGithub(
         "starting-replacement"
       );
     }
+    replacementInternalAddress = inspected.networkAddresses?.["deployment-apps"] ?? null;
 
     // Preserve-then-swap. Everything up to here left the live container
     // completely untouched (the replacement is running under a temp name).
@@ -764,7 +771,7 @@ export async function deployFromGithub(
     const internalVerificationPath = healthConfig?.enabled ? healthConfig.path : "/";
     internalCheckResult = await verifyInternalReachability(
       deps.healthCheckDeps.httpClient,
-      containerName,
+      replacementInternalAddress ?? containerName,
       containerPort,
       internalVerificationPath
     );

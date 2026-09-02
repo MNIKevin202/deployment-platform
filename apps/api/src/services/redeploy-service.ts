@@ -26,6 +26,8 @@ export interface ContainerInspectResult {
   id: string;
   running: boolean;
   status: string;
+  /** Docker-assigned addresses keyed by network name. */
+  networkAddresses?: Record<string, string>;
 }
 
 /**
@@ -104,11 +106,20 @@ export function createDockerOps(docker: Docker): RedeployDockerOps {
 
     async inspectContainer(id) {
       const details = await docker.getContainer(id).inspect();
+      const networkAddresses = Object.fromEntries(
+        Object.entries(details.NetworkSettings.Networks ?? {})
+          .map(([networkName, settings]) => [
+            networkName,
+            settings.IPAddress || settings.GlobalIPv6Address || ""
+          ])
+          .filter((entry): entry is [string, string] => entry[1].length > 0)
+      );
 
       return {
         id: details.Id,
         running: details.State.Running,
-        status: details.State.Status
+        status: details.State.Status,
+        networkAddresses
       };
     },
 

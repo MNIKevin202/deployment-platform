@@ -55,6 +55,7 @@ interface FakeDockerOptions {
   imageExists?: boolean;
   startReplacementFails?: boolean;
   replacementNeverRunning?: boolean;
+  replacementNetworkAddress?: string;
 }
 
 function dockerNotFound(): Error {
@@ -127,7 +128,14 @@ function createFakeDocker(options: FakeDockerOptions) {
       if (container.id.startsWith("replacement") && options.replacementNeverRunning) {
         running = false;
       }
-      return { id: container.id, running, status: running ? "running" : "created" };
+      return {
+        id: container.id,
+        running,
+        status: running ? "running" : "created",
+        networkAddresses: container.id.startsWith("replacement") && options.replacementNetworkAddress
+          ? { "deployment-apps": options.replacementNetworkAddress }
+          : undefined
+      };
     },
     async containerExists(name) {
       ops.push(`containerExists:${name}`);
@@ -373,6 +381,30 @@ describe("deployFromGithub — preserve-then-swap rollback lifecycle", () => {
 
     const source = appDatabase.getAppSource(app.id);
     assert.equal(source?.lastDeploymentStatus, "PASS");
+  });
+
+  test("internal verification targets the replacement's immutable managed-network address", async () => {
+    const app = makeApp("network-address-health");
+    configureSource(app.id);
+    const replacementNetworkAddress = "172.19.0.42";
+    const fake = createFakeDocker({
+      currentName: app.containerName!,
+      seedCurrentContainer: true,
+      replacementNetworkAddress
+    });
+    const deps = makeDeps(fake, true);
+    const requestedHostnames: string[] = [];
+    deps.healthCheckDeps!.httpClient = {
+      async request(options) {
+        requestedHostnames.push(options.hostname);
+        return { statusCode: 200, latencyMs: 1 };
+      }
+    };
+
+    const result = await deployFromGithub(deps, app.id);
+
+    assert.equal(result.success, true);
+    assert.deepEqual(requestedHostnames, [replacementNetworkAddress]);
   });
 
   test("a failure BEFORE the swap (replacement never reaches running) leaves the old container completely untouched — clean FAILED, not a rollback", async () => {
