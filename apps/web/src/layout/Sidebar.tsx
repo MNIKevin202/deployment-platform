@@ -1,3 +1,5 @@
+import BrandMark from "../components/BrandMark";
+
 export type Section =
   | "overview"
   | "apps"
@@ -41,10 +43,10 @@ export default function Sidebar({ active, onSelect }: SidebarProps) {
   return (
     <div className="sidebar-inner">
       <div className="sidebar-brand">
-        <img src="/icon-192.png" alt="" className="sidebar-mark" />
+        <BrandMark className="sidebar-mark" />
         <div>
-          <p className="sidebar-brand-name">Deployment</p>
-          <p className="sidebar-brand-sub">Platform</p>
+          <p className="sidebar-brand-name">ClovaForge</p>
+          <p className="sidebar-brand-sub">Deploy Console</p>
         </div>
       </div>
 

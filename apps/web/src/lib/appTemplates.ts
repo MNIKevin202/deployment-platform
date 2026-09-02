@@ -1409,7 +1409,7 @@ export const APP_TEMPLATES: AppTemplate[] = [
     internalOnly: true,
     env: [
       { key: "RUST_SERVER_NAME", value: "My Rust Server" },
-      { key: "RUST_SERVER_DESCRIPTION", value: "Powered by Deployment Platform" },
+      { key: "RUST_SERVER_DESCRIPTION", value: "Powered by ClovaForge" },
       { key: "RUST_SERVER_MAXPLAYERS", value: "50" },
       { key: "RUST_SERVER_WORLDSIZE", value: "3000" },
       { key: "RUST_SERVER_SEED", value: "12345" },

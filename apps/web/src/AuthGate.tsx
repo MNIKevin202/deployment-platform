@@ -6,6 +6,7 @@ import {
   useEffect,
   useState
 } from "react";
+import BrandMark from "./components/BrandMark";
 
 interface SessionResponse {
   authenticated: boolean;
@@ -135,7 +136,7 @@ export default function AuthGate({ children }: AuthGateProps) {
     return (
       <main className="auth-page">
         <section className="auth-card auth-loading">
-          <p className="eyebrow">Deployment Platform</p>
+          <p className="eyebrow">ClovaForge</p>
           <h1>Checking session...</h1>
         </section>
       </main>
@@ -147,10 +148,10 @@ export default function AuthGate({ children }: AuthGateProps) {
       <main className="auth-page">
         <section className="auth-card">
           <div className="auth-brand">
-            <img src="/icon-192.png" alt="" className="auth-mark" />
+            <BrandMark size={46} className="auth-mark" />
 
             <div>
-              <p className="eyebrow">Deployment Platform</p>
+              <p className="eyebrow">ClovaForge</p>
               <h1>Welcome back</h1>
               <p>
                 Sign in to manage applications and containers on your server.
