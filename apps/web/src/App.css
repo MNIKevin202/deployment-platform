@@ -3301,6 +3301,14 @@ code {
   margin-bottom: 16px;
 }
 
+/* The Type facet (All / Services / Databases) sits ahead of the status
+   filters, separated by a hairline so it reads as a different axis. */
+.apps-type-facet {
+  padding-right: 12px;
+  margin-right: 2px;
+  border-right: 1px solid var(--color-border);
+}
+
 .apps-filter-chip-count {
   display: inline-block;
   margin-left: 5px;

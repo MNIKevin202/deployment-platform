@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 import { useAuth } from "./AuthGate";
 import AppShell from "./layout/AppShell";
-import Sidebar, { parseSection, type Section } from "./layout/Sidebar";
+import Sidebar, {
+  parseSection,
+  primaryOf,
+  type PrimarySection,
+  type Section
+} from "./layout/Sidebar";
 import Header from "./layout/Header";
 import Notice from "./components/Notice";
 import LogViewer from "./components/LogViewer";
@@ -13,14 +18,10 @@ import DeploymentProgressOverlay from "./components/DeploymentProgressOverlay";
 import type { AppTemplate } from "./lib/appTemplates";
 import OverviewPage from "./pages/OverviewPage";
 import AppsPage from "./pages/AppsPage";
-import RepositoriesPage from "./pages/RepositoriesPage";
-import RepositoryDetail from "./components/RepositoryDetail";
-import EnvironmentPage from "./pages/EnvironmentPage";
-import ConnectionsPage from "./pages/ConnectionsPage";
+import ResourcesPage, { type ResourcesTab } from "./pages/ResourcesPage";
+import PlatformPage from "./pages/PlatformPage";
+import type { SettingsTab } from "./pages/SettingsPage";
 import CronPage from "./pages/CronPage";
-import SystemPage from "./pages/SystemPage";
-import SettingsPage from "./pages/SettingsPage";
-import { isDatabaseImage } from "./lib/appKind";
 import type {
   ApiError,
   ContainerAction,
@@ -32,31 +33,35 @@ import type {
   StoredAppsResponse
 } from "./types/api";
 
-const SECTION_TITLES: Record<Section, string> = {
+// Header copy is keyed by the five sidebar areas — a legacy deep link
+// (?section=connections) opens inside its area and shows that area's title.
+const AREA_TITLES: Record<PrimarySection, string> = {
   overview: "Overview",
   apps: "Apps",
-  databases: "Databases",
-  connections: "Connections",
-  templates: "Templates",
-  repositories: "Repositories",
-  cron: "Cron Jobs",
-  environment: "Environment",
-  system: "System",
-  settings: "Settings"
+  resources: "Resources",
+  automation: "Automation",
+  platform: "Platform"
 };
 
-const SECTION_SUBTITLES: Record<Section, string> = {
+const AREA_SUBTITLES: Record<PrimarySection, string> = {
   overview: "A snapshot of your platform and its managed applications.",
-  apps: "Deploy and manage the websites, bots, and services running on your server.",
-  databases: "Managed data stores — Postgres, MySQL, Redis, and the like.",
-  connections: "Connection strings for databases you host elsewhere, ready to copy or share with every app.",
-  templates: "One-click setups for common services — pre-filled and ready to install.",
-  repositories: "Connect GitHub and browse repositories available for source-linked apps.",
-  cron: "Scheduled commands that run inside your apps' containers.",
-  environment: "Variables inherited by every managed app, unless overridden.",
-  system: "Protected platform services and host information.",
-  settings: "Account, notifications, backups, and disk maintenance."
+  apps: "Websites, services, bots, and databases running on your server.",
+  resources: "Shared inputs your apps consume — connections, variables, and GitHub.",
+  automation: "Scheduled commands that run inside your apps' containers.",
+  platform: "The server itself — host, services, backups, and settings."
 };
+
+/** Which Resources sub-tab a section should open on. */
+function resourcesTabFor(section: Section): ResourcesTab {
+  if (section === "environment") return "variables";
+  if (section === "repositories") return "github";
+  return "connections";
+}
+
+/** Which Platform sub-tab a section should open on. */
+function platformTabFor(section: Section): "system" | SettingsTab {
+  return section === "settings" ? "account" : "system";
+}
 
 function App() {
   const { username, logout } = useAuth();
@@ -83,7 +88,6 @@ function App() {
     () => new URLSearchParams(window.location.search).get("github") === "connected"
   );
   const [selectedAppId, setSelectedAppId] = useState<number | null>(null);
-  const [selectedRepo, setSelectedRepo] = useState<{ owner: string; name: string } | null>(null);
 
   const [dockerInfo, setDockerInfo] = useState<DockerInfo | null>(null);
   const [routingStatus, setRoutingStatus] = useState<RoutingStatus | null>(null);
@@ -133,25 +137,6 @@ function App() {
   const missingApps = useMemo(
     () => storedApps.filter((storedApp) => storedApp.runtime?.present === false),
     [storedApps]
-  );
-
-  // Split managed apps and missing-container apps into services (websites, bots,
-  // workers) and databases, by image, so each lands in its own nav section.
-  const serviceApps = useMemo(
-    () => managedApps.filter((container) => !isDatabaseImage(container.image)),
-    [managedApps]
-  );
-  const databaseApps = useMemo(
-    () => managedApps.filter((container) => isDatabaseImage(container.image)),
-    [managedApps]
-  );
-  const serviceMissingApps = useMemo(
-    () => missingApps.filter((storedApp) => !isDatabaseImage(storedApp.image)),
-    [missingApps]
-  );
-  const databaseMissingApps = useMemo(
-    () => missingApps.filter((storedApp) => isDatabaseImage(storedApp.image)),
-    [missingApps]
   );
 
   const loadDashboard = useCallback(async () => {
@@ -610,7 +595,6 @@ function App() {
 
   const goToSection = (nextSection: Section) => {
     setSelectedAppId(null);
-    setSelectedRepo(null);
     setSection(nextSection);
   };
 
@@ -658,9 +642,8 @@ function App() {
         className="secondary-button"
         type="button"
         onClick={() => {
-          if (section === "environment") {
+          if (primaryOf(section) === "resources") {
             setEnvironmentRefreshKey((key) => key + 1);
-          } else if (section === "connections") {
             setConnectionsRefreshKey((key) => key + 1);
           } else {
             void loadDashboard();
@@ -677,8 +660,8 @@ function App() {
       sidebar={<Sidebar active={section} onSelect={goToSection} />}
       header={
         <Header
-          title={SECTION_TITLES[section]}
-          subtitle={SECTION_SUBTITLES[section]}
+          title={AREA_TITLES[primaryOf(section)]}
+          subtitle={AREA_SUBTITLES[primaryOf(section)]}
           username={username}
           onLogout={() => void logout()}
           actions={headerActions}
@@ -688,10 +671,14 @@ function App() {
       {error && <Notice kind="error">{error}</Notice>}
       {notice && <Notice kind="success">{notice}</Notice>}
 
-      {section === "environment" ? (
-        <EnvironmentPage refreshKey={environmentRefreshKey} />
-      ) : section === "connections" ? (
-        <ConnectionsPage refreshKey={connectionsRefreshKey} />
+      {primaryOf(section) === "resources" ? (
+        <ResourcesPage
+          initialTab={resourcesTabFor(section)}
+          connectionsRefreshKey={connectionsRefreshKey}
+          environmentRefreshKey={environmentRefreshKey}
+        />
+      ) : primaryOf(section) === "automation" ? (
+        <CronPage apps={storedApps} />
       ) : section === "templates" ? (
         <TemplateGallery
           onSelect={selectTemplate}
@@ -704,20 +691,17 @@ function App() {
             }
           }}
         />
-      ) : section === "cron" ? (
-        <CronPage apps={storedApps} />
-      ) : section === "repositories" ? (
-        selectedRepo ? (
-          <RepositoryDetail
-            owner={selectedRepo.owner}
-            name={selectedRepo.name}
-            onBack={() => setSelectedRepo(null)}
-          />
-        ) : (
-          <RepositoriesPage onSelectRepository={(owner, name) => setSelectedRepo({ owner, name })} />
-        )
       ) : loading ? (
         <div className="empty-state">Loading Docker information...</div>
+      ) : primaryOf(section) === "platform" ? (
+        <PlatformPage
+          initialTab={platformTabFor(section)}
+          systemContainers={systemContainers}
+          dockerInfo={dockerInfo}
+          actionLoading={actionLoading}
+          onAction={(container, action) => void runAction(container, action)}
+          onOpenLogs={(container) => setSelectedContainer(container)}
+        />
       ) : section === "overview" ? (
         <OverviewPage
           dockerInfo={dockerInfo}
@@ -733,11 +717,11 @@ function App() {
           onCreateApp={openCreateApp}
           onBrowseTemplates={() => goToSection("templates")}
         />
-      ) : section === "apps" ? (
+      ) : (
         <AppsPage
-          managedApps={serviceApps}
+          managedApps={managedApps}
           storedAppsByName={storedAppsByName}
-          missingApps={serviceMissingApps}
+          missingApps={missingApps}
           actionLoading={actionLoading}
           onAction={(container, action) => void runAction(container, action)}
           onOpenLogs={(container) => setSelectedContainer(container)}
@@ -750,37 +734,7 @@ function App() {
           updateAllLoading={actionLoading === "update-all"}
           onBulkAction={runBulkAction}
           onBulkDelete={deleteAppsBulk}
-        />
-      ) : section === "databases" ? (
-        <AppsPage
-          managedApps={databaseApps}
-          storedAppsByName={storedAppsByName}
-          missingApps={databaseMissingApps}
-          actionLoading={actionLoading}
-          onAction={(container, action) => void runAction(container, action)}
-          onOpenLogs={(container) => setSelectedContainer(container)}
-          onDeleteApp={(container) => void deleteApp(container)}
-          onDeleteMissingApp={(storedApp) => void deleteMissingApp(storedApp)}
-          onViewApp={viewApp}
-          onCreateApp={openCreateApp}
-          onUpdateAll={(list) => void updateAllApps(list)}
-          updateAllLoading={actionLoading === "update-all"}
-          onBulkAction={runBulkAction}
-          onBulkDelete={deleteAppsBulk}
-          eyebrow="Data stores"
-          title="Managed Databases"
-          emptyTitle="No databases yet"
-          emptyBody="Deploy a database (Postgres, MySQL, Redis, …) from a Docker image."
-        />
-      ) : section === "settings" ? (
-        <SettingsPage />
-      ) : (
-        <SystemPage
-          systemContainers={systemContainers}
-          dockerInfo={dockerInfo}
-          actionLoading={actionLoading}
-          onAction={(container, action) => void runAction(container, action)}
-          onOpenLogs={(container) => setSelectedContainer(container)}
+          initialType={section === "databases" ? "databases" : "all"}
         />
       )}
 

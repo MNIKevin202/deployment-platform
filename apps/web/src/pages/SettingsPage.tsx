@@ -14,9 +14,15 @@ interface RestoreResponse {
   message: string;
 }
 
-type SettingsTab = "account" | "notifications" | "integrations" | "backups" | "maintenance" | "updates";
+export type SettingsTab =
+  | "account"
+  | "notifications"
+  | "integrations"
+  | "backups"
+  | "maintenance"
+  | "updates";
 
-const SETTINGS_TABS = [
+export const SETTINGS_TABS: { key: SettingsTab; label: string }[] = [
   { key: "account", label: "Account" },
   { key: "notifications", label: "Notifications" },
   { key: "integrations", label: "Integrations" },
@@ -25,8 +31,17 @@ const SETTINGS_TABS = [
   { key: "updates", label: "Updates" }
 ];
 
-export default function SettingsPage() {
-  const [tab, setTab] = useState<SettingsTab>("account");
+interface SettingsPageProps {
+  /** When provided, the active tab is controlled by the parent (used by the
+   * Platform page, which renders one unified tab bar). */
+  tab?: SettingsTab;
+  /** Hide the built-in tab bar when the parent renders its own. */
+  hideTabs?: boolean;
+}
+
+export default function SettingsPage({ tab: controlledTab, hideTabs = false }: SettingsPageProps = {}) {
+  const [internalTab, setInternalTab] = useState<SettingsTab>("account");
+  const tab = controlledTab ?? internalTab;
 
   const [file, setFile] = useState<File | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -79,7 +94,9 @@ export default function SettingsPage() {
 
   return (
     <div className="page settings-page">
-      <Tabs items={SETTINGS_TABS} active={tab} onChange={(key) => setTab(key as SettingsTab)} />
+      {!hideTabs && (
+        <Tabs items={SETTINGS_TABS} active={tab} onChange={(key) => setInternalTab(key as SettingsTab)} />
+      )}
 
       {tab === "account" && <AccountSettings />}
 
