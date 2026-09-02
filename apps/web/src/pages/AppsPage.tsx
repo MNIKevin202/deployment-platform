@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import AppCard from "../components/AppCard";
 import MissingAppCard from "../components/MissingAppCard";
 import AppTable from "../components/AppTable";
@@ -17,6 +17,9 @@ import type {
   StoredApp
 } from "../types/api";
 import { appSelectionKey, containerSelectionKey } from "../lib/appSelection";
+import { isDatabaseImage } from "../lib/appKind";
+
+type AppTypeFilter = "all" | "services" | "databases";
 
 const FILTER_OPTIONS: { key: AppFilterKey; label: string }[] = [
   { key: "favorites", label: "Favorites" },
@@ -62,6 +65,8 @@ interface AppsPageProps {
   title?: string;
   emptyTitle?: string;
   emptyBody?: string;
+  /** Preselects the Type facet — e.g. a legacy ?section=databases deep link. */
+  initialType?: AppTypeFilter;
 }
 
 export default function AppsPage({
@@ -83,9 +88,49 @@ export default function AppsPage({
   eyebrow = "Applications",
   title = "All Managed Apps",
   emptyTitle = "No managed apps yet",
-  emptyBody = "Deploy your first application from a Docker image."
+  emptyBody = "Deploy your first application from a Docker image.",
+  initialType = "all"
 }: AppsPageProps) {
   const hasAnyApp = managedApps.length > 0 || missingApps.length > 0;
+  const [typeFilter, setTypeFilter] = useState<AppTypeFilter>(initialType);
+
+  // Type is a facet, not one of the AND-ed status chips — services and
+  // databases are mutually exclusive, so it pre-filters the list before the
+  // status filters apply. Memoized so the arrays stay referentially stable
+  // (the selection-clearing effect below depends on them).
+  const typedManaged = useMemo(
+    () =>
+      managedApps.filter((container) =>
+        typeFilter === "all"
+          ? true
+          : (typeFilter === "databases") === isDatabaseImage(container.image)
+      ),
+    [managedApps, typeFilter]
+  );
+  const typedMissing = useMemo(
+    () =>
+      missingApps.filter((app) =>
+        typeFilter === "all"
+          ? true
+          : (typeFilter === "databases") === isDatabaseImage(app.image)
+      ),
+    [missingApps, typeFilter]
+  );
+
+  const databaseCount = useMemo(
+    () =>
+      [...managedApps.map((c) => c.image), ...missingApps.map((a) => a.image)].filter(
+        isDatabaseImage
+      ).length,
+    [managedApps, missingApps]
+  );
+  const serviceCount = managedApps.length + missingApps.length - databaseCount;
+  const typeOptions: { key: AppTypeFilter; label: string; count: number }[] = [
+    { key: "all", label: "All", count: serviceCount + databaseCount },
+    { key: "services", label: "Services", count: serviceCount },
+    { key: "databases", label: "Databases", count: databaseCount }
+  ];
+
   const [view, setView] = useAppsView();
   const [favoriteAppIds, toggleFavorite] = useFavoriteApps();
   const [search, setSearch] = useState("");
@@ -105,7 +150,7 @@ export default function AppsPage({
     });
   };
 
-  const updatesAvailableCount = managedApps.filter((container) => {
+  const updatesAvailableCount = typedManaged.filter((container) => {
     const appName = container.labels["com.deployment-platform.app-name"];
     const storedApp = appName ? storedAppsByName.get(appName) : undefined;
     return Boolean(storedApp?.imageUpdateAvailable);
@@ -115,11 +160,11 @@ export default function AppsPage({
   // and sorted as two separate groups — missing apps stay their own
   // visually-distinct "needs recovery" tier at the bottom of each view,
   // rather than being interleaved with live containers.
-  const managedEntries: AppListEntry[] = managedApps.map((container) => {
+  const managedEntries: AppListEntry[] = typedManaged.map((container) => {
     const appName = container.labels["com.deployment-platform.app-name"];
     return { container, app: appName ? storedAppsByName.get(appName) : undefined };
   });
-  const missingEntries: AppListEntry[] = missingApps.map((app) => ({ app }));
+  const missingEntries: AppListEntry[] = typedMissing.map((app) => ({ app }));
 
   const filterOptions = { search, filters: activeFilters, sortKey, favoriteIds: favoriteAppIds };
   const filteredManagedContainers = filterAndSortAppEntries(managedEntries, filterOptions)
@@ -129,12 +174,12 @@ export default function AppsPage({
     .map((entry) => entry.app)
     .filter((app): app is StoredApp => app !== undefined);
 
-  const managedSelection = managedApps.map((container) => {
+  const managedSelection = typedManaged.map((container) => {
     const appName = container.labels["com.deployment-platform.app-name"];
     const storedApp = appName ? storedAppsByName.get(appName) : undefined;
     return { key: containerSelectionKey(container, storedApp), container };
   });
-  const missingSelection = missingApps.map((app) => ({ key: appSelectionKey(app), app }));
+  const missingSelection = typedMissing.map((app) => ({ key: appSelectionKey(app), app }));
   const selectedContainers = managedSelection
     .filter((entry) => selectedAppKeys.has(entry.key))
     .map((entry) => entry.container);
@@ -159,7 +204,7 @@ export default function AppsPage({
       const next = new Set([...previous].filter((key) => validKeys.has(key)));
       return next.size === previous.size ? previous : next;
     });
-  }, [managedApps, missingApps, storedAppsByName]);
+  }, [typedManaged, typedMissing, storedAppsByName]);
 
   const toggleSelected = (key: string) => {
     setSelectedAppKeys((previous) => {
@@ -275,7 +320,7 @@ export default function AppsPage({
               <button
                 className="secondary-button compact"
                 type="button"
-                onClick={() => onUpdateAll(managedApps)}
+                onClick={() => onUpdateAll(typedManaged)}
                 disabled={updateAllLoading}
               >
                 {updateAllLoading ? "Updating..." : `Update All (${updatesAvailableCount})`}
@@ -317,6 +362,26 @@ export default function AppsPage({
             </div>
 
             <div className="apps-filter-pill-row">
+              {databaseCount > 0 && (
+                <div
+                  className="apps-filter-chips apps-type-facet"
+                  role="group"
+                  aria-label="App type"
+                >
+                  {typeOptions.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      className={`apps-filter-chip ${typeFilter === option.key ? "active" : ""}`}
+                      aria-pressed={typeFilter === option.key}
+                      onClick={() => setTypeFilter(option.key)}
+                    >
+                      {option.label}{" "}
+                      <span className="apps-filter-chip-count">{option.count}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="apps-filter-chips" role="group" aria-label="Filters">
                 <button
                   type="button"
