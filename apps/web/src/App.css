@@ -2,37 +2,70 @@
   color-scheme: dark;
 
   --font-sans:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
-  --font-mono: "SFMono-Regular", Consolas, monospace;
+    "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
 
-  --color-bg: #090c14;
-  --color-surface: #11151f;
-  --color-surface-raised: #161b28;
-  --color-border: #232a3d;
-  --color-border-soft: #1a2032;
+  /* ClovaForge palette — a single dark theme. Refined in the Phase 1
+     redesign foundation; the accent moved to a slightly warmer violet and
+     surfaces gained a third raised layer + a hairline divider tone. */
+  --color-bg: #0a0e17;
+  --color-surface: #10141f;
+  --color-surface-raised: #151a26;
+  --color-surface-3: #1b2233;
+  --color-border: #242c40;
+  --color-border-soft: #1a2132;
+  --color-hair: #131826;
 
   --color-text: #eef1fb;
   --color-text-muted: #8b93ab;
   --color-text-faint: #5b6379;
 
-  --color-accent: #6366f1;
-  --color-accent-hover: #7c7ff5;
-  --color-accent-soft: rgba(99, 102, 241, 0.16);
+  --color-accent: #6f74f2;
+  --color-accent-2: #8a7cf6;
+  --color-accent-hover: #8f93f7;
+  --color-accent-soft: rgba(111, 116, 242, 0.15);
+  --color-accent-line: rgba(111, 116, 242, 0.35);
+
+  /* Forge influence — used sparingly (the mark, the odd accent), never a theme. */
+  --color-ember: #f59e0b;
+  --color-ember-soft: rgba(245, 158, 11, 0.14);
 
   --color-success: #34d399;
-  --color-success-bg: rgba(52, 211, 153, 0.14);
+  --color-success-bg: rgba(52, 211, 153, 0.13);
   --color-danger: #f87171;
-  --color-danger-bg: rgba(248, 113, 113, 0.14);
+  --color-danger-bg: rgba(248, 113, 113, 0.13);
   --color-warning: #fbbf24;
-  --color-warning-bg: rgba(251, 191, 36, 0.14);
-  --color-neutral-bg: rgba(139, 147, 171, 0.14);
+  --color-warning-bg: rgba(251, 191, 36, 0.13);
+  --color-info: #60a5fa;
+  --color-info-bg: rgba(96, 165, 250, 0.13);
+  --color-neutral-bg: rgba(139, 147, 171, 0.13);
 
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 18px;
+  --radius-xl: 22px;
 
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 12px 32px rgba(0, 0, 0, 0.28);
+  /* Spacing scale — introduced so future work stops hardcoding pixels. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+
+  /* Type scale. */
+  --text-xs: 0.72rem;
+  --text-sm: 0.82rem;
+  --text-base: 0.9rem;
+  --text-md: 1rem;
+  --text-lg: 1.15rem;
+  --text-xl: 1.4rem;
+  --text-2xl: 1.8rem;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 16px 40px rgba(0, 0, 0, 0.3);
   --shadow-modal: 0 30px 100px rgba(0, 0, 0, 0.55);
 
   --sidebar-width: 248px;
@@ -45,6 +78,16 @@
   text-rendering: optimizeLegibility;
 }
 
+/* Utilities introduced with the design foundation. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -54,6 +97,12 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background: var(--color-bg);
+  background-image: radial-gradient(
+    1200px 600px at 82% -10%,
+    rgba(111, 116, 242, 0.07),
+    transparent 60%
+  );
+  background-attachment: fixed;
 }
 
 button,
@@ -108,14 +157,15 @@ code {
 }
 
 .primary-button {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
+  border-color: transparent;
+  background: linear-gradient(180deg, var(--color-accent), #5a5fe6);
   color: #fff;
+  box-shadow: 0 6px 16px rgba(99, 102, 241, 0.26);
 }
 
 .primary-button:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-  border-color: var(--color-accent-hover);
+  background: linear-gradient(180deg, var(--color-accent-hover), #6367ea);
+  border-color: transparent;
 }
 
 .secondary-button:hover:not(:disabled),
@@ -299,27 +349,32 @@ code {
 }
 
 .sidebar-mark {
-  width: 38px;
-  height: 38px;
+  width: 36px;
+  height: 36px;
   flex: 0 0 auto;
-  object-fit: contain;
   display: block;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(111, 116, 242, 0.32);
 }
 
 .sidebar-brand-name,
 .sidebar-brand-sub {
   margin: 0;
-  line-height: 1.25;
+  line-height: 1.2;
 }
 
 .sidebar-brand-name {
-  font-weight: 700;
-  font-size: 0.92rem;
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
 }
 
 .sidebar-brand-sub {
   color: var(--color-text-faint);
-  font-size: 0.78rem;
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-top: 2px;
 }
 
 .sidebar-nav {
@@ -328,27 +383,45 @@ code {
 }
 
 .sidebar-nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 9px 12px;
   background: transparent;
   color: var(--color-text-muted);
   font-weight: 600;
-  font-size: 0.88rem;
+  font-size: 0.86rem;
   text-align: left;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
 
 .sidebar-nav-item:hover:not(:disabled) {
-  background: var(--color-border-soft);
+  background: var(--color-surface-raised);
   color: var(--color-text);
 }
 
 .sidebar-nav-item.active {
-  background: var(--color-accent-soft);
-  color: #c7c9ff;
+  background: linear-gradient(
+    90deg,
+    var(--color-accent-soft),
+    rgba(111, 116, 242, 0.04)
+  );
+  color: var(--color-text);
+  border-color: var(--color-accent-line);
+}
+
+.sidebar-nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -16px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(var(--color-accent), var(--color-accent-2));
 }
 
 .sidebar-nav-glyph {
