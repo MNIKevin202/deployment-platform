@@ -4639,3 +4639,6 @@ code {
   overflow: auto;
 }
 .console-compact .console-output pre { max-height: none; }
+
+/* Error-looking console lines stand out in red. */
+.console-output .console-line-error { color: var(--color-danger); }
