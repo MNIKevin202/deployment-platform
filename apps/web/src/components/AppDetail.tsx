@@ -56,6 +56,8 @@ type DetailTab =
   | "source"
   | "environment"
   | "storage"
+  | "networking"
+  | "resources"
   | "health"
   | "metrics"
   | "performance"
@@ -66,6 +68,78 @@ type DetailTab =
   | "irc-settings"
   | "bot-settings"
   | "blueprint";
+
+type GroupKey =
+  | "overview"
+  | "deployments"
+  | "configuration"
+  | "monitoring"
+  | "logs"
+  | "activity"
+  | "irc-settings"
+  | "bot-settings"
+  | "blueprint";
+
+interface TabGroup {
+  key: GroupKey;
+  label: string;
+  members: DetailTab[];
+}
+
+/** Sub-tab label for each granular member. */
+const MEMBER_LABELS: Record<DetailTab, string> = {
+  overview: "Overview",
+  source: "Source",
+  history: "Versions",
+  environment: "Environment",
+  storage: "Storage",
+  networking: "Networking",
+  resources: "Resource limits",
+  health: "Health",
+  metrics: "Metrics",
+  performance: "Performance",
+  console: "Runtime",
+  logs: "Build",
+  activity: "Activity",
+  "irc-settings": "Settings",
+  "bot-settings": "Settings",
+  blueprint: "Blueprint"
+};
+
+/**
+ * The App Detail "command center": six primary groups collapse the former
+ * eleven tabs. Each group keeps its members as granular render targets (so the
+ * existing panels, their lazy loads, and the env/storage fetch gates are
+ * untouched); a group with more than one member shows a secondary sub-tab bar.
+ * Image-specific panels (IRC, Blueprint) append as their own single groups.
+ */
+function buildTabGroups(image: string): TabGroup[] {
+  const groups: TabGroup[] = [
+    { key: "overview", label: "Overview", members: ["overview"] },
+    { key: "deployments", label: "Deployments", members: ["source", "history"] },
+    {
+      key: "configuration",
+      label: "Configuration",
+      members: ["environment", "storage", "networking", "resources"]
+    },
+    { key: "monitoring", label: "Monitoring", members: ["health", "metrics", "performance"] },
+    // Runtime (live console) first, then the last Build log — one home for "logs".
+    { key: "logs", label: "Logs", members: ["console", "logs"] },
+    { key: "activity", label: "Activity", members: ["activity"] }
+  ];
+
+  if (isIrcServerImage(image)) {
+    groups.push({ key: "irc-settings", label: "Settings", members: ["irc-settings"] });
+  }
+  if (isIrcBotImage(image)) {
+    groups.push({ key: "bot-settings", label: "Settings", members: ["bot-settings"] });
+  }
+  if (isBlueprintImage(image)) {
+    groups.push({ key: "blueprint", label: "Blueprint", members: ["blueprint"] });
+  }
+
+  return groups;
+}
 
 async function readApiError(
   response: Response,
@@ -819,6 +893,10 @@ export default function AppDetail({
   const isConfigPending = detail.environmentStatus === "pending";
   const inheritedGlobals = effectiveVars.filter((v) => v.source === "global");
 
+  const tabGroups = buildTabGroups(detail.image);
+  const activeGroup =
+    tabGroups.find((group) => group.members.includes(activeTab)) ?? tabGroups[0];
+
   return (
     <section className="app-detail">
       <div className="app-detail-header">
@@ -942,34 +1020,108 @@ export default function AppDetail({
       )}
 
       <Tabs
-        items={[
-          { key: "overview", label: "Overview" },
-          { key: "console", label: "Console" },
-          { key: "source", label: "Source" },
-          { key: "environment", label: "Environment" },
-          { key: "storage", label: "Storage" },
-          { key: "health", label: "Health" },
-          { key: "metrics", label: "Metrics" },
-          { key: "performance", label: "Performance" },
-          { key: "logs", label: "Logs" },
-          { key: "history", label: "History" },
-          { key: "activity", label: "Activity" },
-          ...(isIrcServerImage(detail.image)
-            ? [{ key: "irc-settings", label: "Settings" }]
-            : []),
-          ...(isIrcBotImage(detail.image)
-            ? [{ key: "bot-settings", label: "Settings" }]
-            : []),
-          ...(isBlueprintImage(detail.image)
-            ? [{ key: "blueprint", label: "Blueprint" }]
-            : [])
-        ]}
-        active={activeTab}
-        onChange={(key) => setActiveTab(key as DetailTab)}
+        items={tabGroups.map((group) => ({ key: group.key, label: group.label }))}
+        active={activeGroup.key}
+        onChange={(key) => {
+          const group = tabGroups.find((candidate) => candidate.key === key);
+          if (group && !group.members.includes(activeTab)) {
+            setActiveTab(group.members[0]);
+          }
+        }}
       />
+
+      {activeGroup.members.length > 1 && (
+        <div className="app-detail-subtabs">
+          <Tabs
+            items={activeGroup.members.map((member) => ({
+              key: member,
+              label: MEMBER_LABELS[member]
+            }))}
+            active={activeTab}
+            onChange={(key) => setActiveTab(key as DetailTab)}
+          />
+        </div>
+      )}
 
       {activeTab === "overview" && (
         <div className="app-detail-tab-panel">
+          <div className="cc-signals">
+            <div className="cc-card">
+              <div className="cc-card-h">Deployment</div>
+              <div className="cc-card-lead">
+                {detail.lastDeploymentStatus === "failed" ? (
+                  <span className="status-badge danger compact">Deploy failed</span>
+                ) : detail.lastDeployedAt ? (
+                  <span className="status-badge positive compact">Deployed</span>
+                ) : (
+                  <span className="status-badge neutral compact">Not yet deployed</span>
+                )}
+              </div>
+              <div className="cc-kv"><span>Last deployed</span><span>{formatDate(detail.lastDeployedAt)}</span></div>
+              <div className="cc-kv">
+                <span>Duration</span>
+                <span>
+                  {formatDuration(detail.lastDeploymentDurationMs)}
+                  {detail.lastDeploymentStatus === "failed" && (
+                    <span className="deployment-status-failed"> (failed)</span>
+                  )}
+                </span>
+              </div>
+              <button className="cc-link" type="button" onClick={() => setActiveTab("source")}>
+                View deployments →
+              </button>
+            </div>
+
+            <div className="cc-card">
+              <div className="cc-card-h">Domain &amp; routing</div>
+              <div className="cc-card-lead">
+                {detail.internalOnly ? (
+                  <span className="routing-badge internal-only">Internal only</span>
+                ) : detail.domain ? (
+                  <a className="public-domain-link" href={`https://${detail.domain}`} target="_blank" rel="noopener noreferrer">
+                    {detail.domain}
+                  </a>
+                ) : (
+                  <span className="text-faint">No domain assigned</span>
+                )}
+              </div>
+              <div className="cc-kv">
+                <span>Reach</span>
+                <span>{detail.internalOnly ? `app-${detail.name}:${detail.containerPort}` : "Public HTTPS"}</span>
+              </div>
+              {detail.publishedPorts.length > 0 && (
+                <div className="cc-kv">
+                  <span>Published</span>
+                  <span>{detail.publishedPorts.length} port{detail.publishedPorts.length === 1 ? "" : "s"}</span>
+                </div>
+              )}
+              <button className="cc-link" type="button" onClick={() => setActiveTab("networking")}>
+                Configure →
+              </button>
+            </div>
+
+            <div className="cc-card">
+              <div className="cc-card-h">Resources</div>
+              <div className="cc-kv"><span>Memory limit</span><span>{detail.memoryLimitMb ? `${detail.memoryLimitMb} MB` : "Unlimited"}</span></div>
+              <div className="cc-kv"><span>CPU limit</span><span>{detail.cpuLimit ? `${detail.cpuLimit} cores` : "Shared"}</span></div>
+              <div className="cc-kv"><span>Restart</span><span>{detail.restartPolicy}</span></div>
+              <button className="cc-link" type="button" onClick={() => setActiveTab("metrics")}>
+                Live metrics →
+              </button>
+            </div>
+
+            <div className="cc-card">
+              <div className="cc-card-h">Runtime</div>
+              <div className="cc-kv"><span>Docker</span><span>{detail.dockerStatusText ?? "Unavailable"}</span></div>
+              <div className="cc-kv"><span>Image</span><span className="cc-mono">{detail.image}</span></div>
+              <div className="cc-kv"><span>Internal port</span><span className="cc-mono">{detail.containerPort}</span></div>
+              <button className="cc-link" type="button" onClick={() => setActiveTab("console")}>
+                Runtime logs →
+              </button>
+            </div>
+          </div>
+
+          <h3 className="cc-details-h">Details</h3>
           <dl className="app-detail-grid">
             <div>
               <dt>Public domain</dt>
@@ -983,16 +1135,6 @@ export default function AppDetail({
                 ) : (
                   "Not assigned"
                 )}
-                <button
-                  className="secondary-button compact"
-                  type="button"
-                  onClick={() => {
-                    setDomainError("");
-                    setShowDomainDialog(true);
-                  }}
-                >
-                  Edit
-                </button>
               </dd>
             </div>
 
@@ -1077,14 +1219,6 @@ export default function AppDetail({
               </dd>
             </div>
           </dl>
-
-          <ResourcesSection
-            appId={appId}
-            memoryLimitMb={detail.memoryLimitMb}
-            cpuLimit={detail.cpuLimit}
-            containerRunning={isRunning}
-            onSaved={() => void loadDetail()}
-          />
         </div>
       )}
 
@@ -1280,6 +1414,91 @@ export default function AppDetail({
         </div>
       )}
 
+      {activeTab === "networking" && (
+        <div className="app-detail-tab-panel">
+          <div className="env-scope-block">
+            <div className="env-scope-heading">
+              <h3>Domain &amp; Routing</h3>
+              <button
+                className="secondary-button compact"
+                type="button"
+                onClick={() => {
+                  setDomainError("");
+                  setShowDomainDialog(true);
+                }}
+              >
+                Edit domain
+              </button>
+            </div>
+            <p className="section-description">
+              How this app is reached — a public HTTPS domain, or internal-only
+              on the platform's private network. Published ports expose raw
+              TCP/UDP for non-HTTP services.
+            </p>
+            <dl className="app-detail-grid">
+              <div>
+                <dt>Public domain</dt>
+                <dd className="domain-cell">
+                  {detail.internalOnly ? (
+                    <span className="routing-badge internal-only">Internal only</span>
+                  ) : detail.domain ? (
+                    <a className="public-domain-link" href={`https://${detail.domain}`} target="_blank" rel="noopener noreferrer">
+                      {detail.domain}
+                    </a>
+                  ) : (
+                    "Not assigned"
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Routing</dt>
+                <dd>
+                  {detail.internalOnly
+                    ? "Internal only — private network, no public route"
+                    : detail.routingReady
+                      ? "Public — routing ready"
+                      : "Public — routing not ready"}
+                </dd>
+              </div>
+              <div>
+                <dt>Internal port</dt>
+                <dd>{detail.containerPort}</dd>
+              </div>
+              {detail.publishedPorts.length > 0 && (
+                <div>
+                  <dt>Published ports</dt>
+                  <dd>
+                    {detail.publishedPorts.map((port) => (
+                      <div key={`${port.hostPort}/${port.protocol}`} className="published-port-line">
+                        <code>
+                          {port.hostPort} → {port.containerPort}/{port.protocol}
+                        </code>
+                      </div>
+                    ))}
+                    <small className="text-faint">
+                      Reachable on the server's public IP at the host port
+                      (firewall permitting).
+                    </small>
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "resources" && (
+        <div className="app-detail-tab-panel">
+          <ResourcesSection
+            appId={appId}
+            memoryLimitMb={detail.memoryLimitMb}
+            cpuLimit={detail.cpuLimit}
+            containerRunning={isRunning}
+            onSaved={() => void loadDetail()}
+          />
+        </div>
+      )}
+
       {activeTab === "health" && (
         <HealthPanel appId={appId} containerRunning={isRunning} />
       )}
@@ -1294,11 +1513,20 @@ export default function AppDetail({
         <PerformanceDiagnosticsPanel appId={appId} publicDomain={detail.domain} />
       )}
 
-      {activeTab === "logs" && (
-        <BuildLogPanel appId={appId} appName={detail.name} />
+      {/* Runtime (live SSE console) and the last Build log share one "Logs"
+          group. Both stay mounted while the group is active and toggle via
+          `hidden`, so peeking at the build log never tears down the live
+          console stream or its retained buffer. */}
+      {activeGroup.key === "logs" && (
+        <>
+          <div hidden={activeTab !== "console"}>
+            <ConsolePanel appId={appId} />
+          </div>
+          <div hidden={activeTab !== "logs"}>
+            <BuildLogPanel appId={appId} appName={detail.name} />
+          </div>
+        </>
       )}
-
-      {activeTab === "console" && <ConsolePanel appId={appId} />}
 
       {activeTab === "history" && (
         <HistoryPanel
