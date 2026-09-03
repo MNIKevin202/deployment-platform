@@ -940,6 +940,16 @@ export default function AppDetail({
           imageUpdateCheckedAt={detail.imageUpdateCheckedAt}
         />
 
+        {/* Live runtime console, front and centre on the Overview. Hidden on
+            the Logs tab (which streams its own), so only one stream is open. */}
+        {detail.containerExists && activeTab === "overview" && (
+          <ConsolePanel
+            appId={appId}
+            compact
+            onOpenFull={() => setActiveTab("console")}
+          />
+        )}
+
         <div className="container-actions app-detail-actions">
           {canOpenApp && (
             <a

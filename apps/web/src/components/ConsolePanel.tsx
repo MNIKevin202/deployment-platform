@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 interface ConsolePanelProps {
   appId: number;
+  /** Trimmed embed for the App Detail hero: minimal toolbar, shorter log area. */
+  compact?: boolean;
+  /** In compact mode, renders an "Open full console" affordance. */
+  onOpenFull?: () => void;
 }
 
 /** Cap on client-side retained lines so a chatty app can't grow memory without bound. */
@@ -29,7 +33,7 @@ function formatConsoleTime(value: Date | null): string {
   return value ? value.toLocaleTimeString() : "Waiting";
 }
 
-export default function ConsolePanel({ appId }: ConsolePanelProps) {
+export default function ConsolePanel({ appId, compact = false, onOpenFull }: ConsolePanelProps) {
   const [lines, setLines] = useState<string[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [notice, setNotice] = useState("");
@@ -55,6 +59,13 @@ export default function ConsolePanel({ appId }: ConsolePanelProps) {
 
   useEffect(() => {
     if (paused) {
+      setStatus("stopped");
+      return;
+    }
+
+    // No SSE support (e.g. a non-browser/test environment) — render the panel
+    // idle rather than throwing on `new EventSource`.
+    if (typeof EventSource === "undefined") {
       setStatus("stopped");
       return;
     }
@@ -156,44 +167,54 @@ export default function ConsolePanel({ appId }: ConsolePanelProps) {
     lines.length >= MAX_LINES ? `Retaining newest ${MAX_LINES.toLocaleString()} lines` : "Retaining full buffer";
 
   return (
-    <div className="app-detail-tab-panel">
+    <div className={compact ? "console-compact" : "app-detail-tab-panel"}>
       <div className="logs-toolbar">
         <div className="logs-toolbar-group">
+          {compact && <span className="console-compact-title">Console</span>}
           <span className={`status-badge compact ${STATUS_TONES[status]}`}>
             <span className="console-status-dot" aria-hidden="true" /> {STATUS_LABELS[status]}
           </span>
 
-          <label className="logs-toolbar-field">
-            <span>Tail</span>
-            <select
-              className="wizard-select"
-              value={tail}
-              onChange={(event) => setTail(Number(event.target.value))}
-            >
-              {TAIL_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
+          {!compact && (
+            <>
+              <label className="logs-toolbar-field">
+                <span>Tail</span>
+                <select
+                  className="wizard-select"
+                  value={tail}
+                  onChange={(event) => setTail(Number(event.target.value))}
+                >
+                  {TAIL_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-          <label className="checkbox-field">
-            <input
-              type="checkbox"
-              checked={timestamps}
-              onChange={(event) => setTimestamps(event.target.checked)}
-            />
-            <span>Timestamps</span>
-          </label>
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={timestamps}
+                  onChange={(event) => setTimestamps(event.target.checked)}
+                />
+                <span>Timestamps</span>
+              </label>
 
-          <label className="checkbox-field">
-            <input type="checkbox" checked={wrap} onChange={(event) => setWrap(event.target.checked)} />
-            <span>Wrap lines</span>
-          </label>
+              <label className="checkbox-field">
+                <input type="checkbox" checked={wrap} onChange={(event) => setWrap(event.target.checked)} />
+                <span>Wrap lines</span>
+              </label>
+            </>
+          )}
         </div>
 
         <div className="logs-toolbar-group">
+          {compact && onOpenFull && (
+            <button className="secondary-button compact" type="button" onClick={onOpenFull}>
+              Open full console →
+            </button>
+          )}
           <button
             className="secondary-button compact"
             type="button"
@@ -202,9 +223,11 @@ export default function ConsolePanel({ appId }: ConsolePanelProps) {
           >
             {copyState === "copied" ? "Copied!" : copyState === "failed" ? "Copy failed" : "Copy console"}
           </button>
-          <button className="secondary-button compact" type="button" onClick={clear}>
-            Clear
-          </button>
+          {!compact && (
+            <button className="secondary-button compact" type="button" onClick={clear}>
+              Clear
+            </button>
+          )}
           {paused ? (
             <button className="primary-button compact" type="button" onClick={() => setPaused(false)}>
               Resume
