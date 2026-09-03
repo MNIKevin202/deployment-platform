@@ -111,7 +111,7 @@ async function fillAndSubmit(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText("App name", { exact: false }), "demo");
   await user.type(screen.getByLabelText("Docker image", { exact: false }), "nginx:alpine");
 
-  for (let step = 0; step < 5; step += 1) {
+  for (let step = 0; step < 3; step += 1) {
     await user.click(screen.getByRole("button", { name: "Continue" }));
   }
 

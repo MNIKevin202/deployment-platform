@@ -118,7 +118,7 @@ async function goToDeploymentStep(user: ReturnType<typeof userEvent.setup>) {
   const nameInput = screen.getByPlaceholderText("hello-nginx");
   await user.clear(nameInput);
   await user.type(nameInput, "buttonpicker");
-  await user.click(screen.getByRole("button", { name: "Continue" })); // Runtime (Container port lives here)
+  await user.click(screen.getByRole("button", { name: "Continue" })); // Configure (Container port lives here)
 }
 
 describe("CreateAppWizard — GitHub repository port detection", () => {
@@ -178,7 +178,7 @@ describe("CreateAppWizard — GitHub repository port detection", () => {
     expect(screen.getByText("Manually entered.")).toBeInTheDocument();
 
     // Go back and re-inspect — the manual value must not be overwritten.
-    await user.click(screen.getByRole("button", { name: "Back" })); // Runtime -> Basics
+    await user.click(screen.getByRole("button", { name: "Back" })); // Configure -> Basics
     await user.click(screen.getByRole("button", { name: "Back" })); // Basics -> Source
     await user.click(screen.getByRole("button", { name: "Re-inspect Repository" }));
     await screen.findByText("Detected type");
@@ -194,9 +194,7 @@ describe("CreateAppWizard — GitHub repository port detection", () => {
 
     await goToInspectedGithubSource(user);
     await goToDeploymentStep(user);
-    await user.click(screen.getByRole("button", { name: "Continue" })); // Environment
-    await user.click(screen.getByRole("button", { name: "Continue" })); // Storage
-    await user.click(screen.getByRole("button", { name: "Continue" })); // Domain
+    await user.click(screen.getByRole("button", { name: "Continue" })); // Networking
     await user.click(screen.getByRole("button", { name: "Continue" })); // Review
     await screen.findByText("Claude Build Brief");
 

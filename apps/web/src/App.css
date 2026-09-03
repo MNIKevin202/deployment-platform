@@ -4565,8 +4565,9 @@ code {
   font-size: 0.72rem; padding: 6px 12px; text-transform: none; letter-spacing: 0;
 }
 .app-detail-actions { justify-content: flex-end; }
-/* The Back control shouldn't stretch the full width of the hero band. */
-.app-detail-header > .secondary-button { align-self: flex-start; width: auto; }
+/* The Back control shouldn't stretch the full width of the hero band.
+   The header is a grid, so shrink it inline with justify-self, not align-self. */
+.app-detail-header > .secondary-button { justify-self: start; width: auto; }
 
 /* ---- App Detail: signal cards ---- */
 .cc-signals { grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 14px; }
@@ -4582,4 +4583,43 @@ code {
 .cc-details-h {
   margin: 6px 0 -2px; font-size: 0.7rem; letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--color-text-faint); font-weight: 800;
+}
+
+/* ---- Create App wizard — Configure step progressive disclosure ---- */
+.wizard-disclose {
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+.wizard-disclose + .wizard-disclose { margin-top: 10px; }
+.wizard-disclose > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.wizard-disclose > summary::-webkit-details-marker { display: none; }
+.wizard-disclose > summary::after {
+  content: "⌄";
+  margin-left: auto;
+  color: var(--color-text-faint);
+  font-size: 0.9rem;
+  transition: transform 0.2s ease;
+}
+.wizard-disclose[open] > summary::after { transform: rotate(180deg); }
+.wizard-disclose-hint {
+  color: var(--color-text-faint);
+  font-weight: 500;
+  font-size: 0.78rem;
+}
+.wizard-disclose-body {
+  display: grid;
+  gap: 18px;
+  padding: 6px 16px 16px;
+  border-top: 1px solid var(--color-hair);
 }

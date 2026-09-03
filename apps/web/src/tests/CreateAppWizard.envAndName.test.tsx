@@ -65,16 +65,15 @@ describe("CreateAppWizard — name slug + bulk env", () => {
     const user = userEvent.setup();
     render(<CreateAppWizard open onClose={() => {}} onCreated={() => {}} />);
 
-    // Source -> Basics -> Runtime -> Environment.
+    // Source -> Basics -> Configure (Environment variables accordion).
     await user.click(await screen.findByRole("button", { name: "Continue" }));
     await user.type(await screen.findByLabelText("App name", { exact: false }), "bulk-test");
     await user.type(screen.getByLabelText("Docker image", { exact: false }), "nginx:alpine");
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    await user.click(await screen.findByRole("button", { name: "Continue" }));
 
-    // On the Environment step, open the bulk dialog and paste.
+    // In the Configure step's Environment section, open the bulk dialog and paste.
     await user.click(await screen.findByRole("button", { name: "Bulk add" }));
-    const dialog = await screen.findByRole("textbox");
+    const dialog = await screen.findByLabelText("Variables");
     await user.type(dialog, "FOO=bar{enter}BAZ=qux");
     await user.click(await screen.findByRole("button", { name: /Apply/ }));
 
@@ -138,7 +137,6 @@ describe("CreateAppWizard — name slug + bulk env", () => {
     await user.type(await screen.findByLabelText("App name", { exact: false }), "copy-test");
     await user.type(screen.getByLabelText("Docker image", { exact: false }), "nginx:alpine");
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    await user.click(await screen.findByRole("button", { name: "Continue" }));
 
     await user.selectOptions(await screen.findByLabelText("Source app"), "12");
     await user.type(screen.getByLabelText("Environment export password"), "export-password-123");

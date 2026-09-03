@@ -109,16 +109,14 @@ async function fillBasicsAndAdvanceToReview(user: ReturnType<typeof userEvent.se
   );
   await user.click(screen.getByRole("button", { name: "Continue" }));
 
-  // Steps 2-4 (Runtime, Environment, Storage) all have valid defaults.
-  await user.click(await screen.findByRole("button", { name: "Continue" }));
-  await user.click(await screen.findByRole("button", { name: "Continue" }));
-  await user.click(await screen.findByRole("button", { name: "Continue" }));
-
-  // Step 5 (Domain & Networking) triggers the build-brief fetch and is
-  // always valid.
+  // Step 2 (Configure) merges Runtime, Environment and Storage; it has valid
+  // defaults.
   await user.click(await screen.findByRole("button", { name: "Continue" }));
 
-  // Now on step 6, Review & Create.
+  // Step 3 (Networking) triggers the build-brief fetch and is always valid.
+  await user.click(await screen.findByRole("button", { name: "Continue" }));
+
+  // Now on step 4, Review.
   await screen.findByRole("button", { name: "Create App" });
 }
 
