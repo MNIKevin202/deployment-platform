@@ -8,6 +8,7 @@ import type {
 import {
   bulkEnvVarsSchema,
   createEnvVarSchema,
+  moveEnvVarSchema,
   updateEnvVarSchema
 } from "../schemas/environment.js";
 import {
@@ -558,6 +559,112 @@ export async function registerEnvironmentRoutes(
       appDatabase.deleteAppEnvVar(existing.id);
       appDatabase.touchAppEnvironment(app.id);
 
+      return { success: true };
+    }
+  );
+
+  // Move a variable between the global scope and this app's scope. The value
+  // is copied server-side (so secret values, which are never returned to the
+  // client, move intact), then the source is either disabled or deleted per
+  // the caller's choice.
+  fastify.post<{ Params: AppIdParams }>(
+    "/apps/:id/environment/move",
+    async (request, reply) => {
+      const parsedParams = idParamSchema.safeParse(request.params);
+
+      if (!parsedParams.success) {
+        return reply.code(400).send({ success: false, message: "Invalid app id" });
+      }
+
+      const app = appDatabase.getAppById(parsedParams.data.id);
+
+      if (!app) {
+        return reply.code(404).send({ success: false, message: "App not found" });
+      }
+
+      const parsedBody = moveEnvVarSchema.safeParse(request.body);
+
+      if (!parsedBody.success) {
+        return reply.code(400).send({
+          success: false,
+          message: "Invalid move request",
+          errors: parsedBody.error.flatten()
+        });
+      }
+
+      const { direction, key, disposition } = parsedBody.data;
+
+      if (direction === "global-to-app") {
+        const globalVar = appDatabase.getGlobalEnvVarByKey(key);
+
+        if (!globalVar) {
+          return reply.code(404).send({
+            success: false,
+            message: `No global variable named "${key}"`
+          });
+        }
+
+        const existing = appDatabase.getAppEnvVarByKey(app.id, key);
+        if (existing) {
+          appDatabase.updateAppEnvVar(existing.id, {
+            value: globalVar.value,
+            isSecret: globalVar.isSecret,
+            enabled: true
+          });
+        } else {
+          appDatabase.createAppEnvVar({
+            appId: app.id,
+            key,
+            value: globalVar.value,
+            isSecret: globalVar.isSecret,
+            enabled: true
+          });
+        }
+
+        if (disposition === "delete") {
+          appDatabase.deleteGlobalEnvVar(globalVar.id);
+        } else {
+          appDatabase.updateGlobalEnvVar(globalVar.id, { enabled: false });
+        }
+
+        // A global change affects every app's effective environment.
+        appDatabase.touchAllAppsEnvironment();
+        return { success: true };
+      }
+
+      // app-to-global
+      const appVar = appDatabase.getAppEnvVarByKey(app.id, key);
+
+      if (!appVar) {
+        return reply.code(404).send({
+          success: false,
+          message: `No variable named "${key}" on this app`
+        });
+      }
+
+      const existingGlobal = appDatabase.getGlobalEnvVarByKey(key);
+      if (existingGlobal) {
+        appDatabase.updateGlobalEnvVar(existingGlobal.id, {
+          value: appVar.value,
+          isSecret: appVar.isSecret,
+          enabled: true
+        });
+      } else {
+        appDatabase.createGlobalEnvVar({
+          key,
+          value: appVar.value,
+          isSecret: appVar.isSecret,
+          enabled: true
+        });
+      }
+
+      if (disposition === "delete") {
+        appDatabase.deleteAppEnvVar(appVar.id);
+      } else {
+        appDatabase.updateAppEnvVar(appVar.id, { enabled: false });
+      }
+
+      appDatabase.touchAllAppsEnvironment();
       return { success: true };
     }
   );

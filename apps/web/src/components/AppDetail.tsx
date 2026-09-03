@@ -21,6 +21,10 @@ import EnvVarTable from "./EnvVarTable";
 import EnvVarDialog from "./EnvVarDialog";
 import BulkEnvVarDialog from "./BulkEnvVarDialog";
 import EnvironmentExportDialog from "./EnvironmentExportDialog";
+import MoveVariableDialog, {
+  type MoveDirection,
+  type MoveDisposition
+} from "./MoveVariableDialog";
 import DomainDialog from "./DomainDialog";
 import StorageTable from "./StorageTable";
 import StorageDialog from "./StorageDialog";
@@ -260,6 +264,9 @@ export default function AppDetail({
   const [showEnvDialog, setShowEnvDialog] = useState(false);
   const [editingVar, setEditingVar] = useState<MaskedAppEnvVar | null>(null);
   const [overrideKey, setOverrideKey] = useState<string | null>(null);
+  const [moveTarget, setMoveTarget] = useState<{ direction: MoveDirection; key: string } | null>(null);
+  const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState("");
   const [envSubmitting, setEnvSubmitting] = useState(false);
   const [envDialogError, setEnvDialogError] = useState("");
   const [envDeleteTarget, setEnvDeleteTarget] = useState<MaskedAppEnvVar | null>(
@@ -561,6 +568,42 @@ export default function AppDetail({
     setOverrideKey(null);
     setEnvDialogError("");
     setShowEnvDialog(true);
+  };
+
+  const openMoveDialog = (direction: MoveDirection, key: string) => {
+    setMoveError("");
+    setMoveTarget({ direction, key });
+  };
+
+  const runMove = async (disposition: MoveDisposition) => {
+    if (!moveTarget) {
+      return;
+    }
+
+    try {
+      setMoving(true);
+      setMoveError("");
+
+      const response = await fetch(`/api/apps/${appId}/environment/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...moveTarget, disposition })
+      });
+
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Unable to move the variable"));
+      }
+
+      const movedTo = moveTarget.direction === "global-to-app" ? "this app" : "the global scope";
+      setNotice(`${moveTarget.key} was moved to ${movedTo}.`);
+      setMoveTarget(null);
+      await loadEnvironment();
+      void loadDetail();
+    } catch (error) {
+      setMoveError(error instanceof Error ? error.message : "Unable to move the variable");
+    } finally {
+      setMoving(false);
+    }
   };
 
   const submitEnvDialog = async (values: EnvVarFormValues) => {
@@ -1327,6 +1370,13 @@ export default function AppDetail({
                               >
                                 Override
                               </button>
+                              <button
+                                className="secondary-button compact"
+                                type="button"
+                                onClick={() => openMoveDialog("global-to-app", variable.key)}
+                              >
+                                Move to app
+                              </button>
                             </td>
                           </tr>
                         ))}
@@ -1370,6 +1420,10 @@ export default function AppDetail({
                     setEnvDeleteTarget(variable as MaskedAppEnvVar)
                   }
                   busyId={envDeleting ? envDeleteTarget?.id ?? null : null}
+                  extraAction={{
+                    label: "Move to global",
+                    onClick: (variable) => openMoveDialog("app-to-global", variable.key)
+                  }}
                 />
 
                 {appVars.some((variable) =>
@@ -1608,6 +1662,20 @@ export default function AppDetail({
         error={bulkEnvError}
         onSubmit={(variables) => void submitBulkEnvDialog(variables)}
         onCancel={() => setShowBulkEnvDialog(false)}
+      />
+
+      <MoveVariableDialog
+        open={moveTarget !== null}
+        keyName={moveTarget?.key ?? ""}
+        direction={moveTarget?.direction ?? "global-to-app"}
+        submitting={moving}
+        error={moveError}
+        onDispose={(disposition) => void runMove(disposition)}
+        onCancel={() => {
+          if (!moving) {
+            setMoveTarget(null);
+          }
+        }}
       />
 
       <EnvironmentExportDialog
