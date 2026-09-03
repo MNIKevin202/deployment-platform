@@ -2863,6 +2863,13 @@ code {
 .console-output pre {
   max-height: none;
   margin: 0;
+  /* Keep the .console-output div itself the single scroll container. The pre
+     is a flex child that (with overflow:auto + flex-shrink) would otherwise
+     shrink to the box and scroll INTERNALLY — leaving the JS auto-follow,
+     which scrolls the outer div, with nothing to move. Letting the pre grow
+     to its content makes the div scroll and the auto-follow land on newest. */
+  overflow: visible;
+  flex: 0 0 auto;
 }
 
 .console-live-detail {
