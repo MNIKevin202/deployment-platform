@@ -4534,8 +4534,11 @@ code {
   color: var(--color-accent-2); font-weight: 800; font-size: 15px; flex: none;
 }
 .container-card-header { justify-content: flex-start; gap: 12px; align-items: flex-start; }
-.container-card-header > div:not(.card-status) { min-width: 0; }
-.card-status { margin-left: auto; }
+/* The title block takes the remaining width and truncates its long image
+   string, so it can never run underneath the right-hand status column. */
+.container-card-header > div:not(.card-status) { flex: 1 1 auto; min-width: 0; }
+.container-card-header p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-status { flex: 0 0 auto; margin-left: auto; }
 .title-row h3 { font-size: 0.98rem; font-weight: 700; letter-spacing: -0.01em; }
 .container-details {
   padding-top: 12px; border-top: 1px solid var(--color-hair); gap: 8px;
@@ -4562,6 +4565,8 @@ code {
   font-size: 0.72rem; padding: 6px 12px; text-transform: none; letter-spacing: 0;
 }
 .app-detail-actions { justify-content: flex-end; }
+/* The Back control shouldn't stretch the full width of the hero band. */
+.app-detail-header > .secondary-button { align-self: flex-start; width: auto; }
 
 /* ---- App Detail: signal cards ---- */
 .cc-signals { grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 14px; }
