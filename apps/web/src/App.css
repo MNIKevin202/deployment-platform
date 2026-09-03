@@ -4418,3 +4418,163 @@ code {
   font-size: 0.72rem;
   font-weight: 700;
 }
+
+/* ============================================================
+   ClovaForge v2 — visual redesign pass
+   Shell (sidebar + header), Apps control surface + cards,
+   and the App Detail command center. Dark + restrained violet.
+   ============================================================ */
+
+/* ---- Sidebar ---- */
+.sidebar-inner { gap: 14px; }
+
+.sidebar-server {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 11px; border-radius: 11px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-raised);
+}
+.sidebar-server-ring {
+  width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center;
+  background: var(--color-bg); border: 1px solid var(--color-border);
+  flex: none; font-size: 12px; color: var(--color-text-muted);
+}
+.sidebar-server-name {
+  font-weight: 600; font-size: 12.5px; flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar-live {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  background: var(--color-success); box-shadow: 0 0 0 3px var(--color-success-bg);
+  animation: cf-pulse 2.4s ease-in-out infinite;
+}
+@keyframes cf-pulse { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
+
+.sidebar-nav { display: flex; flex-direction: column; gap: 2px; }
+.sidebar-nav-group { display: flex; flex-direction: column; gap: 2px; }
+.sidebar-nav-label {
+  margin: 0; padding: 12px 10px 5px;
+  font-size: 9.5px; letter-spacing: 0.15em; text-transform: uppercase;
+  color: var(--color-text-faint); font-weight: 700;
+}
+.sidebar-nav-glyph {
+  width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center;
+  background: var(--color-surface-raised); border: 1px solid var(--color-border-soft);
+  flex: none; font-size: 0; transition: background .13s ease, border-color .13s ease;
+}
+.sidebar-nav-glyph svg { width: 15px; height: 15px; opacity: .85; color: var(--color-text-muted); }
+.sidebar-nav-item.active .sidebar-nav-glyph {
+  background: linear-gradient(180deg, var(--color-accent), #5a5fe6);
+  border-color: transparent; box-shadow: 0 4px 12px rgba(111,116,242,.4);
+}
+.sidebar-nav-item.active .sidebar-nav-glyph svg { color: #fff; opacity: 1; }
+.sidebar-nav-item.active::before { box-shadow: 0 0 12px var(--color-accent-glow, rgba(111,116,242,.5)); }
+
+.sidebar-foot {
+  margin-top: auto; display: flex; align-items: center; gap: 10px;
+  padding: 10px; border-top: 1px solid var(--color-hair);
+}
+.sidebar-avatar {
+  width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--color-accent), #4b3fd6);
+  color: #fff; font-weight: 700; font-size: 12px; flex: none;
+}
+.sidebar-foot-id p { margin: 0; line-height: 1.2; }
+.sidebar-foot-name { font-size: 12.5px; font-weight: 600; }
+.sidebar-foot-role { font-size: 10.5px; color: var(--color-text-faint); }
+
+/* ---- Header / command bar ---- */
+.app-topbar {
+  background: rgba(10, 14, 23, 0.8);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--color-border-soft);
+}
+.header-inner { gap: 16px; }
+.header-title-block h1 { font-size: 1.35rem; letter-spacing: -0.02em; }
+.signed-in-user { color: var(--color-text-faint); font-size: 12.5px; }
+
+/* ---- Apps: control surface ---- */
+.apps-controlbar {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 12px 14px; margin-bottom: 18px;
+  background: linear-gradient(180deg, var(--color-surface), #0c1018);
+  border: 1px solid var(--color-border-soft); border-radius: 14px;
+}
+.apps-controlbar .apps-filter-row { margin: 0; }
+.apps-controlbar .apps-filter-pill-row { margin: 0; }
+.apps-filter-search,
+.apps-filter-sort {
+  background: var(--color-bg); border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+.apps-filter-search:focus,
+.apps-filter-sort:focus {
+  border-color: var(--color-accent-line);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+/* ---- Apps: cards ---- */
+.container-grid { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+.container-card {
+  position: relative; overflow: hidden;
+  border-radius: 15px; padding: 16px 16px 16px 18px; gap: 13px;
+  transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+.container-card:hover {
+  transform: translateY(-2px); border-color: var(--color-accent-line);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.42);
+}
+.container-card-stripe { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.container-card--running .container-card-stripe { background: linear-gradient(var(--color-success), #1fae82); }
+.container-card--stopped .container-card-stripe { background: var(--color-text-faint); }
+.container-card--failed .container-card-stripe { background: linear-gradient(var(--color-danger), #e04961); }
+.app-card-mark {
+  width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center;
+  background: var(--color-surface-3); border: 1px solid var(--color-border-soft);
+  color: var(--color-accent-2); font-weight: 800; font-size: 15px; flex: none;
+}
+.container-card-header { justify-content: flex-start; gap: 12px; align-items: flex-start; }
+.container-card-header > div:not(.card-status) { min-width: 0; }
+.card-status { margin-left: auto; }
+.title-row h3 { font-size: 0.98rem; font-weight: 700; letter-spacing: -0.01em; }
+.container-details {
+  padding-top: 12px; border-top: 1px solid var(--color-hair); gap: 8px;
+}
+
+/* Chips: allow an inline status dot */
+.status-badge { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---- App Detail: command-center hero ---- */
+.app-detail-header {
+  position: relative; overflow: hidden;
+  padding: 18px 20px; border-radius: 17px;
+  border: 1px solid var(--color-border-soft);
+  background: linear-gradient(180deg, var(--color-surface), #0b0e17);
+}
+.app-detail-header::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(520px 170px at 12% -35%, rgba(111,116,242,.15), transparent 70%);
+}
+.app-detail-header > * { position: relative; }
+.app-detail-title-row { align-items: center; gap: 12px; }
+.app-detail-title-row h1 { font-size: 1.55rem; letter-spacing: -0.02em; }
+.app-detail-title-row .status-badge {
+  font-size: 0.72rem; padding: 6px 12px; text-transform: none; letter-spacing: 0;
+}
+.app-detail-actions { justify-content: flex-end; }
+
+/* ---- App Detail: signal cards ---- */
+.cc-signals { grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 14px; }
+.cc-card {
+  position: relative; overflow: hidden; border-radius: 15px; padding: 16px 17px; gap: 10px;
+}
+.cc-card::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+  background: linear-gradient(90deg, var(--color-accent-line), transparent);
+}
+.cc-card-h { display: flex; align-items: center; gap: 8px; }
+.cc-card-lead { font-size: 0.98rem; }
+.cc-details-h {
+  margin: 6px 0 -2px; font-size: 0.7rem; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--color-text-faint); font-weight: 800;
+}

@@ -601,7 +601,7 @@ function App() {
   if (selectedAppId !== null) {
     return (
       <AppShell
-        sidebar={<Sidebar active={null} onSelect={goToSection} />}
+        sidebar={<Sidebar active={null} onSelect={goToSection} username={username} />}
         header={
           <Header
             title="App Detail"
@@ -657,7 +657,7 @@ function App() {
 
   return (
     <AppShell
-      sidebar={<Sidebar active={section} onSelect={goToSection} />}
+      sidebar={<Sidebar active={section} onSelect={goToSection} username={username} />}
       header={
         <Header
           title={AREA_TITLES[primaryOf(section)]}

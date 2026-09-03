@@ -95,10 +95,23 @@ export default function AppCard({
   // color/weight, not from making buttons different sizes.
   const highlightStart = canStart && !canOpenApp;
   const bulkBusy = actionLoading?.startsWith("bulk:") ?? false;
+  const cardState =
+    storedApp?.latestEventSeverity === "error"
+      ? "failed"
+      : isRunning
+        ? "running"
+        : "stopped";
+  const monogram = containerName.trim().charAt(0).toUpperCase() || "•";
 
   return (
-    <article className={`container-card${selected ? " selected" : ""}`}>
+    <article
+      className={`container-card container-card--${cardState}${selected ? " selected" : ""}`}
+    >
+      <span className="container-card-stripe" aria-hidden="true" />
       <div className="container-card-header">
+        <span className="app-card-mark" aria-hidden="true">
+          {monogram}
+        </span>
         <div>
           <div className="title-row">
             {onToggleSelected && (
