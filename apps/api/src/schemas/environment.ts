@@ -36,6 +36,13 @@ export const updateEnvVarSchema = z
     "At least one field must be provided"
   );
 
+export const moveEnvVarSchema = z.object({
+  direction: z.enum(["global-to-app", "app-to-global"]),
+  key: envKeySchema,
+  // What to do with the variable in the location it moved OUT of.
+  disposition: z.enum(["disable", "delete"])
+});
+
 const MAX_BULK_VARS = 200;
 
 export const bulkEnvVarsSchema = z.object({

@@ -6,6 +6,8 @@ interface EnvVarTableProps {
   onEdit: (variable: MaskedGlobalEnvVar) => void;
   onDelete: (variable: MaskedGlobalEnvVar) => void;
   busyId?: number | null;
+  /** Optional extra per-row action, shown before Edit (e.g. "Move to global"). */
+  extraAction?: { label: string; onClick: (variable: MaskedGlobalEnvVar) => void };
 }
 
 function formatDate(value: string): string {
@@ -18,7 +20,8 @@ export default function EnvVarTable({
   emptyMessage,
   onEdit,
   onDelete,
-  busyId
+  busyId,
+  extraAction
 }: EnvVarTableProps) {
   if (variables.length === 0) {
     return <div className="empty-state">{emptyMessage}</div>;
@@ -67,6 +70,16 @@ export default function EnvVarTable({
               </td>
               <td className="text-faint">{formatDate(variable.updatedAt)}</td>
               <td className="env-actions-cell">
+                {extraAction && (
+                  <button
+                    className="secondary-button compact"
+                    type="button"
+                    onClick={() => extraAction.onClick(variable)}
+                    disabled={busyId === variable.id}
+                  >
+                    {extraAction.label}
+                  </button>
+                )}
                 <button
                   className="secondary-button compact"
                   type="button"

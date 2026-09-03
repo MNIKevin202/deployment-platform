@@ -4649,3 +4649,7 @@ code {
 
 /* Error-looking console lines stand out in red. */
 .console-output .console-line-error { color: var(--color-danger); }
+
+/* Move-variable dialog (global ⇄ app). */
+.form-modal-body { display: grid; gap: 14px; padding: 22px; }
+.move-variable-actions { flex-wrap: wrap; }
