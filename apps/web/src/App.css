@@ -1788,6 +1788,87 @@ code {
   gap: 20px;
 }
 
+/* Secondary sub-tab bar under the six primary App Detail groups. */
+.app-detail-subtabs {
+  margin-top: -8px;
+}
+.app-detail-subtabs .tabs {
+  gap: 2px;
+}
+.app-detail-subtabs .tab {
+  font-size: 0.82rem;
+  padding: 7px 12px;
+}
+
+/* App Detail Overview — command-center signal cards. */
+.cc-signals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+}
+.cc-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 15px 16px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.cc-card-h {
+  font-size: 0.68rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--color-text-faint);
+}
+.cc-card-lead {
+  font-size: 0.95rem;
+  font-weight: 600;
+  word-break: break-word;
+}
+.cc-kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.82rem;
+}
+.cc-kv > span:first-child {
+  color: var(--color-text-muted);
+}
+.cc-kv > span:last-child {
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cc-mono {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+.cc-link {
+  margin-top: auto;
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 4px 0 0;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cc-link:hover {
+  color: var(--color-accent-hover);
+}
+.cc-details-h {
+  margin: 4px 0 -4px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+}
+
 .env-scope-block {
   display: grid;
   gap: 12px;
