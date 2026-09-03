@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 interface ConsolePanelProps {
   appId: number;
@@ -31,6 +31,14 @@ const STATUS_TONES: Record<ConnectionStatus, "positive" | "warning" | "neutral">
 
 function formatConsoleTime(value: Date | null): string {
   return value ? value.toLocaleTimeString() : "Waiting";
+}
+
+/** Heuristic: highlight log lines that look like errors/failures in red. */
+const ERROR_LINE_RE =
+  /\b(?:error|errors|fatal|panic|exception|traceback|unhandled|failed|failure|econnrefused|eaddrinuse|enotfound|segfault)\b|\[error\]|level=error/i;
+
+function isErrorLine(line: string): boolean {
+  return ERROR_LINE_RE.test(line);
 }
 
 export default function ConsolePanel({ appId, compact = false, onOpenFull }: ConsolePanelProps) {
@@ -123,7 +131,9 @@ export default function ConsolePanel({ appId, compact = false, onOpenFull }: Con
   }, [appId, tail, timestamps, paused, reconnectNonce, appendLines]);
 
   // Auto-follow: keep the newest line in view while pinned to the bottom.
-  useEffect(() => {
+  // useLayoutEffect so it lands on the bottom before paint — the console
+  // opens already scrolled to the latest output, with no flash-then-jump.
+  useLayoutEffect(() => {
     const element = scrollRef.current;
     if (element && pinnedRef.current) {
       element.scrollTop = element.scrollHeight;
@@ -261,7 +271,17 @@ export default function ConsolePanel({ appId, compact = false, onOpenFull }: Con
               : "Waiting for output..."}
           </p>
         ) : (
-          <pre className={wrap ? undefined : "logs-nowrap"}>{lines.join("\n")}</pre>
+          <pre className={wrap ? undefined : "logs-nowrap"}>
+            {lines.map((line, index) => (
+              <span
+                key={index}
+                className={isErrorLine(line) ? "console-line-error" : undefined}
+              >
+                {line}
+                {"\n"}
+              </span>
+            ))}
+          </pre>
         )}
       </div>
     </div>
