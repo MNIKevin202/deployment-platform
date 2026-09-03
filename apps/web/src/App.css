@@ -4666,3 +4666,13 @@ code {
   overflow: auto;
   font-size: 0.82rem;
 }
+
+/* Restart prompt shown after an environment change. */
+.restart-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.restart-prompt-actions { display: flex; gap: 8px; flex-shrink: 0; }
