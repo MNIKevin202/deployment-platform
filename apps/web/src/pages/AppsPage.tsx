@@ -335,6 +335,7 @@ export default function AppsPage({
 
         {hasAnyApp && (
           <>
+            <div className="apps-controlbar">
             <div className="apps-filter-row">
               <input
                 className="apps-filter-search"
@@ -408,6 +409,7 @@ export default function AppsPage({
                   Clear filters
                 </button>
               )}
+            </div>
             </div>
 
             {selectedCount > 0 && onBulkAction && onBulkDelete && (
