@@ -133,11 +133,22 @@ export default function ConsolePanel({ appId, compact = false, onOpenFull }: Con
   // Auto-follow: keep the newest line in view while pinned to the bottom.
   // useLayoutEffect so it lands on the bottom before paint — the console
   // opens already scrolled to the latest output, with no flash-then-jump.
+  // A second pass on the next frame catches cases where the content height
+  // isn't final yet (wrapped mono lines settling), which otherwise left the
+  // view stuck near the top on first load.
   useLayoutEffect(() => {
     const element = scrollRef.current;
-    if (element && pinnedRef.current) {
-      element.scrollTop = element.scrollHeight;
+    if (!element || !pinnedRef.current) {
+      return;
     }
+    element.scrollTop = element.scrollHeight;
+    const raf = window.requestAnimationFrame(() => {
+      const node = scrollRef.current;
+      if (node && pinnedRef.current) {
+        node.scrollTop = node.scrollHeight;
+      }
+    });
+    return () => window.cancelAnimationFrame(raf);
   }, [lines]);
 
   const handleScroll = () => {
