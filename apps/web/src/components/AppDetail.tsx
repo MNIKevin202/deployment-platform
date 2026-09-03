@@ -1,4 +1,13 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction
+} from "react";
 import type {
   ApiError,
   AppDetail as AppDetailData,
@@ -264,9 +273,11 @@ export default function AppDetail({
   const [showEnvDialog, setShowEnvDialog] = useState(false);
   const [editingVar, setEditingVar] = useState<MaskedAppEnvVar | null>(null);
   const [overrideKey, setOverrideKey] = useState<string | null>(null);
-  const [moveTarget, setMoveTarget] = useState<{ direction: MoveDirection; key: string } | null>(null);
+  const [moveTarget, setMoveTarget] = useState<{ direction: MoveDirection; keys: string[] } | null>(null);
   const [moving, setMoving] = useState(false);
   const [moveError, setMoveError] = useState("");
+  const [selectedGlobalKeys, setSelectedGlobalKeys] = useState<Set<string>>(() => new Set());
+  const [selectedAppVarKeys, setSelectedAppVarKeys] = useState<Set<string>>(() => new Set());
   const [envSubmitting, setEnvSubmitting] = useState(false);
   const [envDialogError, setEnvDialogError] = useState("");
   const [envDeleteTarget, setEnvDeleteTarget] = useState<MaskedAppEnvVar | null>(
@@ -570,10 +581,36 @@ export default function AppDetail({
     setShowEnvDialog(true);
   };
 
-  const openMoveDialog = (direction: MoveDirection, key: string) => {
+  const openMoveDialog = (direction: MoveDirection, keys: string[]) => {
+    if (keys.length === 0) {
+      return;
+    }
     setMoveError("");
-    setMoveTarget({ direction, key });
+    setMoveTarget({ direction, keys });
   };
+
+  const toggleKeyIn = (
+    setter: Dispatch<SetStateAction<Set<string>>>,
+    key: string
+  ) =>
+    setter((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+
+  const toggleAllIn = (
+    setter: Dispatch<SetStateAction<Set<string>>>,
+    keys: string[]
+  ) =>
+    setter((previous) => {
+      const everySelected = keys.length > 0 && keys.every((key) => previous.has(key));
+      return everySelected ? new Set() : new Set(keys);
+    });
 
   const runMove = async (disposition: MoveDisposition) => {
     if (!moveTarget) {
@@ -584,23 +621,38 @@ export default function AppDetail({
       setMoving(true);
       setMoveError("");
 
-      const response = await fetch(`/api/apps/${appId}/environment/move`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...moveTarget, disposition })
-      });
-
-      if (!response.ok) {
-        throw new Error(await readApiError(response, "Unable to move the variable"));
+      const failures: string[] = [];
+      for (const key of moveTarget.keys) {
+        const response = await fetch(`/api/apps/${appId}/environment/move`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ direction: moveTarget.direction, key, disposition })
+        });
+        if (!response.ok) {
+          failures.push(key);
+        }
       }
 
       const movedTo = moveTarget.direction === "global-to-app" ? "this app" : "the global scope";
-      setNotice(`${moveTarget.key} was moved to ${movedTo}.`);
-      setMoveTarget(null);
+      const moved = moveTarget.keys.length - failures.length;
+
+      if (failures.length > 0) {
+        setMoveError(`Moved ${moved}, but failed for: ${failures.join(", ")}.`);
+      } else {
+        setNotice(
+          moveTarget.keys.length === 1
+            ? `${moveTarget.keys[0]} was moved to ${movedTo}.`
+            : `${moved} variables were moved to ${movedTo}.`
+        );
+        setMoveTarget(null);
+      }
+
+      setSelectedGlobalKeys(new Set());
+      setSelectedAppVarKeys(new Set());
       await loadEnvironment();
       void loadDetail();
     } catch (error) {
-      setMoveError(error instanceof Error ? error.message : "Unable to move the variable");
+      setMoveError(error instanceof Error ? error.message : "Unable to move the variables");
     } finally {
       setMoving(false);
     }
@@ -1321,6 +1373,28 @@ export default function AppDetail({
                   </button>
                 </div>
 
+                {selectedGlobalKeys.size > 0 && (
+                  <div className="apps-bulk-actions" role="toolbar" aria-label="Bulk global variable actions">
+                    <strong>{selectedGlobalKeys.size} selected</strong>
+                    <div className="apps-bulk-action-buttons">
+                      <button
+                        className="primary-button compact"
+                        type="button"
+                        onClick={() => openMoveDialog("global-to-app", [...selectedGlobalKeys])}
+                      >
+                        Move to app
+                      </button>
+                      <button
+                        className="secondary-button compact"
+                        type="button"
+                        onClick={() => setSelectedGlobalKeys(new Set())}
+                      >
+                        Clear selection
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {inheritedGlobals.length === 0 ? (
                   <div className="empty-state">
                     No enabled global variables are currently inherited.
@@ -1330,6 +1404,22 @@ export default function AppDetail({
                     <table className="env-table">
                       <thead>
                         <tr>
+                          <th className="env-select-cell">
+                            <input
+                              type="checkbox"
+                              aria-label="Select all inherited variables"
+                              checked={
+                                inheritedGlobals.length > 0 &&
+                                inheritedGlobals.every((v) => selectedGlobalKeys.has(v.key))
+                              }
+                              onChange={() =>
+                                toggleAllIn(
+                                  setSelectedGlobalKeys,
+                                  inheritedGlobals.map((v) => v.key)
+                                )
+                              }
+                            />
+                          </th>
                           <th>Key</th>
                           <th>Value</th>
                           <th aria-label="Actions" />
@@ -1338,6 +1428,14 @@ export default function AppDetail({
                       <tbody>
                         {inheritedGlobals.map((variable) => (
                           <tr key={variable.key}>
+                            <td className="env-select-cell">
+                              <input
+                                type="checkbox"
+                                aria-label={`Select ${variable.key}`}
+                                checked={selectedGlobalKeys.has(variable.key)}
+                                onChange={() => toggleKeyIn(setSelectedGlobalKeys, variable.key)}
+                              />
+                            </td>
                             <td className="env-key-cell">
                               <code>{variable.key}</code>
                               {variable.isSecret && (
@@ -1373,7 +1471,7 @@ export default function AppDetail({
                               <button
                                 className="secondary-button compact"
                                 type="button"
-                                onClick={() => openMoveDialog("global-to-app", variable.key)}
+                                onClick={() => openMoveDialog("global-to-app", [variable.key])}
                               >
                                 Move to app
                               </button>
@@ -1410,6 +1508,28 @@ export default function AppDetail({
                   </div>
                 </div>
 
+                {selectedAppVarKeys.size > 0 && (
+                  <div className="apps-bulk-actions" role="toolbar" aria-label="Bulk app variable actions">
+                    <strong>{selectedAppVarKeys.size} selected</strong>
+                    <div className="apps-bulk-action-buttons">
+                      <button
+                        className="primary-button compact"
+                        type="button"
+                        onClick={() => openMoveDialog("app-to-global", [...selectedAppVarKeys])}
+                      >
+                        Move to global
+                      </button>
+                      <button
+                        className="secondary-button compact"
+                        type="button"
+                        onClick={() => setSelectedAppVarKeys(new Set())}
+                      >
+                        Clear selection
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <EnvVarTable
                   variables={appVars}
                   emptyMessage="No app-specific variables yet. Add one, or override a global variable above."
@@ -1422,7 +1542,13 @@ export default function AppDetail({
                   busyId={envDeleting ? envDeleteTarget?.id ?? null : null}
                   extraAction={{
                     label: "Move to global",
-                    onClick: (variable) => openMoveDialog("app-to-global", variable.key)
+                    onClick: (variable) => openMoveDialog("app-to-global", [variable.key])
+                  }}
+                  selection={{
+                    selectedKeys: selectedAppVarKeys,
+                    onToggle: (key) => toggleKeyIn(setSelectedAppVarKeys, key),
+                    onToggleAll: () =>
+                      toggleAllIn(setSelectedAppVarKeys, appVars.map((variable) => variable.key))
                   }}
                 />
 
@@ -1666,7 +1792,7 @@ export default function AppDetail({
 
       <MoveVariableDialog
         open={moveTarget !== null}
-        keyName={moveTarget?.key ?? ""}
+        keys={moveTarget?.keys ?? []}
         direction={moveTarget?.direction ?? "global-to-app"}
         submitting={moving}
         error={moveError}

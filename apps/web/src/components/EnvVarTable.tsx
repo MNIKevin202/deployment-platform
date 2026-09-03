@@ -8,6 +8,12 @@ interface EnvVarTableProps {
   busyId?: number | null;
   /** Optional extra per-row action, shown before Edit (e.g. "Move to global"). */
   extraAction?: { label: string; onClick: (variable: MaskedGlobalEnvVar) => void };
+  /** When provided, renders a leading checkbox column for bulk selection. */
+  selection?: {
+    selectedKeys: ReadonlySet<string>;
+    onToggle: (key: string) => void;
+    onToggleAll: () => void;
+  };
 }
 
 function formatDate(value: string): string {
@@ -21,17 +27,33 @@ export default function EnvVarTable({
   onEdit,
   onDelete,
   busyId,
-  extraAction
+  extraAction,
+  selection
 }: EnvVarTableProps) {
   if (variables.length === 0) {
     return <div className="empty-state">{emptyMessage}</div>;
   }
+
+  const allSelected =
+    selection !== undefined &&
+    variables.length > 0 &&
+    variables.every((variable) => selection.selectedKeys.has(variable.key));
 
   return (
     <div className="table-wrap">
       <table className="env-table">
         <thead>
           <tr>
+            {selection && (
+              <th className="env-select-cell">
+                <input
+                  type="checkbox"
+                  aria-label="Select all"
+                  checked={allSelected}
+                  onChange={selection.onToggleAll}
+                />
+              </th>
+            )}
             <th>Key</th>
             <th>Value</th>
             <th>Status</th>
@@ -42,6 +64,16 @@ export default function EnvVarTable({
         <tbody>
           {variables.map((variable) => (
             <tr key={variable.id}>
+              {selection && (
+                <td className="env-select-cell">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${variable.key}`}
+                    checked={selection.selectedKeys.has(variable.key)}
+                    onChange={() => selection.onToggle(variable.key)}
+                  />
+                </td>
+              )}
               <td className="env-key-cell">
                 <code>{variable.key}</code>
                 {variable.isSecret && (

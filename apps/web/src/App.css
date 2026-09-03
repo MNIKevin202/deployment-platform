@@ -4653,3 +4653,16 @@ code {
 /* Move-variable dialog (global ⇄ app). */
 .form-modal-body { display: grid; gap: 14px; padding: 22px; }
 .move-variable-actions { flex-wrap: wrap; }
+
+/* Env-var table selection column + move dialog key list. */
+.env-select-cell { width: 1%; white-space: nowrap; }
+.env-select-cell input { accent-color: var(--color-accent); }
+.move-variable-keys {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 0.82rem;
+}
