@@ -255,6 +255,9 @@ export default function AppDetail({
   >(null);
   const [actionError, setActionError] = useState("");
   const [notice, setNotice] = useState("");
+  // After an environment change, offer to restart so the new values take
+  // effect in the running container. Null = no pending prompt.
+  const [restartPrompt, setRestartPrompt] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   // A ref, not the `actionLoading` state, is what actually prevents a second
   // delete request — see submitLockRef in CreateAppWizard for why a state
@@ -466,6 +469,7 @@ export default function AppDetail({
     try {
       setActionError("");
       setNotice("");
+      setRestartPrompt(null);
       setActionLoading(action);
 
       const response = await fetch(
@@ -488,6 +492,15 @@ export default function AppDetail({
       );
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  // Environment changes only reach the running process on a restart, so after
+  // a successful change we surface a one-click restart prompt (skipped when
+  // there is no live container to restart).
+  const promptRestartForEnv = (message: string) => {
+    if (detail?.containerExists) {
+      setRestartPrompt(message);
     }
   };
 
@@ -645,6 +658,11 @@ export default function AppDetail({
             : `${moved} variables were moved to ${movedTo}.`
         );
         setMoveTarget(null);
+        promptRestartForEnv(
+          moved === 1
+            ? `${moveTarget.keys[0]} was moved. Restart the app to apply the change?`
+            : `${moved} variables were moved. Restart the app to apply the changes?`
+        );
       }
 
       setSelectedGlobalKeys(new Set());
@@ -689,6 +707,7 @@ export default function AppDetail({
         }
 
         setNotice(`${editingVar.key} was updated.`);
+        promptRestartForEnv(`${editingVar.key} was updated. Restart the app to apply the change?`);
       } else {
         const response = await fetch(`/api/apps/${appId}/environment`, {
           method: "POST",
@@ -703,6 +722,7 @@ export default function AppDetail({
         }
 
         setNotice(`${values.key} was added.`);
+        promptRestartForEnv(`${values.key} was added. Restart the app to apply the change?`);
       }
 
       setShowEnvDialog(false);
@@ -750,6 +770,9 @@ export default function AppDetail({
           ? `Applied variables — ${parts.join(", ")}.`
           : "No changes were applied."
       );
+      if (parts.length > 0) {
+        promptRestartForEnv("Variables were applied. Restart the app to apply the changes?");
+      }
 
       setShowBulkEnvDialog(false);
       await loadEnvironment();
@@ -821,6 +844,7 @@ export default function AppDetail({
       }
 
       setNotice(`${envDeleteTarget.key} was deleted.`);
+      promptRestartForEnv(`${envDeleteTarget.key} was deleted. Restart the app to apply the change?`);
       setEnvDeleteTarget(null);
       await loadEnvironment();
       await loadDetail();
@@ -1115,6 +1139,29 @@ export default function AppDetail({
         <div className="error-banner">{actionError}</div>
       )}
       {notice && <div className="notice-banner">{notice}</div>}
+      {restartPrompt && (
+        <div className="notice-banner restart-prompt" role="status">
+          <span>{restartPrompt}</span>
+          <div className="restart-prompt-actions">
+            <button
+              className="primary-button compact"
+              type="button"
+              disabled={actionLoading !== null}
+              onClick={() => void runAction("restart")}
+            >
+              {actionLoading === "restart" ? "Restarting…" : "Restart now"}
+            </button>
+            <button
+              className="secondary-button compact"
+              type="button"
+              disabled={actionLoading !== null}
+              onClick={() => setRestartPrompt(null)}
+            >
+              Later
+            </button>
+          </div>
+        </div>
+      )}
 
       {!detail.containerExists && (
         <div className="error-banner">
