@@ -5,7 +5,7 @@ import CreateAppWizard from "../components/CreateAppWizard";
 import type { CreatedAppSummary } from "../types/api";
 
 /**
- * Covers the wizard's "Domain & Networking" step: choosing Public (default
+ * Covers the wizard's "Networking" step: choosing Public (default
  * or custom domain) vs Internal-only, validating a custom domain before
  * submission, and sending the resulting internalOnly/customDomain fields to
  * POST /api/apps/wizard.
@@ -81,9 +81,7 @@ async function advanceToDomainStep(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText("Docker image", { exact: false }), "nginx:alpine");
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(await screen.findByRole("button", { name: "Continue" }));
-  await user.click(await screen.findByRole("button", { name: "Continue" }));
-  await user.click(await screen.findByRole("button", { name: "Continue" }));
-  // Now on step 5, Domain & Networking.
+  // Now on step 3, Networking.
 }
 
 describe("CreateAppWizard — routing choice", () => {

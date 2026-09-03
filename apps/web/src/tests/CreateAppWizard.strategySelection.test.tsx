@@ -147,10 +147,8 @@ describe("CreateAppWizard — manual deployment-strategy override", () => {
     const nameInput = screen.getByPlaceholderText("hello-nginx");
     await user.clear(nameInput);
     await user.type(nameInput, "roadmapstudio-web");
-    await user.click(screen.getByRole("button", { name: "Continue" })); // Runtime
-    await user.click(screen.getByRole("button", { name: "Continue" })); // Environment
-    await user.click(screen.getByRole("button", { name: "Continue" })); // Storage
-    await user.click(screen.getByRole("button", { name: "Continue" })); // Domain
+    await user.click(screen.getByRole("button", { name: "Continue" })); // Configure
+    await user.click(screen.getByRole("button", { name: "Continue" })); // Networking
     await user.click(screen.getByRole("button", { name: "Continue" })); // Review
     await screen.findByText("Claude Build Brief");
 

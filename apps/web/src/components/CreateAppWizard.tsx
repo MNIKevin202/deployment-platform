@@ -67,13 +67,11 @@ interface CreateAppWizardProps {
 }
 
 const STEP_LABELS = [
-  "Source",
+  "Start",
   "Basics",
-  "Runtime",
-  "Environment",
-  "Storage",
-  "Domain & Networking",
-  "Review & Create"
+  "Configure",
+  "Networking",
+  "Review"
 ] as const;
 
 const LAST_STEP = STEP_LABELS.length - 1;
@@ -802,9 +800,8 @@ export default function CreateAppWizard({
   const stepValid = [
     sourceValid,
     basicsValid,
-    runtimeValid,
-    environmentValid,
-    storageValid && portsValidationError === null,
+    // "Configure" merges the former Runtime + Environment + Storage steps.
+    runtimeValid && environmentValid && storageValid && portsValidationError === null,
     domainValid,
     true
   ][step];
@@ -881,7 +878,7 @@ export default function CreateAppWizard({
   }, [basicsValid, runtimeValid, buildBriefPayload]);
 
   useEffect(() => {
-    if (open && step >= 5 && basicsValid && runtimeValid && domainValid) {
+    if (open && step >= 3 && basicsValid && runtimeValid && domainValid) {
       void fetchBrief();
     }
     // fetchBrief's own dependency list already captures every field that
@@ -2021,6 +2018,16 @@ export default function CreateAppWizard({
 
               {step === 2 && (
                 <>
+                  <p className="dialog-description">
+                    Optional. A simple deployment can go straight to Networking —
+                    expand a section only if you need to change it.
+                  </p>
+                  <details className="wizard-disclose" open>
+                    <summary>
+                      <span>Runtime &amp; resources</span>
+                      <span className="wizard-disclose-hint">port, limits, restart</span>
+                    </summary>
+                    <div className="wizard-disclose-body">
                   <label>
                     <span>Container port</span>
                     <input
@@ -2157,11 +2164,15 @@ export default function CreateAppWizard({
                     />
                     <small>Included as a suggestion in the build brief.</small>
                   </label>
-                </>
-              )}
+                    </div>
+                  </details>
 
-              {step === 3 && (
-                <>
+                  <details className="wizard-disclose">
+                    <summary>
+                      <span>Environment variables</span>
+                      <span className="wizard-disclose-hint">app + inherited global vars</span>
+                    </summary>
+                    <div className="wizard-disclose-body">
                   <div className="env-scope-block">
                     <div className="env-scope-heading">
                       <h3>Inherited from Global</h3>
@@ -2462,11 +2473,16 @@ export default function CreateAppWizard({
                       <div className="error-banner">{envValidationError}</div>
                     )}
                   </div>
-                </>
-              )}
+                    </div>
+                  </details>
 
-              {step === 4 && (
-                <div className="env-scope-block">
+                  <details className="wizard-disclose">
+                    <summary>
+                      <span>Storage &amp; published ports</span>
+                      <span className="wizard-disclose-hint">volumes, raw TCP/UDP</span>
+                    </summary>
+                    <div className="wizard-disclose-body">
+                  <div className="env-scope-block">
                   <div className="env-scope-heading">
                     <h3>Persistent Storage</h3>
                     <button
@@ -2652,9 +2668,12 @@ export default function CreateAppWizard({
                     <div className="error-banner">{portsValidationError}</div>
                   )}
                 </div>
+                    </div>
+                  </details>
+                </>
               )}
 
-              {step === 5 && (
+              {step === 3 && (
                 <div className="wizard-form-grid">
                   <fieldset className="wizard-fieldset">
                     <legend>Routing</legend>
@@ -2770,7 +2789,7 @@ export default function CreateAppWizard({
                 </div>
               )}
 
-              {step === 6 && (
+              {step === 4 && (
                 <>
                   <dl className="wizard-review-grid">
                     <div>

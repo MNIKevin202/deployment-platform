@@ -76,7 +76,7 @@ function installFetchMock(options: { pullOk?: boolean } = {}): FetchLog {
 
 /** Walks the wizard from the pre-filled Basics step to Review and submits. */
 async function submitWizard(user: ReturnType<typeof userEvent.setup>) {
-  for (let step = 0; step < 5; step += 1) {
+  for (let step = 0; step < 3; step += 1) {
     await user.click(screen.getByRole("button", { name: "Continue" }));
   }
   await user.click(screen.getByRole("button", { name: "Create App" }));
