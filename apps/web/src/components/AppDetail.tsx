@@ -25,6 +25,7 @@ import type {
 import StatusBadge from "./StatusBadge";
 import ImageUpdateBanner from "./ImageUpdateBanner";
 import ConfirmationDialog from "./ConfirmationDialog";
+import DeploymentFailureModal from "./DeploymentFailureModal";
 import Tabs from "./Tabs";
 import EnvVarTable from "./EnvVarTable";
 import EnvVarDialog from "./EnvVarDialog";
@@ -258,6 +259,12 @@ export default function AppDetail({
   // After an environment change, offer to restart so the new values take
   // effect in the running container. Null = no pending prompt.
   const [redeployPrompt, setRedeployPrompt] = useState<string | null>(null);
+  // A failed image redeploy surfaces its reason here (GitHub build failures
+  // are shown by the site-wide deployment overlay instead).
+  const [redeployFailure, setRedeployFailure] = useState<{
+    reason: string;
+    rolledBack: boolean;
+  } | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   // A ref, not the `actionLoading` state, is what actually prevents a second
   // delete request — see submitLockRef in CreateAppWizard for why a state
@@ -557,19 +564,35 @@ export default function AppDetail({
         .json()
         .catch(() => ({}))) as Partial<RedeployResponse>;
 
+      // Always dismiss the confirmation dialog once the request resolves —
+      // leaving it open on failure left it stuck on "Working…", covering the
+      // failure the operator needs to read.
+      setShowRedeployConfirm(false);
+
       if (!response.ok) {
-        throw new Error(result.message || "Unable to redeploy app");
+        const message = result.message || "Unable to redeploy app";
+        if (result.viaProgress) {
+          // A GitHub build redeploy: the deployment overlay already shows the
+          // failure modal with the build log. A banner is the fallback.
+          setActionError(message);
+        } else {
+          // A plain image redeploy has no build/progress stream, so surface
+          // the failure here in its own modal.
+          setRedeployFailure({ reason: message, rolledBack: Boolean(result.rolledBack) });
+        }
+        return;
       }
 
-      setShowRedeployConfirm(false);
       setRedeployPrompt(null);
       setNotice(result.message || "App redeployed successfully.");
       await loadDetail();
       onAppChanged();
     } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : "Unable to redeploy app"
-      );
+      setShowRedeployConfirm(false);
+      setRedeployFailure({
+        reason: error instanceof Error ? error.message : "Unable to redeploy app",
+        rolledBack: false
+      });
     } finally {
       setActionLoading(null);
     }
@@ -1921,6 +1944,16 @@ export default function AppDetail({
         onConfirm={() => void confirmRedeploy()}
         onCancel={() => setShowRedeployConfirm(false)}
       />
+
+      {redeployFailure && (
+        <DeploymentFailureModal
+          appId={appId}
+          appName={detail.name}
+          reason={redeployFailure.reason}
+          rolledBack={redeployFailure.rolledBack}
+          onClose={() => setRedeployFailure(null)}
+        />
+      )}
 
       <ConfirmationDialog
         open={redeployPrompt !== null}

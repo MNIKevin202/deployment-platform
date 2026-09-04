@@ -848,14 +848,19 @@ app.post<{ Params: AppIdParams }>(
         return reply.code(502).send({
           success: false,
           message: deployResult.message,
-          rolledBack: deployResult.rolledBack
+          rolledBack: deployResult.rolledBack,
+          // The deployment overlay already streams this build's progress and
+          // shows the failure modal (with the build log), so the client does
+          // not need to raise its own.
+          viaProgress: true
         });
       }
 
       return reply.send({
         success: true,
         message: deployResult.message,
-        containerId: deployResult.containerId
+        containerId: deployResult.containerId,
+        viaProgress: true
       });
     }
 
@@ -877,14 +882,18 @@ app.post<{ Params: AppIdParams }>(
 
       return reply.code(502).send({
         success: false,
-        message: result.message
+        message: result.message,
+        // No build/progress stream for a plain image redeploy, so the client
+        // surfaces this failure itself.
+        viaProgress: false
       });
     }
 
     return reply.send({
       success: true,
       message: result.message,
-      containerId: result.containerId
+      containerId: result.containerId,
+      viaProgress: false
     });
   }
 );

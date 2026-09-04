@@ -233,6 +233,14 @@ export interface RedeployResponse {
   success: boolean;
   message: string;
   containerId?: string;
+  /** Set on a failure that rolled back to the previously running container. */
+  rolledBack?: boolean;
+  /**
+   * True when this redeploy went through the GitHub build pipeline, whose
+   * failures are surfaced by the site-wide deployment overlay (with the build
+   * log). When false/absent, the caller is responsible for showing the failure.
+   */
+  viaProgress?: boolean;
 }
 
 export interface StoredAppVolume {
