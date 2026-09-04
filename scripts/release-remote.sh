@@ -1832,6 +1832,54 @@ if [ "${DEPLOY_INSTALLER}" -eq 1 ]; then
     UPDATE_REPLACED=1
     info "Update command refreshed: ${UPDATE_TARGET}"
   fi
+
+  # Continuous auto-updater: install (or refresh) the loop wrapper and the
+  # scheduler that runs it. This is what makes an install track upstream on
+  # its own. Installs that predate this feature have no scheduler, so this is
+  # run on EVERY refresh (not just when other files changed) to converge them
+  # onto it. All steps are idempotent and tolerate being absent.
+  UPDATE_LOOP_TARGET="/usr/local/bin/deployment-platform-update-loop"
+  UPDATE_LOOP_TEMPLATE="${INSTALL_ROOT}/installer/templates/deployment-platform-update-loop.template"
+  if [ -f "${UPDATE_LOOP_TEMPLATE}" ]; then
+    if bash -n "${UPDATE_LOOP_TEMPLATE}" 2>/dev/null && cp "${UPDATE_LOOP_TEMPLATE}" "${UPDATE_LOOP_TARGET}"; then
+      chmod 755 "${UPDATE_LOOP_TARGET}"
+    else
+      info "WARNING: could not install ${UPDATE_LOOP_TARGET}; continuous auto-updates may not run."
+    fi
+
+    if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+      SERVICE_TEMPLATE="${INSTALL_ROOT}/installer/templates/deployment-platform-update.service.template"
+      if [ -f "${SERVICE_TEMPLATE}" ] && cp "${SERVICE_TEMPLATE}" /etc/systemd/system/deployment-platform-update.service; then
+        chmod 644 /etc/systemd/system/deployment-platform-update.service
+        rm -f /etc/cron.d/deployment-platform-update
+        systemctl daemon-reload || true
+        systemctl enable deployment-platform-update.service >/dev/null 2>&1 || true
+        # Deliberately NOT a restart: this refresh may itself be running
+        # inside the updater service, and restarting would kill the process
+        # tree executing it. Only start when not already active, so the
+        # bootstrap turns it on without an in-flight update killing itself.
+        # A changed unit is picked up on the next natural (re)start;
+        # KillMode=process keeps any in-flight update alive regardless.
+        if systemctl is-active --quiet deployment-platform-update.service; then
+          info "Continuous auto-updates already running (systemd)."
+        else
+          systemctl start deployment-platform-update.service || true
+          info "Continuous auto-updates enabled (systemd, checks every 30s)."
+        fi
+      else
+        info "WARNING: could not install the updater systemd unit; continuous auto-updates may not run."
+      fi
+    else
+      cat > /etc/cron.d/deployment-platform-update <<'CRON'
+# Deployment Platform continuous auto-updater (cron fallback for hosts
+# without systemd). Checks every minute; the update command exits early via
+# `git ls-remote` unless upstream has actually moved.
+* * * * * root flock -n /run/lock/deployment-platform-update.lock /usr/local/bin/deployment-platform-update >/dev/null 2>&1
+CRON
+      chmod 644 /etc/cron.d/deployment-platform-update
+      info "Continuous auto-updates enabled (cron fallback, checks every minute)."
+    fi
+  fi
 fi
 
 if [ "${DEPLOY_CADDY_CONFIG}" -eq 1 ]; then

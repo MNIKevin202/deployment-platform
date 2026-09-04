@@ -2534,6 +2534,40 @@ fi
 assert_failure "install.sh --non-interactive without install arguments still fails" test "$INSTALL_NONINTERACTIVE_STATUS" -eq 0
 
 echo
+echo "=== Continuous auto-updater scheduler ==="
+# shellcheck source=../lib/scheduler.sh
+source "$INSTALLER_DIR/lib/scheduler.sh"
+
+assert_success "scheduler.sh defines install_update_scheduler" declare -F install_update_scheduler
+assert_success "scheduler.sh defines systemd_available" declare -F systemd_available
+
+# The loop wrapper is a real bash script the service/cron run — it must parse.
+assert_success "update-loop template has valid bash syntax" \
+  bash -n "$INSTALLER_DIR/templates/deployment-platform-update-loop.template"
+
+# A dry run must never touch the host (no cp/systemctl/cron writes) and must
+# still succeed on both the systemd and non-systemd branches.
+SCHED_DRY_OUTPUT="$(DRY_RUN=1 install_update_scheduler 2>&1)" && SCHED_DRY_STATUS=0 || SCHED_DRY_STATUS=$?
+assert_eq "install_update_scheduler succeeds in dry-run" "0" "$SCHED_DRY_STATUS"
+assert_contains "dry-run scheduler announces the loop wrapper install" \
+  "$SCHED_DRY_OUTPUT" "deployment-platform-update-loop"
+
+# The systemd unit must keep the loop alive and never tear a running update
+# out from under itself (KillMode=process), and the cron fallback must be
+# per-minute so "always checking" holds without systemd.
+SERVICE_TEMPLATE_BODY="$(cat "$INSTALLER_DIR/templates/deployment-platform-update.service.template")"
+assert_contains "updater unit runs the loop wrapper" \
+  "$SERVICE_TEMPLATE_BODY" "ExecStart=/usr/local/bin/deployment-platform-update-loop"
+assert_contains "updater unit restarts always" "$SERVICE_TEMPLATE_BODY" "Restart=always"
+assert_contains "updater unit uses KillMode=process" "$SERVICE_TEMPLATE_BODY" "KillMode=process"
+
+# The one-shot update command must do the cheap ls-remote pre-check so a
+# continuous loop does not clone every tick.
+UPDATE_TEMPLATE_BODY="$(cat "$INSTALLER_DIR/templates/deployment-platform-update.template")"
+assert_contains "update command pre-checks the remote HEAD with ls-remote" \
+  "$UPDATE_TEMPLATE_BODY" "ls-remote"
+
+echo
 echo "=== ShellCheck (if available) ==="
 if command -v shellcheck >/dev/null 2>&1; then
   SHELLCHECK_FAILURES=0

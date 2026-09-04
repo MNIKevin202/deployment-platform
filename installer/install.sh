@@ -45,6 +45,8 @@ source "$SCRIPT_DIR/lib/packages.sh"
 source "$SCRIPT_DIR/lib/docker.sh"
 # shellcheck source=lib/filesystem.sh
 source "$SCRIPT_DIR/lib/filesystem.sh"
+# shellcheck source=lib/scheduler.sh
+source "$SCRIPT_DIR/lib/scheduler.sh"
 # shellcheck source=lib/secrets.sh
 source "$SCRIPT_DIR/lib/secrets.sh"
 # shellcheck source=lib/source.sh

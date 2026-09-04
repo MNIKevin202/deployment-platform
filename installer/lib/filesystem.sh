@@ -56,6 +56,7 @@ setup_filesystem() {
   install_installer_copy
   install_cli_command
   install_update_command
+  install_update_scheduler
 
   log_pass "Filesystem layout ready at $INSTALL_ROOT"
 }
