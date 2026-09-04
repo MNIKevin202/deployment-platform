@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DeployProgress } from "../types/api";
+import DeploymentFailureModal from "./DeploymentFailureModal";
 
 interface DeploymentProgressOverlayProps {
   /** Navigates to an app's detail page (used by the failure card). */
   onViewApp: (appId: number) => void;
+}
+
+/** The failing deployment currently shown in the failure modal, if any. */
+interface FailureModalState {
+  appId: number;
+  appName: string;
+  reason: string | null;
+  rolledBack: boolean;
 }
 
 /**
@@ -28,7 +37,34 @@ export default function DeploymentProgressOverlay({
   onViewApp
 }: DeploymentProgressOverlayProps) {
   const [deployments, setDeployments] = useState<DeployProgress[]>([]);
+  const [failureModal, setFailureModal] = useState<FailureModalState | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
+  // Which failures have already auto-opened the modal, so a repeated SSE frame
+  // for the same failed run can't reopen it after the operator closed it. Keyed
+  // by appId + finish time, so a genuinely new failure of the same app opens
+  // fresh. A snapshot on (re)connect is NOT auto-surfaced — only a live
+  // transition to failed is — so reconnecting doesn't resurface an old failure.
+  const surfacedFailures = useRef<Set<string>>(new Set());
+
+  const failureKey = (deployment: DeployProgress): string =>
+    `${deployment.appId}:${deployment.finishedAt ?? ""}`;
+
+  const maybeSurfaceFailure = useCallback((deployment: DeployProgress) => {
+    if (deployment.status !== "failed") {
+      return;
+    }
+    const key = failureKey(deployment);
+    if (surfacedFailures.current.has(key)) {
+      return;
+    }
+    surfacedFailures.current.add(key);
+    setFailureModal({
+      appId: deployment.appId,
+      appName: deployment.appName,
+      reason: deployment.error,
+      rolledBack: deployment.rolledBack
+    });
+  }, []);
 
   const upsert = useCallback((next: DeployProgress) => {
     setDeployments((current) => {
@@ -70,7 +106,11 @@ export default function DeploymentProgressOverlay({
 
     source.addEventListener("progress", (event) => {
       try {
-        upsert(JSON.parse((event as MessageEvent).data) as DeployProgress);
+        const deployment = JSON.parse((event as MessageEvent).data) as DeployProgress;
+        upsert(deployment);
+        // A live transition to "failed" pops the failure modal so the build
+        // output is seen immediately, not hunted for after a rollback.
+        maybeSurfaceFailure(deployment);
       } catch {
         // As above.
       }
@@ -97,24 +137,48 @@ export default function DeploymentProgressOverlay({
     }
   };
 
-  if (deployments.length === 0) {
-    return null;
-  }
-
   return (
-    <div className="deploy-overlay" role="status" aria-live="polite">
-      {deployments.map((deployment) => (
-        <DeploymentCard
-          key={deployment.appId}
-          deployment={deployment}
-          onDismiss={() => void dismiss(deployment.appId)}
-          onViewApp={() => {
-            void dismiss(deployment.appId);
-            onViewApp(deployment.appId);
+    <>
+      {deployments.length > 0 && (
+        <div className="deploy-overlay" role="status" aria-live="polite">
+          {deployments.map((deployment) => (
+            <DeploymentCard
+              key={deployment.appId}
+              deployment={deployment}
+              onDismiss={() => void dismiss(deployment.appId)}
+              onViewApp={() => {
+                void dismiss(deployment.appId);
+                onViewApp(deployment.appId);
+              }}
+              onViewFailure={() =>
+                setFailureModal({
+                  appId: deployment.appId,
+                  appName: deployment.appName,
+                  reason: deployment.error,
+                  rolledBack: deployment.rolledBack
+                })
+              }
+            />
+          ))}
+        </div>
+      )}
+
+      {failureModal && (
+        <DeploymentFailureModal
+          appId={failureModal.appId}
+          appName={failureModal.appName}
+          reason={failureModal.reason}
+          rolledBack={failureModal.rolledBack}
+          onClose={() => setFailureModal(null)}
+          onOpenFullLogs={() => {
+            const { appId } = failureModal;
+            setFailureModal(null);
+            void dismiss(appId);
+            onViewApp(appId);
           }}
         />
-      ))}
-    </div>
+      )}
+    </>
   );
 }
 
@@ -134,9 +198,10 @@ interface DeploymentCardProps {
   deployment: DeployProgress;
   onDismiss: () => void;
   onViewApp: () => void;
+  onViewFailure: () => void;
 }
 
-function DeploymentCard({ deployment, onDismiss, onViewApp }: DeploymentCardProps) {
+function DeploymentCard({ deployment, onDismiss, onViewApp, onViewFailure }: DeploymentCardProps) {
   const failed = deployment.status === "failed";
   const succeeded = deployment.status === "succeeded";
 
@@ -208,8 +273,11 @@ function DeploymentCard({ deployment, onDismiss, onViewApp }: DeploymentCardProp
             </p>
           )}
           <div className="deploy-overlay-actions">
+            <button type="button" className="primary-button compact" onClick={onViewFailure}>
+              View build log
+            </button>
             <button type="button" className="secondary-button compact" onClick={onViewApp}>
-              View logs
+              Open app
             </button>
           </div>
         </>

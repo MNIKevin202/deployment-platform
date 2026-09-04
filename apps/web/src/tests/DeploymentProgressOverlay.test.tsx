@@ -203,14 +203,29 @@ describe("DeploymentProgressOverlay", () => {
     expect(await screen.findByText("The previous version was restored.")).toBeInTheDocument();
   });
 
-  test("View logs navigates to the failed app", async () => {
+  test("Open app navigates to the failed app", async () => {
     const harness = installEventSource();
     const onViewApp = vi.fn();
     render(<DeploymentProgressOverlay onViewApp={onViewApp} />);
     harness.emitSnapshot([deployment({ status: "failed", error: "boom" })]);
 
-    await userEvent.click(await screen.findByRole("button", { name: "View logs" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Open app" }));
     expect(onViewApp).toHaveBeenCalledWith(34);
+  });
+
+  test("a live failure auto-opens the build-failure modal; a snapshot failure does not", async () => {
+    const harness = installEventSource();
+    render(<DeploymentProgressOverlay onViewApp={() => {}} />);
+
+    // A snapshot (e.g. on reconnect) must not resurface an old failure.
+    harness.emitSnapshot([deployment({ status: "failed", error: "old boom" })]);
+    expect(await screen.findByText("staxxio")).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+    // A live transition to failed pops the modal with the build output.
+    harness.emitProgress(deployment({ status: "failed", error: "fresh boom" }));
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    expect(screen.getByText(/didn.t deploy/)).toBeInTheDocument();
   });
 
   test("a completed deployment reports 100% and can be dismissed", async () => {
