@@ -107,6 +107,7 @@ function createFakeOps(
     },
 
     async renameContainer() {},
+    async refreshNetworkEndpoint() {},
 
     async containerExists() {
       return false;

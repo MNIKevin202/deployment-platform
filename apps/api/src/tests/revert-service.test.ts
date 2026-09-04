@@ -46,6 +46,7 @@ function createFakeOps(options: FakeOpsOptions = {}): {
     },
     async removeContainer() {},
     async renameContainer() {},
+    async refreshNetworkEndpoint() {},
     async ensureVolume() {},
     async containerExists() {
       return true;

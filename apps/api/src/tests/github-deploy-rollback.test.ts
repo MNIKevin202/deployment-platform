@@ -56,6 +56,8 @@ interface FakeDockerOptions {
   startReplacementFails?: boolean;
   replacementNeverRunning?: boolean;
   replacementNetworkAddress?: string;
+  /** Managed-network IP reported for the seeded (old/restored) container. */
+  currentNetworkAddress?: string;
 }
 
 function dockerNotFound(): Error {
@@ -128,13 +130,15 @@ function createFakeDocker(options: FakeDockerOptions) {
       if (container.id.startsWith("replacement") && options.replacementNeverRunning) {
         running = false;
       }
+      const isReplacement = container.id.startsWith("replacement");
+      const address = isReplacement
+        ? options.replacementNetworkAddress
+        : options.currentNetworkAddress;
       return {
         id: container.id,
         running,
         status: running ? "running" : "created",
-        networkAddresses: container.id.startsWith("replacement") && options.replacementNetworkAddress
-          ? { "deployment-apps": options.replacementNetworkAddress }
-          : undefined
+        networkAddresses: address ? { "deployment-apps": address } : undefined
       };
     },
     async containerExists(name) {
@@ -164,6 +168,15 @@ function createFakeDocker(options: FakeDockerOptions) {
       const [oldName, container] = found;
       byName.delete(oldName);
       byName.set(newName, container);
+    },
+    async refreshNetworkEndpoint(containerId, networkName) {
+      // Record BY ID so tests can prove the exact promoted/restored container
+      // was refreshed — never an unrelated or proxy container.
+      const found = findByIdOrName(containerId);
+      ops.push(`refreshNetworkEndpoint:${found ? found[1].id : containerId}:${networkName}`);
+      if (!found) {
+        throw dockerNotFound();
+      }
     }
   };
 
@@ -264,7 +277,8 @@ describe("deployFromGithub — preserve-then-swap rollback lifecycle", () => {
 
   function makeDeps(
     fake: ReturnType<typeof createFakeDocker>,
-    healthReachable: boolean
+    healthReachable: boolean,
+    extra: Partial<GithubDeployDependencies> = {}
   ): GithubDeployDependencies {
     return {
       appDatabase,
@@ -285,7 +299,10 @@ describe("deployFromGithub — preserve-then-swap rollback lifecycle", () => {
         isContainerRunning: async () => true,
         logger: silentLogger
       },
-      cloneUrlOverride: `file://${bareRepo}`
+      cloneUrlOverride: `file://${bareRepo}`,
+      // Fast, deterministic readiness loop for tests.
+      dnsReadiness: { attempts: 3, delayMs: 1 },
+      ...extra
     };
   }
 
@@ -516,5 +533,217 @@ describe("deployFromGithub — preserve-then-swap rollback lifecycle", () => {
     const serialized = JSON.stringify(recordedEvents);
     assert.equal(serialized.includes(FAKE_TOKEN), false);
     assert.equal(serialized.includes("ghs_"), false);
+  });
+
+  // ── Post-rename Docker embedded-DNS re-registration + readiness ──────────
+  //
+  // These cover the isolated bug: `docker rename` leaves the managed network's
+  // embedded DNS stale, so the canonical hostname fails to resolve, or
+  // resolves to the WRONG IP (observed: Caddy's own IP). The fix re-registers
+  // the promoted container's endpoint (disconnect+reconnect BY ID) and gates
+  // the public route check on the hostname resolving to the container's EXACT
+  // IP.
+
+  function makeAppWithDomain(name: string) {
+    const app = appDatabase.createApp({
+      name,
+      image: "nginx:alpine",
+      containerPort: 4319,
+      containerName: `app-${name}`,
+      domain: `${name}.apps.example.com`
+    });
+    configureSource(app.id);
+    return app;
+  }
+
+  /** Stubs global fetch (the public route check) and records call count. */
+  function stubPublicFetch(status = 200): { restore: () => void; calls: () => number } {
+    const original = globalThis.fetch;
+    let count = 0;
+    globalThis.fetch = (async () => {
+      count += 1;
+      return { status } as Response;
+    }) as typeof fetch;
+    return { restore: () => { globalThis.fetch = original; }, calls: () => count };
+  }
+
+  test("promotion refreshes the promoted container's exact endpoint, waits for its IP, then passes the public route", async () => {
+    const app = makeAppWithDomain("yumbot-ok");
+    const appIp = "172.23.0.5";
+    const fake = createFakeDocker({
+      currentName: app.containerName!,
+      seedCurrentContainer: true,
+      replacementNetworkAddress: appIp
+    });
+
+    const resolvedFor: string[] = [];
+    const publicFetch = stubPublicFetch(200);
+    let result;
+    try {
+      result = await deployFromGithub(
+        makeDeps(fake, true, {
+          resolveHostAddresses: async (hostname) => {
+            resolvedFor.push(hostname);
+            return [appIp]; // correct IP
+          }
+        }),
+        app.id
+      );
+    } finally {
+      publicFetch.restore();
+    }
+
+    assert.equal(result.success, true);
+
+    // Exactly one endpoint refresh, targeting the promoted container BY ID, on
+    // the managed-app network — never Caddy/api/rollback, never another network.
+    const refreshOps = fake.ops.filter((op) => op.startsWith("refreshNetworkEndpoint:"));
+    assert.deepEqual(refreshOps, ["refreshNetworkEndpoint:replacement-id-1:deployment-apps"]);
+
+    // Readiness resolved the canonical hostname (not an IP, not Caddy).
+    assert.ok(resolvedFor.includes(app.containerName!));
+
+    // The public route was verified — and only after readiness ran.
+    assert.equal(publicFetch.calls(), 1);
+  });
+
+  test("a hostname resolving to the WRONG IP (Caddy's own) is rejected: public route is never attempted, deploy rolls back with a DNS-readiness diagnostic", async () => {
+    const app = makeAppWithDomain("yumbot-wrongip");
+    const appIp = "172.23.0.5";
+    const caddyIp = "172.23.0.2";
+    const fake = createFakeDocker({
+      currentName: app.containerName!,
+      seedCurrentContainer: true,
+      replacementNetworkAddress: appIp
+    });
+
+    const publicFetch = stubPublicFetch(200);
+    let result;
+    try {
+      result = await deployFromGithub(
+        makeDeps(fake, true, {
+          // Resolves fine (exit 0) but to Caddy's own IP — must NOT be accepted.
+          resolveHostAddresses: async () => [caddyIp]
+        }),
+        app.id
+      );
+    } finally {
+      publicFetch.restore();
+    }
+
+    assert.equal(result.success, false);
+    assert.equal(result.rolledBack, true);
+    assert.match(result.message, /network\/DNS readiness/i);
+
+    // The failure names the wrong IP it saw and the expected IP.
+    const failureEvent = recordedEvents.find((e) => /DNS/i.test(e.message) && /did not become ready/i.test(e.message));
+    assert.ok(failureEvent, "a DNS-readiness failure event is recorded");
+    assert.ok(failureEvent!.message.includes(appIp), "names the expected app IP");
+
+    // The public route check must NEVER run when DNS points at the wrong IP.
+    assert.equal(publicFetch.calls(), 0);
+  });
+
+  test("a transient DNS lookup failure retries within the window and then succeeds", async () => {
+    const app = makeAppWithDomain("yumbot-transient");
+    const appIp = "172.23.0.5";
+    const fake = createFakeDocker({
+      currentName: app.containerName!,
+      seedCurrentContainer: true,
+      replacementNetworkAddress: appIp
+    });
+
+    let attempts = 0;
+    const publicFetch = stubPublicFetch(200);
+    let result;
+    try {
+      result = await deployFromGithub(
+        makeDeps(fake, true, {
+          resolveHostAddresses: async () => {
+            attempts += 1;
+            if (attempts < 2) {
+              const err = new Error("querySrv ETIMEOUT app-yumbot-transient") as Error & { code: string };
+              err.code = "ETIMEOUT";
+              throw err;
+            }
+            return [appIp];
+          }
+        }),
+        app.id
+      );
+    } finally {
+      publicFetch.restore();
+    }
+
+    assert.equal(result.success, true);
+    assert.ok(attempts >= 2, "the readiness loop retried past the transient failure");
+    assert.equal(publicFetch.calls(), 1);
+  });
+
+  test("a permanent DNS failure fails with a Docker DNS diagnostic — not a generic public 502 — and never hits the public route", async () => {
+    const app = makeAppWithDomain("yumbot-perma");
+    const fake = createFakeDocker({
+      currentName: app.containerName!,
+      seedCurrentContainer: true,
+      replacementNetworkAddress: "172.23.0.5"
+    });
+
+    const publicFetch = stubPublicFetch(200);
+    let result;
+    try {
+      result = await deployFromGithub(
+        makeDeps(fake, true, {
+          resolveHostAddresses: async () => {
+            const err = new Error("getaddrinfo ENOTFOUND app-yumbot-perma") as Error & { code: string };
+            err.code = "ENOTFOUND";
+            throw err;
+          }
+        }),
+        app.id
+      );
+    } finally {
+      publicFetch.restore();
+    }
+
+    assert.equal(result.success, false);
+    assert.match(result.message, /network\/DNS readiness/i);
+    assert.doesNotMatch(result.message, /public route returned/i);
+    assert.equal(publicFetch.calls(), 0);
+  });
+
+  test("rollback also refreshes the RESTORED container's endpoint and validates its IP", async () => {
+    const app = makeAppWithDomain("yumbot-rollback-dns");
+    const restoredIp = "172.23.0.9";
+    // Health fails -> internal check throws -> rollback restores the old
+    // container, which is renamed back to the canonical name (same DNS hazard).
+    const fake = createFakeDocker({
+      currentName: app.containerName!,
+      seedCurrentContainer: true,
+      replacementNetworkAddress: "172.23.0.5",
+      currentNetworkAddress: restoredIp
+    });
+
+    const result = await deployFromGithub(
+      makeDeps(fake, false, {
+        // During rollback the canonical hostname must resolve to the RESTORED
+        // container's own IP.
+        resolveHostAddresses: async () => [restoredIp]
+      }),
+      app.id
+    );
+
+    assert.equal(result.success, false);
+    assert.equal(result.rolledBack, true);
+
+    // The restored (old) container's endpoint was refreshed BY ID.
+    assert.ok(
+      fake.ops.includes("refreshNetworkEndpoint:old-container-id:deployment-apps"),
+      "the restored container's managed endpoint is refreshed"
+    );
+
+    // Rollback recorded that DNS resolved to the restored IP.
+    const rollbackEvent = recordedEvents.find((e) => e.eventType === "github-deploy-rolled-back");
+    assert.ok(rollbackEvent);
+    assert.equal((rollbackEvent!.metadata as { rollbackDnsReady?: boolean }).rollbackDnsReady, true);
   });
 });

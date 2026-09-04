@@ -39,6 +39,7 @@ function unusedDockerOps(): GithubDeployDependencies["dockerOps"] {
     inspectContainer: fail,
     removeContainer: fail,
     renameContainer: fail,
+    refreshNetworkEndpoint: fail,
     containerExists: fail,
     stopContainer: fail,
     ensureVolume: fail,

@@ -107,6 +107,8 @@ function createFakeDockerOps(
       }
     },
 
+    async refreshNetworkEndpoint() {},
+
     async ensureVolume(name, ownerAppName) {
       calls.ensuredVolumes.push({ name, ownerAppName });
 
