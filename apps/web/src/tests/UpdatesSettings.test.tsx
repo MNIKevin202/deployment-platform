@@ -21,4 +21,6 @@ test("describes the browser-to-server check without claiming the server is curre
   expect(await screen.findByText("This tab matches the version installed on this server.")).toBeInTheDocument();
   expect(screen.queryByText("You're running the latest version.")).not.toBeInTheDocument();
   expect(screen.getByText(/Server updates run separately in the background/)).toBeInTheDocument();
+  // The deployed version is shown (baked in at build time; stubbed under vitest).
+  expect(screen.getByText("0.0.0-test", { selector: "code" })).toBeInTheDocument();
 });
