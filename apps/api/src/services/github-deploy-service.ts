@@ -171,6 +171,145 @@ export async function verifyPublicRoute(domain: string, path = "/"): Promise<Pub
   };
 }
 
+/** The managed-app Docker network every app container is attached to. */
+export const MANAGED_APPS_NETWORK = "deployment-apps";
+
+// Bounded readiness window for the promoted container's canonical hostname to
+// resolve, on the managed-app network's embedded DNS, to that container's
+// ACTUAL IP. ~15 attempts x 2s ≈ a 28s ceiling — long enough to absorb a
+// transient Docker DNS re-registration delay, short enough not to hang a
+// deploy. A transient delay must not immediately trigger a rollback.
+const DNS_READINESS_ATTEMPTS = 15;
+const DNS_READINESS_DELAY_MS = 2000;
+
+/** Minimal structured logger (pino-shaped) for deploy diagnostics. */
+export interface DeployLogger {
+  info: (obj: unknown, msg?: string) => void;
+  warn: (obj: unknown, msg?: string) => void;
+  error: (obj: unknown, msg?: string) => void;
+}
+
+const noopLogger: DeployLogger = { info: () => {}, warn: () => {}, error: () => {} };
+
+export interface DnsReadinessResult {
+  ready: boolean;
+  attempts: number;
+  expectedIp: string;
+  lastResolvedIps: string[];
+  /** Set when a resolution SUCCEEDED but returned the wrong IP(s) — the exact
+   * "resolves to Caddy's own IP" failure mode, distinct from a lookup that
+   * never resolved at all. */
+  sawWrongIp: boolean;
+}
+
+/**
+ * Waits until the canonical hostname resolves, from the API's own managed-app
+ * network context (the same embedded DNS Caddy uses — the API is attached to
+ * `deployment-apps` too), to the promoted container's EXACT IP.
+ *
+ * A bare "the name resolves" is deliberately NOT sufficient: after a rename we
+ * have observed `app-<name>` resolving to Caddy's own IP. Readiness requires
+ * the resolved set to CONTAIN the expected app IP; anything else is treated as
+ * not-yet-ready and retried within the bounded window.
+ */
+async function waitForCanonicalDnsReady(
+  resolveHostAddresses: (hostname: string) => Promise<string[]>,
+  hostname: string,
+  expectedIp: string,
+  logger: DeployLogger,
+  logContext: Record<string, unknown>,
+  options: { attempts: number; delayMs: number }
+): Promise<DnsReadinessResult> {
+  let lastResolvedIps: string[] = [];
+  let sawWrongIp = false;
+
+  for (let attempt = 1; attempt <= options.attempts; attempt += 1) {
+    try {
+      const resolvedIps = await resolveHostAddresses(hostname);
+      lastResolvedIps = resolvedIps;
+      const matches = resolvedIps.includes(expectedIp);
+      if (!matches && resolvedIps.length > 0) {
+        sawWrongIp = true;
+      }
+      logger.info(
+        { ...logContext, hostname, expectedIp, resolvedIps, attempt, matches },
+        "Deploy DNS readiness attempt"
+      );
+      if (matches) {
+        return { ready: true, attempts: attempt, expectedIp, lastResolvedIps: resolvedIps, sawWrongIp };
+      }
+    } catch (error) {
+      lastResolvedIps = [];
+      logger.warn(
+        { ...logContext, hostname, expectedIp, attempt, error: errorMessage(error) },
+        "Deploy DNS readiness lookup failed"
+      );
+    }
+
+    if (attempt < options.attempts) {
+      await sleep(options.delayMs);
+    }
+  }
+
+  return { ready: false, attempts: options.attempts, expectedIp, lastResolvedIps, sawWrongIp };
+}
+
+/**
+ * Forces Docker to re-register a just-renamed container's managed-network
+ * endpoint, then re-reads its current IP by ID. Shared by the promotion and
+ * rollback paths so both get identical treatment.
+ *
+ * The refresh is best-effort: a failure is logged, never thrown, because the
+ * DNS readiness check is the real gate. It confirms the container is actually
+ * on the managed-app network first (never force-attaching, never altering
+ * other networks), and returns the container's post-reconnect IP — the IP the
+ * canonical hostname must resolve to.
+ */
+async function refreshManagedEndpoint(
+  deps: GithubDeployDependencies,
+  logger: DeployLogger,
+  params: { containerId: string; logContext: Record<string, unknown> }
+): Promise<{ expectedIp: string | null }> {
+  const { dockerOps } = deps;
+  const { containerId, logContext } = params;
+
+  // Confirm the container is actually on the managed-app network before
+  // touching it — never force-attach, never alter other networks.
+  const beforeRefresh = await dockerOps.inspectContainer(containerId);
+  if (!beforeRefresh.networkAddresses?.[MANAGED_APPS_NETWORK]) {
+    logger.warn(
+      { ...logContext, containerId, network: MANAGED_APPS_NETWORK },
+      "Container is not attached to the managed-app network; skipping endpoint refresh"
+    );
+    return { expectedIp: null };
+  }
+
+  try {
+    logger.info(
+      { ...logContext, containerId, network: MANAGED_APPS_NETWORK },
+      "Refreshing managed-network endpoint after rename"
+    );
+    await dockerOps.refreshNetworkEndpoint(containerId, MANAGED_APPS_NETWORK);
+  } catch (error) {
+    logger.warn(
+      { ...logContext, containerId, network: MANAGED_APPS_NETWORK, error: errorMessage(error) },
+      "Endpoint refresh failed; relying on the DNS readiness check to gate"
+    );
+  }
+
+  // Re-inspect AFTER the reconnect: the IP can change, and the expected IP
+  // must be this exact container's current address.
+  const afterRefresh = await dockerOps.inspectContainer(containerId);
+  const expectedIp = afterRefresh.networkAddresses?.[MANAGED_APPS_NETWORK] ?? null;
+  if (!expectedIp) {
+    logger.warn(
+      { ...logContext, containerId, network: MANAGED_APPS_NETWORK },
+      "Could not determine container IP after endpoint refresh"
+    );
+  }
+  return { expectedIp };
+}
+
 export type DeployStage =
   | "resolving-repository"
   | "resolving-branch"
@@ -245,6 +384,18 @@ export interface GithubDeployDependencies {
    * result (the runner never throws, and the call site swallows anything).
    */
   cleanupRetention?: (appId: number) => Promise<RetentionCleanupResult>;
+  /**
+   * Resolves a hostname to IPv4 address(es) using the managed-app network's
+   * embedded DNS — the same resolver Caddy uses, since the API container is
+   * attached to `deployment-apps` too. Injected for testability. When omitted,
+   * the post-rename DNS readiness gate is skipped (endpoint refresh still
+   * runs); production always provides it (see server.ts).
+   */
+  resolveHostAddresses?: (hostname: string) => Promise<string[]>;
+  /** Structured logger for deploy/promotion/rollback diagnostics. Defaults to a no-op. */
+  logger?: DeployLogger;
+  /** Test-only override for the post-rename DNS readiness loop's bounds. */
+  dnsReadiness?: { attempts?: number; delayMs?: number };
   now?: () => Date;
   cloneTimeoutMs?: number;
   buildTimeoutMs?: number;
@@ -320,6 +471,11 @@ export async function deployFromGithub(
 ): Promise<GithubDeployResult> {
   const deployStartedAtMs = Date.now();
   const { appDatabase, dockerOps, githubClient, resolveCredential, recordEvent } = deps;
+  const logger = deps.logger ?? noopLogger;
+  const dnsReadinessOptions = {
+    attempts: deps.dnsReadiness?.attempts ?? DNS_READINESS_ATTEMPTS,
+    delayMs: deps.dnsReadiness?.delayMs ?? DNS_READINESS_DELAY_MS
+  };
   const now = deps.now ?? (() => new Date());
   const cloneTimeoutMs = deps.cloneTimeoutMs ?? DEFAULT_CLONE_TIMEOUT_MS;
   const buildTimeoutMs = deps.buildTimeoutMs ?? DEFAULT_BUILD_TIMEOUT_MS;
@@ -753,6 +909,33 @@ export async function deployFromGithub(
     await dockerOps.renameContainer(replacementContainerId, containerName);
     replacementCurrentName = containerName;
 
+    logger.info(
+      {
+        appId,
+        deploymentPhase: "promotion",
+        candidateId: replacementContainerId,
+        candidateNameBeforeRename: tempContainerName,
+        canonicalName: containerName,
+        rollbackContainerName,
+        network: MANAGED_APPS_NETWORK
+      },
+      "Promoted candidate to canonical name"
+    );
+
+    // Docker's `docker rename` does not reliably update the managed network's
+    // embedded DNS, so Caddy's lookup of the canonical hostname can fail
+    // ("server misbehaving") or resolve to a stale/wrong IP immediately after
+    // promotion. Re-register this exact container's endpoint and re-read its
+    // (possibly new) managed-network IP, which the readiness gate below (and
+    // the direct internal check) must use.
+    const promotedEndpoint = await refreshManagedEndpoint(deps, logger, {
+      containerId: replacementContainerId,
+      logContext: { appId, deploymentPhase: "promotion", canonicalName: containerName }
+    });
+    if (promotedEndpoint.expectedIp) {
+      replacementInternalAddress = promotedEndpoint.expectedIp;
+    }
+
     progress("verifying-health");
 
     // Mandatory, unconditional internal reachability check — independent
@@ -794,6 +977,49 @@ export async function deployFromGithub(
 
     if (!internalCheckResult.reachable) {
       throw new GithubDeployError(internalCheckResult.message, "verifying-health");
+    }
+
+    // Before hitting the PUBLIC route (which goes through Caddy → embedded
+    // DNS), wait until the canonical hostname actually resolves, from the
+    // API's own managed-network context, to the promoted container's EXACT
+    // IP. This turns the Docker-DNS race that produced a bare "HTTP 502" into
+    // a specific, diagnosable readiness failure — and refuses the observed
+    // failure mode where the hostname resolves to Caddy's own IP. Only gated
+    // when a resolver is injected and the promoted IP is known; a public
+    // check with no domain is skipped entirely below.
+    if (app.domain && deps.resolveHostAddresses && replacementInternalAddress) {
+      const readiness = await waitForCanonicalDnsReady(
+        deps.resolveHostAddresses,
+        containerName,
+        replacementInternalAddress,
+        logger,
+        { appId, deploymentPhase: "promotion", canonicalName: containerName, candidateId: replacementContainerId },
+        dnsReadinessOptions
+      );
+
+      recordEvent({
+        appId,
+        eventType: "github-deploy-progress",
+        severity: readiness.ready ? "info" : "error",
+        message: readiness.ready
+          ? `Managed-network DNS ready: ${containerName} resolves to ${replacementInternalAddress} after ${readiness.attempts} attempt(s).`
+          : `Managed-network DNS did not become ready: ${containerName} never resolved to ${replacementInternalAddress}${readiness.sawWrongIp ? ` (last saw ${readiness.lastResolvedIps.join(", ") || "no address"})` : ""} after ${readiness.attempts} attempt(s).`,
+        metadata: {
+          stage: "verifying-health",
+          canonicalHostname: containerName,
+          expectedIp: replacementInternalAddress,
+          resolvedIps: readiness.lastResolvedIps.join(",") || null,
+          dnsReadyAttempts: readiness.attempts,
+          dnsReady: readiness.ready
+        }
+      });
+
+      if (!readiness.ready) {
+        throw new GithubDeployError(
+          `Docker network/DNS readiness failure: the promoted container is healthy on port ${containerPort}, but the managed-network hostname "${containerName}" did not resolve to its IP ${replacementInternalAddress}${readiness.sawWrongIp ? ` (it resolved to ${readiness.lastResolvedIps.join(", ") || "an unexpected address"} instead)` : " (lookup kept timing out)"} within the readiness window. This is a Docker embedded-DNS registration problem, not an application error.`,
+          "verifying-health"
+        );
+      }
     }
 
     if (app.domain) {
@@ -1090,6 +1316,10 @@ export async function deployFromGithub(
     // Restore it from its rollback name and bring it back up.
     let restored = false;
     let restoreError: string | null = null;
+    // Rollback renames the previous container BACK to the canonical name, so
+    // it hits the exact same Docker embedded-DNS staleness. null = not checked
+    // (no resolver injected, or restore did not complete).
+    let rollbackDnsReady: boolean | null = null;
 
     try {
       if (rollbackContainerName) {
@@ -1098,10 +1328,57 @@ export async function deployFromGithub(
         const restoredInspection = await dockerOps.inspectContainer(app.containerName as string);
         restored = restoredInspection.running;
         if (restored) {
+          const restoredContainerId = restoredInspection.id;
           appDatabase.updateAppContainer(app.id, {
-            containerId: restoredInspection.id,
+            containerId: restoredContainerId,
             status: restoredInspection.status
           });
+
+          logger.info(
+            {
+              appId,
+              deploymentPhase: "rollback",
+              restoredContainerId,
+              rollbackContainerName,
+              canonicalName: app.containerName,
+              network: MANAGED_APPS_NETWORK
+            },
+            "Restored previous container to canonical name"
+          );
+
+          // Give the restored container the same endpoint refresh so the
+          // canonical hostname resolves to the restored container's own IP —
+          // rollback is not "done" just because the container started.
+          const restoredEndpoint = await refreshManagedEndpoint(deps, logger, {
+            containerId: restoredContainerId,
+            logContext: { appId, deploymentPhase: "rollback", canonicalName: app.containerName }
+          });
+
+          if (deps.resolveHostAddresses && restoredEndpoint.expectedIp) {
+            const readiness = await waitForCanonicalDnsReady(
+              deps.resolveHostAddresses,
+              app.containerName as string,
+              restoredEndpoint.expectedIp,
+              logger,
+              { appId, deploymentPhase: "rollback", canonicalName: app.containerName, restoredContainerId },
+              dnsReadinessOptions
+            );
+            rollbackDnsReady = readiness.ready;
+            if (!readiness.ready) {
+              logger.error(
+                {
+                  appId,
+                  deploymentPhase: "rollback",
+                  restoredContainerId,
+                  canonicalName: app.containerName,
+                  expectedIp: restoredEndpoint.expectedIp,
+                  resolvedIps: readiness.lastResolvedIps,
+                  sawWrongIp: readiness.sawWrongIp
+                },
+                "Rollback restored the container but managed-network DNS did not resolve to its IP"
+              );
+            }
+          }
         }
       }
     } catch (restoreErr) {
@@ -1113,9 +1390,9 @@ export async function deployFromGithub(
       eventType: "github-deploy-rolled-back",
       severity: "error",
       message: restored
-        ? `GitHub deployment for "${app.name}" failed at stage "${stage}" (${message}); the previous version was restored.`
+        ? `GitHub deployment for "${app.name}" failed at stage "${stage}" (${message}); the previous version was restored${rollbackDnsReady === false ? ", but managed-network DNS did not confirm the restored hostname — manual verification advised" : ""}.`
         : `GitHub deployment for "${app.name}" failed at stage "${stage}" (${message}); automatic rollback ALSO failed${restoreError ? `: ${restoreError}` : ""}. Manual attention required.`,
-      metadata: { ...eventMetadata, rolledBack: restored }
+      metadata: { ...eventMetadata, rolledBack: restored, rollbackDnsReady }
     });
 
     // Never update latest_deployed_commit_sha/latest_deployed_at on a

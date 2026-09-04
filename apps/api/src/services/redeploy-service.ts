@@ -50,6 +50,19 @@ export interface RedeployDockerOps {
   /** Resolves even if the container is already gone (idempotent). */
   removeContainer(nameOrId: string): Promise<void>;
   renameContainer(id: string, newName: string): Promise<void>;
+  /**
+   * Forces Docker to re-register a container's embedded-DNS endpoint on a
+   * network by disconnecting and reconnecting it (targeted by container ID).
+   *
+   * Works around a Docker Engine bug (observed on Docker 29 / Ubuntu 24.04)
+   * where `docker rename` does NOT update the network's embedded DNS: the new
+   * canonical hostname then either fails to resolve ("server misbehaving") or
+   * resolves to a stale/wrong IP. A disconnect+reconnect makes the daemon
+   * rebuild the endpoint's DNSNames from the container's current name. Only
+   * the named network is touched; any other attachment is left intact, and no
+   * EndpointConfig is copied from another container.
+   */
+  refreshNetworkEndpoint(containerId: string, networkName: string): Promise<void>;
   /** True if a container with this name/id exists, false on a 404. */
   containerExists(nameOrId: string): Promise<boolean>;
   /**
@@ -135,6 +148,16 @@ export function createDockerOps(docker: Docker): RedeployDockerOps {
 
     async renameContainer(id, newName) {
       await docker.getContainer(id).rename({ name: newName });
+    },
+
+    async refreshNetworkEndpoint(containerId, networkName) {
+      const network = docker.getNetwork(networkName);
+      // Disconnect then reconnect BY ID so the daemon rebuilds this exact
+      // container's endpoint (and its DNSNames from the current name). No
+      // EndpointConfig is supplied, so Docker restores the container's own
+      // default aliases — never any other container's configuration.
+      await network.disconnect({ Container: containerId });
+      await network.connect({ Container: containerId });
     },
 
     async containerExists(nameOrId) {

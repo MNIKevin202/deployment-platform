@@ -1,5 +1,6 @@
 import Fastify, { type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
+import { Resolver as DnsResolver } from "node:dns/promises";
 import { z } from "zod";
 import { docker } from "./docker.js";
 import { registerAuthentication } from "./auth.js";
@@ -406,6 +407,15 @@ const deployDeps: GithubDeployDependencies = {
   recordEvent,
   cleanupRetention: cleanupRetentionForDeploy,
   buildTimeoutMs: BUILD_TIMEOUT_MS,
+  // Resolves an app's canonical hostname over the managed-app network's
+  // embedded DNS — the same resolver Caddy uses (the API is attached to
+  // deployment-apps too). A fresh c-ares Resolver per call avoids any cached
+  // answer, and a short per-attempt timeout keeps the readiness loop bounded.
+  resolveHostAddresses: async (hostname: string) => {
+    const resolver = new DnsResolver({ timeout: 2000, tries: 1 });
+    return resolver.resolve4(hostname);
+  },
+  logger: app.log,
   healthCheckDeps: {
     httpClient: createHttpHealthCheckClient(),
     isContainerRunning: async (containerName: string) => {
