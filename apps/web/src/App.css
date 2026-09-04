@@ -4671,3 +4671,40 @@ code {
 /* Deployed version line on the Updates screen. */
 .update-version { margin: 0; color: var(--color-text); font-size: 0.9rem; }
 .update-version .inline-code { font-size: 0.85rem; }
+
+/* Deployment failure modal — full build output with a copy button. */
+.deploy-failure-modal { max-width: 860px; width: min(92vw, 860px); }
+.eyebrow.danger { color: var(--color-danger); }
+.deploy-failure-note { margin: 0; }
+.deploy-failure-logs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.deploy-failure-logs-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-faint);
+}
+.deploy-failure-logs-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.deploy-failure-console {
+  background: var(--color-console-bg, #0b0d12);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  max-height: 52vh;
+  overflow: auto;
+}
+.deploy-failure-console pre {
+  margin: 0;
+  padding: 12px 14px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-console-text, #d6dae4);
+}
+.deploy-failure-console .logs-state { padding: 16px; margin: 0; }
