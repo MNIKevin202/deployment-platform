@@ -566,7 +566,8 @@ export async function deployFromGithub(
         log: `Reused the existing image for commit ${shortSha} — no rebuild was necessary.`,
         truncated: false,
         status: "reused",
-        at: now().toISOString()
+        at: now().toISOString(),
+        commitSha
       });
     } else {
       /**
@@ -636,7 +637,8 @@ export async function deployFromGithub(
           log: buildResult.log,
           truncated: buildResult.truncated,
           status: "success",
-          at: now().toISOString()
+          at: now().toISOString(),
+          commitSha
         });
       } catch (error) {
         if (error instanceof BuildImageError) {
@@ -645,7 +647,8 @@ export async function deployFromGithub(
             log: error.log,
             truncated: false,
             status: "failed",
-            at: now().toISOString()
+            at: now().toISOString(),
+            commitSha
           });
           throw new GithubDeployError(
             `Build failed: ${sanitizeProcessOutput(error.message)}`,
@@ -864,6 +867,11 @@ export async function deployFromGithub(
       commitMessage,
       deployedAt: now().toISOString()
     });
+
+    // A successful deploy clears any operator-set block on auto-redeploying a
+    // failed commit — whatever it was blocking, the app is now known-good, so
+    // auto-deploy should resume tracking the branch.
+    appDatabase.setAutoDeployBlockedCommit(appId, null);
 
     // Append this release to the per-app version ledger. The image
     // (`deployment-app-<id>:<shortSha>`) is retained locally, so this row

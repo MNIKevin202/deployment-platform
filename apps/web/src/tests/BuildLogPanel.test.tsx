@@ -3,10 +3,14 @@ import { render, screen } from "@testing-library/react";
 import BuildLogPanel from "../components/BuildLogPanel";
 import type { BuildLog } from "../types/api";
 
-function stubFetch(buildLog: BuildLog | null) {
+function stubFetch(buildLog: Partial<BuildLog> | null) {
+  const full: BuildLog | null =
+    buildLog === null
+      ? null
+      : { commitSha: null, autoDeployBlocked: false, truncated: false, status: null, at: null, log: null, ...buildLog };
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => ({ ok: true, json: async () => ({ success: true, buildLog }) }) as Response)
+    vi.fn(async () => ({ ok: true, json: async () => ({ success: true, buildLog: full }) }) as Response)
   );
 }
 
