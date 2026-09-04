@@ -66,6 +66,25 @@ export default function DeploymentProgressOverlay({
     });
   }, []);
 
+  // A failure that arrives in a snapshot (a page load or an EventSource
+  // reconnect that lands AFTER the deploy already failed) is surfaced too, as
+  // long as it finished recently — so opening the panel right after a failure
+  // still pops the modal, without resurfacing a stale failure from long ago.
+  const RECENT_FAILURE_MS = 5 * 60_000;
+  const maybeSurfaceRecentFailure = useCallback(
+    (deployment: DeployProgress) => {
+      if (deployment.status !== "failed" || !deployment.finishedAt) {
+        return;
+      }
+      const finishedMs = new Date(deployment.finishedAt).getTime();
+      if (Number.isNaN(finishedMs) || Date.now() - finishedMs > RECENT_FAILURE_MS) {
+        return;
+      }
+      maybeSurfaceFailure(deployment);
+    },
+    [maybeSurfaceFailure]
+  );
+
   const upsert = useCallback((next: DeployProgress) => {
     setDeployments((current) => {
       const index = current.findIndex((item) => item.appId === next.appId);
@@ -98,7 +117,11 @@ export default function DeploymentProgressOverlay({
         const data = JSON.parse((event as MessageEvent).data) as {
           deployments: DeployProgress[];
         };
-        setDeployments(data.deployments ?? []);
+        const deployments = data.deployments ?? [];
+        setDeployments(deployments);
+        for (const deployment of deployments) {
+          maybeSurfaceRecentFailure(deployment);
+        }
       } catch {
         // A malformed frame is skipped rather than breaking the overlay.
       }
@@ -124,7 +147,7 @@ export default function DeploymentProgressOverlay({
       source.close();
       sourceRef.current = null;
     };
-  }, [upsert]);
+  }, [upsert, maybeSurfaceFailure, maybeSurfaceRecentFailure]);
 
   const dismiss = async (appId: number) => {
     setDeployments((current) => current.filter((item) => item.appId !== appId));
