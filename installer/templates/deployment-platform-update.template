@@ -120,6 +120,7 @@ bash "$release_dir/scripts/release-remote.sh" \
   --platform-network deployment-platform --apps-network deployment-apps \
   --api-data-volume deployment-platform-api-data \
   --api-version "$next_api" --web-version "$next_web" \
+  --source-commit "$latest_commit" \
   --previous-api-version "$previous_api" --previous-web-version "$previous_web" \
   --url-panel "https://${panel_domain}" \
   --current-symlink "${INSTALL_ROOT}/source/current"

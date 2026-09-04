@@ -54,6 +54,10 @@ export default function UpdatesSettings() {
           Version <code className="inline-code">{__APP_VERSION__}</code>
         </p>
         <p className="text-faint">
+          Commit <code className="inline-code">{__APP_COMMIT__}</code>{" "}
+          <span className="text-faint">— same on every site running this code</span>
+        </p>
+        <p className="text-faint">
           This tab's build: <code className="inline-code">{__BUILD_ID__}</code>
         </p>
 
