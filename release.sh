@@ -654,6 +654,7 @@ run_remote_deploy_and_report() {
     --api-data-volume "${API_DATA_VOLUME}"
     --api-version "${NEW_API_VERSION}"
     --web-version "${NEW_WEB_VERSION}"
+    --source-commit "${COMMIT_SHA}"
     --previous-api-version "${PREVIOUS_API_VERSION}"
     --previous-web-version "${PREVIOUS_WEB_VERSION}"
     --url-panel "${PUBLIC_URL_PANEL}"

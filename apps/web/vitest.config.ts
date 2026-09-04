@@ -5,7 +5,8 @@ export default defineConfig({
   plugins: [react()],
   define: {
     __BUILD_ID__: JSON.stringify("test"),
-    __APP_VERSION__: JSON.stringify("0.0.0-test")
+    __APP_VERSION__: JSON.stringify("0.0.0-test"),
+    __APP_COMMIT__: JSON.stringify("abc123def456")
   },
   test: {
     environment: "jsdom",

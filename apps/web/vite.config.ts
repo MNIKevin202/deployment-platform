@@ -12,7 +12,8 @@ export default defineConfig({
   // shown on the Updates screen. Falls back to "dev" for a local build.
   define: {
     __BUILD_ID__: JSON.stringify(new Date().toISOString()),
-    __APP_VERSION__: JSON.stringify(process.env.VITE_APP_VERSION || "dev")
+    __APP_VERSION__: JSON.stringify(process.env.VITE_APP_VERSION || "dev"),
+    __APP_COMMIT__: JSON.stringify(process.env.VITE_APP_COMMIT || "unknown")
   },
   server: {
     port: 3000,

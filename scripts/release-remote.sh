@@ -37,6 +37,10 @@ APPS_NETWORK=""
 API_DATA_VOLUME=""
 API_VERSION=""
 WEB_VERSION=""
+# The git commit (or content identity) this release was built from. Baked
+# into the web bundle so the Updates screen can show a value that is
+# comparable across every install (unlike the per-box version counter).
+SOURCE_COMMIT=""
 PREVIOUS_API_VERSION=""
 PREVIOUS_WEB_VERSION=""
 URL_PANEL=""
@@ -66,6 +70,7 @@ while [ "$#" -gt 0 ]; do
     --api-data-volume) API_DATA_VOLUME="$2"; shift 2 ;;
     --api-version) API_VERSION="$2"; shift 2 ;;
     --web-version) WEB_VERSION="$2"; shift 2 ;;
+    --source-commit) SOURCE_COMMIT="$2"; shift 2 ;;
     --previous-api-version) PREVIOUS_API_VERSION="$2"; shift 2 ;;
     --previous-web-version) PREVIOUS_WEB_VERSION="$2"; shift 2 ;;
     --url-panel) URL_PANEL="$2"; shift 2 ;;
@@ -639,9 +644,14 @@ fi
 
 if [ "${MODE}" = "web" ] || [ "${MODE}" = "both" ]; then
   info "Building ${WEB_IMAGE_REPO}:${WEB_VERSION}..."
-  # APP_VERSION bakes the deployed version into the bundle so the Updates
-  # screen can show it (see apps/web/Dockerfile).
-  if ! docker build --build-arg "APP_VERSION=${WEB_VERSION}" -f "${SOURCE_DIR}/apps/web/Dockerfile" -t "${WEB_IMAGE_REPO}:${WEB_VERSION}" "${SOURCE_DIR}"; then
+  # APP_VERSION (per-box version) and SOURCE_COMMIT (cross-install identity)
+  # are baked into the bundle so the Updates screen can show both. The commit
+  # is trimmed to 12 chars for display.
+  WEB_COMMIT_SHORT="${SOURCE_COMMIT:0:12}"
+  if ! docker build \
+      --build-arg "APP_VERSION=${WEB_VERSION}" \
+      --build-arg "SOURCE_COMMIT=${WEB_COMMIT_SHORT}" \
+      -f "${SOURCE_DIR}/apps/web/Dockerfile" -t "${WEB_IMAGE_REPO}:${WEB_VERSION}" "${SOURCE_DIR}"; then
     fail "Web image build failed."
   fi
   WEB_IMAGE_BUILT_HERE=1
