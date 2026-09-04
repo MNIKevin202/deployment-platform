@@ -13,6 +13,7 @@ function candidate(overrides: Partial<AutoDeployCandidate> = {}): AutoDeployCand
     branch: "main",
     latestDeployedCommitSha: "old-sha",
     deploymentMode: "dockerfile",
+    autoDeployBlockedCommit: null,
     ...overrides
   };
 }
@@ -60,6 +61,43 @@ describe("createAutoDeployScheduler", () => {
 
     await scheduler.runOnce();
     assert.deepEqual(deployed, []);
+  });
+
+  test("skips a commit that is blocked from auto-redeploy, but deploys a newer one", async () => {
+    const deployed: string[] = [];
+    // Head equals the blocked commit → skipped.
+    const blockedScheduler = createAutoDeployScheduler({
+      appDatabase: fakeDb({
+        candidates: [
+          candidate({ appId: 9, latestDeployedCommitSha: "old", autoDeployBlockedCommit: "bad" })
+        ]
+      }),
+      resolveBranchHead: async () => "bad",
+      triggerDeploy: async () => {
+        deployed.push("bad");
+        return true;
+      },
+      logger: silentLogger
+    });
+    await blockedScheduler.runOnce();
+    assert.equal(deployed.length, 0);
+
+    // A newer commit (different sha) is not blocked → deploys.
+    const newerScheduler = createAutoDeployScheduler({
+      appDatabase: fakeDb({
+        candidates: [
+          candidate({ appId: 9, latestDeployedCommitSha: "old", autoDeployBlockedCommit: "bad" })
+        ]
+      }),
+      resolveBranchHead: async () => "fixed",
+      triggerDeploy: async () => {
+        deployed.push("fixed");
+        return true;
+      },
+      logger: silentLogger
+    });
+    await newerScheduler.runOnce();
+    assert.deepEqual(deployed, ["fixed"]);
   });
 
   test("skips an app that is already deployment-locked", async () => {

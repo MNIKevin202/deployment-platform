@@ -837,6 +837,10 @@ export interface BuildLog {
   truncated: boolean;
   status: BuildStatus | string | null;
   at: string | null;
+  /** The commit this build was for (null for older records). */
+  commitSha: string | null;
+  /** True when this build's commit is currently blocked from auto-redeploy. */
+  autoDeployBlocked: boolean;
 }
 
 export interface BuildLogResponse {

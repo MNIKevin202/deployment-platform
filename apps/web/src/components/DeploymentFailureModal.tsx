@@ -40,6 +40,8 @@ export default function DeploymentFailureModal({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+  const [blockPending, setBlockPending] = useState(false);
   const preRef = useRef<HTMLPreElement | null>(null);
 
   const loadBuildLog = useCallback(async () => {
@@ -52,6 +54,7 @@ export default function DeploymentFailureModal({
       }
       const result = (await response.json()) as BuildLogResponse;
       setBuildLog(result.buildLog);
+      setBlocked(result.buildLog?.autoDeployBlocked ?? false);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "Unable to load the build log");
     } finally {
@@ -87,6 +90,36 @@ export default function DeploymentFailureModal({
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
       setLoadError("Couldn't copy to the clipboard — select the text and copy it manually.");
+    }
+  };
+
+  const failedCommit = buildLog?.commitSha ?? null;
+  const canBlock = buildLog?.status === "failed" && failedCommit !== null;
+
+  const toggleBlock = async (next: boolean) => {
+    if (!failedCommit) {
+      return;
+    }
+    // Optimistic: reflect the choice immediately, revert on failure.
+    setBlocked(next);
+    setBlockPending(true);
+    setLoadError("");
+    try {
+      const response = await fetch(`/api/apps/${appId}/source/block-commit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commitSha: failedCommit, blocked: next })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Unable to update the auto-deploy block"));
+      }
+    } catch (error) {
+      setBlocked(!next);
+      setLoadError(
+        error instanceof Error ? error.message : "Unable to update the auto-deploy block"
+      );
+    } finally {
+      setBlockPending(false);
     }
   };
 
@@ -154,6 +187,33 @@ export default function DeploymentFailureModal({
               </p>
             )}
           </div>
+
+          {canBlock && (
+            <div className="deploy-failure-block">
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={blocked}
+                  disabled={blockPending}
+                  onChange={(event) => void toggleBlock(event.target.checked)}
+                />
+                <span>
+                  Stop auto-redeploying this commit
+                  {failedCommit && (
+                    <>
+                      {" "}
+                      (<code className="inline-code">{failedCommit.slice(0, 12)}</code>)
+                    </>
+                  )}
+                </span>
+              </label>
+              <p className="text-faint deploy-failure-block-note">
+                Auto-deploy won&apos;t retry this exact commit. A newer commit still deploys
+                automatically, and you can always redeploy manually. The block clears itself once a
+                deploy succeeds.
+              </p>
+            </div>
+          )}
         </div>
       </section>
     </div>

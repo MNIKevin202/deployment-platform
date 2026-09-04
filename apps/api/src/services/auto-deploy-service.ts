@@ -97,6 +97,15 @@ export function createAutoDeployScheduler(options: AutoDeploySchedulerOptions): 
       return;
     }
 
+    // Operator-set, persistent block: this exact commit was told to stop
+    // auto-redeploying (via the failure modal). A NEWER commit has a different
+    // sha and is not blocked, so a fix pushed on top still deploys; a manual
+    // deploy bypasses this entirely (it doesn't go through the scheduler). The
+    // block is cleared automatically once any deploy succeeds.
+    if (candidate.autoDeployBlockedCommit && head === candidate.autoDeployBlockedCommit) {
+      return;
+    }
+
     // A new commit clears any breaker recorded against an older one — the
     // fix might be in this push, so it deserves a fresh set of attempts.
     const tripped = breaker.get(candidate.appId);

@@ -493,17 +493,26 @@ export function createAppSourceRepository(db: DatabaseSync) {
           last_build_log_truncated = ?,
           last_build_status = ?,
           last_build_at = ?,
+          last_build_commit_sha = ?,
           updated_at = CURRENT_TIMESTAMP
         WHERE app_id = ?
       `
-    ).run(input.log, input.truncated ? 1 : 0, input.status, input.at, appId);
+    ).run(
+      input.log,
+      input.truncated ? 1 : 0,
+      input.status,
+      input.at,
+      input.commitSha ?? null,
+      appId
+    );
   }
 
   /** The most recent build log for this app, or null if it has no linked source. */
   function getBuildLog(appId: number): StoredBuildLog | null {
     const row = db
       .prepare(
-        `SELECT last_build_log, last_build_log_truncated, last_build_status, last_build_at
+        `SELECT last_build_log, last_build_log_truncated, last_build_status, last_build_at,
+                last_build_commit_sha, auto_deploy_blocked_commit
          FROM app_sources WHERE app_id = ?`
       )
       .get(appId) as unknown as
@@ -512,6 +521,8 @@ export function createAppSourceRepository(db: DatabaseSync) {
           last_build_log_truncated: number;
           last_build_status: string | null;
           last_build_at: string | null;
+          last_build_commit_sha: string | null;
+          auto_deploy_blocked_commit: string | null;
         }
       | undefined;
 
@@ -523,8 +534,27 @@ export function createAppSourceRepository(db: DatabaseSync) {
       log: row.last_build_log,
       truncated: row.last_build_log_truncated === 1,
       status: row.last_build_status,
-      at: row.last_build_at
+      at: row.last_build_at,
+      commitSha: row.last_build_commit_sha,
+      // True when THIS build's commit is the one currently blocked from
+      // auto-redeploy, so the UI can reflect the checkbox state.
+      autoDeployBlocked:
+        row.auto_deploy_blocked_commit !== null &&
+        row.auto_deploy_blocked_commit === row.last_build_commit_sha
     };
+  }
+
+  /**
+   * Sets (or clears, with null) the commit the auto-deploy scheduler must not
+   * redeploy. Returns false if the app has no source row.
+   */
+  function setAutoDeployBlockedCommit(appId: number, commitSha: string | null): boolean {
+    const info = db
+      .prepare(
+        `UPDATE app_sources SET auto_deploy_blocked_commit = ?, updated_at = CURRENT_TIMESTAMP WHERE app_id = ?`
+      )
+      .run(commitSha, appId);
+    return Number(info.changes) > 0;
   }
 
   /** Toggles the auto-deploy preference. Returns false if the app has no source. */
@@ -539,7 +569,8 @@ export function createAppSourceRepository(db: DatabaseSync) {
   function listAutoDeploySources(): AutoDeployCandidate[] {
     const rows = db
       .prepare(
-        `SELECT app_id, repository_owner, repository_name, branch, latest_deployed_commit_sha, deployment_mode
+        `SELECT app_id, repository_owner, repository_name, branch, latest_deployed_commit_sha,
+                deployment_mode, auto_deploy_blocked_commit
          FROM app_sources WHERE auto_deploy = 1`
       )
       .all() as unknown as Array<{
@@ -549,6 +580,7 @@ export function createAppSourceRepository(db: DatabaseSync) {
       branch: string;
       latest_deployed_commit_sha: string | null;
       deployment_mode: string;
+      auto_deploy_blocked_commit: string | null;
     }>;
 
     return rows.map((row) => ({
@@ -557,7 +589,8 @@ export function createAppSourceRepository(db: DatabaseSync) {
       repositoryName: row.repository_name,
       branch: row.branch,
       latestDeployedCommitSha: row.latest_deployed_commit_sha,
-      deploymentMode: row.deployment_mode as DeploymentMode
+      deploymentMode: row.deployment_mode as DeploymentMode,
+      autoDeployBlockedCommit: row.auto_deploy_blocked_commit
     }));
   }
 
@@ -645,6 +678,7 @@ export function createAppSourceRepository(db: DatabaseSync) {
     updateBuildLog,
     getBuildLog,
     setAutoDeploy,
+    setAutoDeployBlockedCommit,
     listAutoDeploySources,
     deleteAppSource,
     acquireDeploymentLock,
@@ -660,6 +694,8 @@ export interface UpdateBuildLogInput {
   /** "success" | "failed" | "reused" */
   status: string;
   at: string;
+  /** The commit this build was for; enables blocking exactly that commit. */
+  commitSha?: string | null;
 }
 
 export interface StoredBuildLog {
@@ -667,6 +703,9 @@ export interface StoredBuildLog {
   truncated: boolean;
   status: string | null;
   at: string | null;
+  commitSha: string | null;
+  /** True when this build's commit is currently blocked from auto-redeploy. */
+  autoDeployBlocked: boolean;
 }
 
 export interface AutoDeployCandidate {
@@ -676,6 +715,8 @@ export interface AutoDeployCandidate {
   branch: string;
   latestDeployedCommitSha: string | null;
   deploymentMode: DeploymentMode;
+  /** A commit the scheduler must not auto-redeploy (operator-set). */
+  autoDeployBlockedCommit: string | null;
 }
 
 export type AppSourceRepository = ReturnType<typeof createAppSourceRepository>;

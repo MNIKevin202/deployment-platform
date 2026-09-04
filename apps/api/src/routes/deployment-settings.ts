@@ -14,6 +14,12 @@ const autoDeployBodySchema = z.object({
   enabled: z.boolean()
 });
 
+const blockCommitBodySchema = z.object({
+  // The commit to block (or, when blocked=false, the commit to clear).
+  commitSha: z.string().min(7).max(64),
+  blocked: z.boolean()
+});
+
 const retentionBodySchema = z.object({
   // null clears the per-app override, restoring the global default.
   retention: z.number().int().min(1).max(50).nullable()
@@ -91,6 +97,48 @@ export async function registerDeploymentSettingsRoutes(
       }
 
       return { success: true, autoDeploy: parsedBody.data.enabled };
+    }
+  );
+
+  // Block (or unblock) auto-redeploying a specific failed commit. A newer
+  // commit still auto-deploys, a manual deploy still works, and the block
+  // clears itself once any deploy succeeds.
+  fastify.post<{ Params: AppIdParams }>(
+    "/apps/:id/source/block-commit",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const parsedParams = idParamSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        return reply.code(400).send({ success: false, message: "Invalid app id" });
+      }
+
+      const parsedBody = blockCommitBodySchema.safeParse(request.body ?? {});
+      if (!parsedBody.success) {
+        return reply.code(400).send({
+          success: false,
+          message: "Invalid request",
+          errors: parsedBody.error.flatten()
+        });
+      }
+
+      const app = appDatabase.getAppById(parsedParams.data.id);
+      if (!app) {
+        return reply.code(404).send({ success: false, message: "App not found" });
+      }
+
+      const updated = appDatabase.setAutoDeployBlockedCommit(
+        parsedParams.data.id,
+        parsedBody.data.blocked ? parsedBody.data.commitSha : null
+      );
+
+      if (!updated) {
+        return reply.code(409).send({
+          success: false,
+          message: "This app has no linked GitHub source, so auto-deploy can't be configured."
+        });
+      }
+
+      return { success: true, blocked: parsedBody.data.blocked };
     }
   );
 

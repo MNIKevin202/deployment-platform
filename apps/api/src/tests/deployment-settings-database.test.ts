@@ -53,22 +53,55 @@ describe("build-log + auto-deploy database methods", () => {
       log: null,
       truncated: false,
       status: null,
-      at: null
+      at: null,
+      commitSha: null,
+      autoDeployBlocked: false
     });
 
     appDatabase.updateBuildLog(app.id, {
       log: "Step 1/3 : FROM node\n...done",
       truncated: true,
       status: "success",
-      at: "2026-07-30T12:00:00.000Z"
+      at: "2026-07-30T12:00:00.000Z",
+      commitSha: "deadbeef1234"
     });
 
     assert.deepEqual(appDatabase.getBuildLog(app.id), {
       log: "Step 1/3 : FROM node\n...done",
       truncated: true,
       status: "success",
-      at: "2026-07-30T12:00:00.000Z"
+      at: "2026-07-30T12:00:00.000Z",
+      commitSha: "deadbeef1234",
+      autoDeployBlocked: false
     });
+  });
+
+  test("setAutoDeployBlockedCommit blocks a commit, reflects it, and lists it on the candidate", () => {
+    const app = makeApp("block");
+    // No source yet — nothing to block.
+    assert.equal(appDatabase.setAutoDeployBlockedCommit(app.id, "bad-sha"), false);
+
+    linkSource(app.id, { autoDeploy: true });
+    appDatabase.updateBuildLog(app.id, {
+      log: "boom",
+      truncated: false,
+      status: "failed",
+      at: "2026-07-30T12:00:00.000Z",
+      commitSha: "bad-sha"
+    });
+
+    // Not blocked yet.
+    assert.equal(appDatabase.getBuildLog(app.id)?.autoDeployBlocked, false);
+
+    // Block that exact commit → reflected on the build log and the candidate.
+    assert.equal(appDatabase.setAutoDeployBlockedCommit(app.id, "bad-sha"), true);
+    assert.equal(appDatabase.getBuildLog(app.id)?.autoDeployBlocked, true);
+    assert.equal(appDatabase.listAutoDeploySources()[0].autoDeployBlockedCommit, "bad-sha");
+
+    // Clearing it removes the block.
+    assert.equal(appDatabase.setAutoDeployBlockedCommit(app.id, null), true);
+    assert.equal(appDatabase.getBuildLog(app.id)?.autoDeployBlocked, false);
+    assert.equal(appDatabase.listAutoDeploySources()[0].autoDeployBlockedCommit, null);
   });
 
   test("setAutoDeploy toggles the flag and reports whether a source existed", () => {

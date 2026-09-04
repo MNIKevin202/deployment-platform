@@ -25,6 +25,7 @@ import { migration023AppDeploymentRetention } from "./023_app_deployment_retenti
 import { migration024DatabaseConnections } from "./024_database_connections.js";
 import { migration025DeploymentDuration } from "./025_deployment_duration.js";
 import { migration026DeploymentStatus } from "./026_deployment_status.js";
+import { migration027AutoDeployBlock } from "./027_auto_deploy_block.js";
 import type { Migration } from "./types.js";
 
 export type { Migration } from "./types.js";
@@ -55,7 +56,8 @@ const migrations: Migration[] = [
   migration023AppDeploymentRetention,
   migration024DatabaseConnections,
   migration025DeploymentDuration,
-  migration026DeploymentStatus
+  migration026DeploymentStatus,
+  migration027AutoDeployBlock
 ];
 
 interface SchemaMigrationRow {
