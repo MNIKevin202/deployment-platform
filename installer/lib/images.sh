@@ -53,6 +53,8 @@ build_platform_image() {
   local dockerfile="$2"
   local context_dir="$3"
   local commit_sha="$4"
+  # Optional "KEY=VALUE" build arg (e.g. APP_VERSION=... for the web image).
+  local extra_build_arg="${5:-}"
 
   local tag
   tag="$(image_tag_for_commit "$commit_sha")"
@@ -86,8 +88,13 @@ build_platform_image() {
   fi
   IMAGE_WAS_REUSED=0
 
+  local build_arg_flags=()
+  if [ -n "$extra_build_arg" ]; then
+    build_arg_flags=(--build-arg "$extra_build_arg")
+  fi
+
   if [ "$DRY_RUN" -eq 1 ]; then
-    log_info "[dry-run] Would run: DOCKER_BUILDKIT=1 docker build -f $dockerfile -t $image_ref --label com.deployment-platform.source-commit=$commit_sha $context_dir"
+    log_info "[dry-run] Would run: DOCKER_BUILDKIT=1 docker build ${extra_build_arg:+--build-arg $extra_build_arg }-f $dockerfile -t $image_ref --label com.deployment-platform.source-commit=$commit_sha $context_dir"
     BUILT_IMAGE_REF="$image_ref"
     return 0
   fi
@@ -100,6 +107,7 @@ build_platform_image() {
   run_with_progress --show-output-tail "Building $image_ref" \
     env DOCKER_BUILDKIT=1 docker build \
     --progress=plain \
+    ${build_arg_flags[@]+"${build_arg_flags[@]}"} \
     -f "$dockerfile" \
     -t "$image_ref" \
     --label "com.deployment-platform.source-commit=${commit_sha}" \
@@ -160,7 +168,8 @@ build_platform_images() {
   # neuter build_platform_image's own fatal().
   build_platform_image "$API_IMAGE_REPO" "$release_dir/apps/api/Dockerfile" "$release_dir" "$commit_sha"
   BUILT_API_IMAGE="$BUILT_IMAGE_REF"
-  build_platform_image "$WEB_IMAGE_REPO" "$release_dir/apps/web/Dockerfile" "$release_dir" "$commit_sha"
+  # Bake the image tag into the web bundle as its displayed version.
+  build_platform_image "$WEB_IMAGE_REPO" "$release_dir/apps/web/Dockerfile" "$release_dir" "$commit_sha" "APP_VERSION=${tag}"
   BUILT_WEB_IMAGE="$BUILT_IMAGE_REF"
 
   log_pass "Images ready: $BUILT_API_IMAGE, $BUILT_WEB_IMAGE"

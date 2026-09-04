@@ -639,7 +639,9 @@ fi
 
 if [ "${MODE}" = "web" ] || [ "${MODE}" = "both" ]; then
   info "Building ${WEB_IMAGE_REPO}:${WEB_VERSION}..."
-  if ! docker build -f "${SOURCE_DIR}/apps/web/Dockerfile" -t "${WEB_IMAGE_REPO}:${WEB_VERSION}" "${SOURCE_DIR}"; then
+  # APP_VERSION bakes the deployed version into the bundle so the Updates
+  # screen can show it (see apps/web/Dockerfile).
+  if ! docker build --build-arg "APP_VERSION=${WEB_VERSION}" -f "${SOURCE_DIR}/apps/web/Dockerfile" -t "${WEB_IMAGE_REPO}:${WEB_VERSION}" "${SOURCE_DIR}"; then
     fail "Web image build failed."
   fi
   WEB_IMAGE_BUILT_HERE=1
