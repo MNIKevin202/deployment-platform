@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#
+# Continuous updater loop. Runs the one-shot deployment-platform-update
+# command over and over with a short pause between checks, so every install
+# converges on the latest source almost immediately after it is pushed —
+# rather than only when an operator runs an update by hand.
+#
+# Each iteration is cheap when nothing changed: the update command resolves
+# the remote branch HEAD with `git ls-remote` and exits early unless it has
+# moved, so a short interval does not mean a clone (let alone a rebuild)
+# every time. A rebuild only happens when there is genuinely new source.
+#
+# The interval is DP_UPDATE_INTERVAL seconds (default 30). A single check is
+# never allowed to run concurrently with the next tick: flock holds an
+# exclusive lock for the duration of the update, and a slow rebuild simply
+# delays the following iteration instead of stacking a second one on top.
+set -Eeuo pipefail
+
+INTERVAL="${DP_UPDATE_INTERVAL:-30}"
+UPDATE_CMD="${DP_UPDATE_CMD:-/usr/local/bin/deployment-platform-update}"
+LOCK_FILE="${DP_UPDATE_LOCK:-/run/lock/deployment-platform-update.lock}"
+
+mkdir -p "$(dirname "$LOCK_FILE")" 2>/dev/null || true
+
+while true; do
+  # flock -w bounds how long we wait for a previous run to finish; -E 0 is
+  # never reached because we always release before looping, but a stuck lock
+  # (e.g. a prior process killed mid-update) is waited on, then retried.
+  # `|| true` keeps the loop alive across a failed check — a transient GitHub
+  # or Docker hiccup must not stop the service; the next tick retries.
+  flock -w "$INTERVAL" "$LOCK_FILE" "$UPDATE_CMD" || true
+  sleep "$INTERVAL"
+done

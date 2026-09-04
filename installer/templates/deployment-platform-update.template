@@ -74,6 +74,22 @@ DP_CREDENTIAL_HELPER
   fi
 fi
 
+# Cheap pre-check: resolve the remote branch HEAD with ls-remote (no objects
+# transferred) so the continuous updater can poll every few seconds without
+# doing a full clone each time. Only when the remote HEAD has actually moved
+# past the recorded commit do we fall through to the shallow clone + rebuild.
+# If ls-remote fails or returns nothing, remote_head is empty and we proceed
+# to the clone, whose own commit comparison below is the authoritative guard.
+if [ -n "$credential_helper" ]; then
+  remote_head="$(git -c "credential.helper=$credential_helper" ls-remote "$repo" "$ref" 2>/dev/null | awk 'NR==1{print $1}')"
+else
+  remote_head="$(git ls-remote "$repo" "$ref" 2>/dev/null | awk 'NR==1{print $1}')"
+fi
+if [ -n "$remote_head" ] && [ "$remote_head" = "$current_commit" ]; then
+  echo "Already current at $current_commit (remote unchanged)."
+  exit 0
+fi
+
 if [ -n "$credential_helper" ]; then
   git -c "credential.helper=$credential_helper" clone --branch "$ref" --depth 1 --single-branch --no-tags -- "$repo" "$tmp/source"
 else

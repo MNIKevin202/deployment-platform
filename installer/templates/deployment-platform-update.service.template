@@ -1,0 +1,29 @@
+[Unit]
+Description=Deployment Platform continuous source updater
+Documentation=https://github.com/MNIKevin202/deployment-platform
+# Only meaningful once Docker and the network are up — a check that cannot
+# reach GitHub or the Docker socket just fails and retries on the next tick,
+# but ordering after these avoids a burst of guaranteed-failing checks at boot.
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=DP_UPDATE_INTERVAL=30
+ExecStart=/usr/local/bin/deployment-platform-update-loop
+# The loop is meant to run forever; if it ever exits (crash, killed), bring it
+# straight back so the install never silently stops tracking upstream.
+Restart=always
+RestartSec=5
+# Only the loop process is signalled on stop/restart — a rebuild already in
+# flight (a child of the loop) is left to finish instead of being torn out
+# from under itself. The next loop's flock waits for it, so a unit refresh
+# during an active update can never corrupt a half-applied deploy.
+KillMode=process
+# Never give up restarting: the default rate limiter would disable the unit
+# after a few rapid failures, which would leave an install stuck on an old
+# version with no obvious signal.
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target

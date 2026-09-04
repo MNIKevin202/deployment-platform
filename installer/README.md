@@ -355,9 +355,15 @@ GitHub" (or `https://github.com/settings/installations`) instead.
 - No automatic DNS-provider integration — DNS records are always
   created by the operator, by hand, as instructed.
 - No zero-downtime cross-server migration (see below).
-- `deployment-platform update` is not implemented yet — this installer
-  is the first-install path only; use the existing `release.sh` for
-  ongoing releases against an already-installed server.
+- Ongoing updates are automatic. The installer installs a continuous
+  updater — a `deployment-platform-update.service` systemd unit (or a
+  per-minute `cron.d` fallback where systemd is absent) that runs
+  `/usr/local/bin/deployment-platform-update` in a loop every ~30s. Each
+  check resolves the tracked branch HEAD with `git ls-remote` and does
+  nothing unless it has moved, so every install converges on the latest
+  source within seconds of a push without hammering GitHub or rebuilding
+  needlessly. `release.sh` remains available for an operator-driven
+  release, and the updater's log is `${INSTALL_ROOT}/logs/update.log`.
 - Non-interactive `--admin-password-file` still requires the operator
   to create that file themselves with safe permissions; the installer
   does not manage its lifecycle beyond reading and then never
