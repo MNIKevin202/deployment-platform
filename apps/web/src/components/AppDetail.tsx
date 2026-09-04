@@ -257,7 +257,7 @@ export default function AppDetail({
   const [notice, setNotice] = useState("");
   // After an environment change, offer to restart so the new values take
   // effect in the running container. Null = no pending prompt.
-  const [restartPrompt, setRestartPrompt] = useState<string | null>(null);
+  const [redeployPrompt, setRedeployPrompt] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   // A ref, not the `actionLoading` state, is what actually prevents a second
   // delete request — see submitLockRef in CreateAppWizard for why a state
@@ -469,7 +469,7 @@ export default function AppDetail({
     try {
       setActionError("");
       setNotice("");
-      setRestartPrompt(null);
+      setRedeployPrompt(null);
       setActionLoading(action);
 
       const response = await fetch(
@@ -495,12 +495,13 @@ export default function AppDetail({
     }
   };
 
-  // Environment changes only reach the running process on a restart, so after
-  // a successful change we surface a one-click restart prompt (skipped when
-  // there is no live container to restart).
-  const promptRestartForEnv = (message: string) => {
+  // Environment changes only reach the running process on a redeploy (which
+  // recreates the container with the current variables), so after a successful
+  // change we surface a redeploy prompt (skipped when there is no live
+  // container to redeploy).
+  const promptRedeployForEnv = (message: string) => {
     if (detail?.containerExists) {
-      setRestartPrompt(message);
+      setRedeployPrompt(message);
     }
   };
 
@@ -561,6 +562,7 @@ export default function AppDetail({
       }
 
       setShowRedeployConfirm(false);
+      setRedeployPrompt(null);
       setNotice(result.message || "App redeployed successfully.");
       await loadDetail();
       onAppChanged();
@@ -658,10 +660,10 @@ export default function AppDetail({
             : `${moved} variables were moved to ${movedTo}.`
         );
         setMoveTarget(null);
-        promptRestartForEnv(
+        promptRedeployForEnv(
           moved === 1
-            ? `${moveTarget.keys[0]} was moved. Restart the app to apply the change?`
-            : `${moved} variables were moved. Restart the app to apply the changes?`
+            ? `${moveTarget.keys[0]} was moved.`
+            : `${moved} variables were moved.`
         );
       }
 
@@ -707,7 +709,7 @@ export default function AppDetail({
         }
 
         setNotice(`${editingVar.key} was updated.`);
-        promptRestartForEnv(`${editingVar.key} was updated. Restart the app to apply the change?`);
+        promptRedeployForEnv(`${editingVar.key} was updated.`);
       } else {
         const response = await fetch(`/api/apps/${appId}/environment`, {
           method: "POST",
@@ -722,7 +724,7 @@ export default function AppDetail({
         }
 
         setNotice(`${values.key} was added.`);
-        promptRestartForEnv(`${values.key} was added. Restart the app to apply the change?`);
+        promptRedeployForEnv(`${values.key} was added.`);
       }
 
       setShowEnvDialog(false);
@@ -771,7 +773,7 @@ export default function AppDetail({
           : "No changes were applied."
       );
       if (parts.length > 0) {
-        promptRestartForEnv("Variables were applied. Restart the app to apply the changes?");
+        promptRedeployForEnv("Your variable changes were applied.");
       }
 
       setShowBulkEnvDialog(false);
@@ -844,7 +846,7 @@ export default function AppDetail({
       }
 
       setNotice(`${envDeleteTarget.key} was deleted.`);
-      promptRestartForEnv(`${envDeleteTarget.key} was deleted. Restart the app to apply the change?`);
+      promptRedeployForEnv(`${envDeleteTarget.key} was deleted.`);
       setEnvDeleteTarget(null);
       await loadEnvironment();
       await loadDetail();
@@ -1139,29 +1141,6 @@ export default function AppDetail({
         <div className="error-banner">{actionError}</div>
       )}
       {notice && <div className="notice-banner">{notice}</div>}
-      {restartPrompt && (
-        <div className="notice-banner restart-prompt" role="status">
-          <span>{restartPrompt}</span>
-          <div className="restart-prompt-actions">
-            <button
-              className="primary-button compact"
-              type="button"
-              disabled={actionLoading !== null}
-              onClick={() => void runAction("restart")}
-            >
-              {actionLoading === "restart" ? "Restarting…" : "Restart now"}
-            </button>
-            <button
-              className="secondary-button compact"
-              type="button"
-              disabled={actionLoading !== null}
-              onClick={() => setRestartPrompt(null)}
-            >
-              Later
-            </button>
-          </div>
-        </div>
-      )}
 
       {!detail.containerExists && (
         <div className="error-banner">
@@ -1941,6 +1920,23 @@ export default function AppDetail({
         confirming={actionLoading === "redeploy"}
         onConfirm={() => void confirmRedeploy()}
         onCancel={() => setShowRedeployConfirm(false)}
+      />
+
+      <ConfirmationDialog
+        open={redeployPrompt !== null}
+        title="Redeploy to apply changes?"
+        message={
+          <p>
+            {redeployPrompt} Environment changes only take effect after a
+            redeploy, which recreates the container with the current variables.
+          </p>
+        }
+        confirmLabel="Redeploy now"
+        confirmingLabel="Redeploying..."
+        cancelLabel="Later"
+        confirming={actionLoading === "redeploy"}
+        onConfirm={() => void confirmRedeploy()}
+        onCancel={() => setRedeployPrompt(null)}
       />
 
       <ConfirmationDialog
