@@ -58,6 +58,8 @@ interface FakeDockerOptions {
   replacementNetworkAddress?: string;
   /** Managed-network IP reported for the seeded (old/restored) container. */
   currentNetworkAddress?: string;
+  /** Force the candidate to report NO managed-network address (Docker race). */
+  replacementHasNoAddress?: boolean;
 }
 
 function dockerNotFound(): Error {
@@ -131,14 +133,18 @@ function createFakeDocker(options: FakeDockerOptions) {
         running = false;
       }
       const isReplacement = container.id.startsWith("replacement");
+      // Every real candidate/canonical container has a managed-network IP;
+      // default one so tests model production (the verifier targets the
+      // candidate's own address, never a hostname). Explicit options override.
       const address = isReplacement
-        ? options.replacementNetworkAddress
-        : options.currentNetworkAddress;
+        ? options.replacementNetworkAddress ?? "172.23.0.7"
+        : options.currentNetworkAddress ?? "172.23.0.5";
+      const hideAddress = isReplacement && options.replacementHasNoAddress;
       return {
         id: container.id,
         running,
         status: running ? "running" : "created",
-        networkAddresses: address ? { "deployment-apps": address } : undefined
+        networkAddresses: hideAddress ? undefined : { "deployment-apps": address }
       };
     },
     async containerExists(name) {
@@ -177,6 +183,11 @@ function createFakeDocker(options: FakeDockerOptions) {
       if (!found) {
         throw dockerNotFound();
       }
+    },
+    async captureContainerLogs(nameOrId) {
+      const found = findByIdOrName(nameOrId);
+      ops.push(`captureContainerLogs:${found ? found[1].id : nameOrId}`);
+      return `[candidate ${found ? found[1].id : nameOrId} runtime output]\nlistening on port`;
     }
   };
 
@@ -300,8 +311,9 @@ describe("deployFromGithub — preserve-then-swap rollback lifecycle", () => {
         logger: silentLogger
       },
       cloneUrlOverride: `file://${bareRepo}`,
-      // Fast, deterministic readiness loop for tests.
+      // Fast, deterministic readiness/retry loops for tests.
       dnsReadiness: { attempts: 3, delayMs: 1 },
+      candidateAddressRetry: { attempts: 2, delayMs: 1 },
       ...extra
     };
   }
@@ -745,5 +757,124 @@ describe("deployFromGithub — preserve-then-swap rollback lifecycle", () => {
     const rollbackEvent = recordedEvents.find((e) => e.eventType === "github-deploy-rolled-back");
     assert.ok(rollbackEvent);
     assert.equal((rollbackEvent!.metadata as { rollbackDnsReady?: boolean }).rollbackDnsReady, true);
+  });
+
+  // ── Verifier must target the CANDIDATE container, never the canonical name ──
+  //
+  // The Quipora failure: a healthy canonical container at 172.23.0.5 was
+  // preserved; the candidate came up at its own address (.7/.8); but internal
+  // verification probed the canonical hostname, which resolved (via the API's
+  // Docker DNS) to the OLD container's now-dead address → ECONNREFUSED, even
+  // though the candidate was healthy at its own address.
+
+  test("verification probes the CANDIDATE's own IP, not the canonical container's IP", async () => {
+    const app = makeAppWithDomain("quipora-candidate-target");
+    const canonicalIp = "172.23.0.5"; // healthy production container's IP
+    const candidateIp = "172.23.0.7"; // candidate's own, different IP
+    const fake = createFakeDocker({
+      currentName: app.containerName!,
+      seedCurrentContainer: true,
+      currentNetworkAddress: canonicalIp,
+      replacementNetworkAddress: candidateIp
+    });
+
+    const probedHostnames: string[] = [];
+    const publicFetch = stubPublicFetch(200);
+    let result;
+    try {
+      result = await deployFromGithub(
+        makeDeps(fake, true, {
+          healthCheckDeps: {
+            httpClient: {
+              async request(options) {
+                probedHostnames.push(options.hostname);
+                return { statusCode: 200, latencyMs: 1 };
+              }
+            },
+            isContainerRunning: async () => true,
+            logger: silentLogger
+          },
+          resolveHostAddresses: async () => [candidateIp]
+        }),
+        app.id
+      );
+    } finally {
+      publicFetch.restore();
+    }
+
+    assert.equal(result.success, true);
+    // The verifier hit ONLY the candidate's own address — never the canonical
+    // container's IP, and never the canonical hostname (which resolves to it).
+    assert.deepEqual(probedHostnames, [candidateIp]);
+    assert.equal(probedHostnames.includes(canonicalIp), false);
+    assert.equal(probedHostnames.includes(app.containerName!), false);
+  });
+
+  test("if the candidate's address cannot be resolved, verification fails with a candidate-address diagnostic and NEVER probes the canonical hostname", async () => {
+    const app = makeAppWithDomain("quipora-no-address");
+    const fake = createFakeDocker({
+      currentName: app.containerName!,
+      seedCurrentContainer: true,
+      currentNetworkAddress: "172.23.0.5",
+      replacementHasNoAddress: true // candidate never reports an IP
+    });
+
+    const probedHostnames: string[] = [];
+    const result = await deployFromGithub(
+      makeDeps(fake, true, {
+        healthCheckDeps: {
+          httpClient: {
+            async request(options) {
+              probedHostnames.push(options.hostname);
+              return { statusCode: 200, latencyMs: 1 };
+            }
+          },
+          isContainerRunning: async () => true,
+          logger: silentLogger
+        }
+      }),
+      app.id
+    );
+
+    assert.equal(result.success, false);
+    // The OLD behavior (replacementInternalAddress ?? containerName) would have
+    // probed the canonical hostname here; the fix refuses to.
+    assert.equal(probedHostnames.length, 0, "the verifier must not probe anything when the candidate address is unknown");
+    assert.match(result.message, /candidate/i);
+    assert.match(result.message, /address/i);
+
+    // The healthy previous container is restored (rollback), untouched.
+    assert.equal(result.rolledBack, true);
+    const live = fake.byName.get(app.containerName!);
+    assert.equal(live?.id, "old-container-id");
+    assert.equal(live?.running, true);
+  });
+
+  test("a failed candidate's runtime log is preserved in the build-log record before the container is removed", async () => {
+    const app = makeAppWithDomain("quipora-log-capture");
+    const fake = createFakeDocker({
+      currentName: app.containerName!,
+      seedCurrentContainer: true,
+      replacementNetworkAddress: "172.23.0.7"
+    });
+
+    // Health unreachable -> verification fails at the candidate's own address.
+    const result = await deployFromGithub(makeDeps(fake, false), app.id);
+    assert.equal(result.success, false);
+    assert.equal(result.rolledBack, true);
+
+    // The candidate's runtime log was captured and stored in the deployment
+    // record (the Logs tab / failure modal reads this).
+    const buildLog = appDatabase.getBuildLog(app.id);
+    assert.ok(buildLog?.log?.includes("FAILED DEPLOYMENT CANDIDATE — RUNTIME LOG"));
+    assert.ok(buildLog?.log?.includes("runtime output"));
+
+    // Capture happened BY candidate ID and BEFORE the failed candidate (now
+    // under the canonical name after promotion) was removed.
+    const captureIndex = fake.ops.findIndex((op) => op.startsWith("captureContainerLogs:replacement"));
+    const removeIndex = fake.ops.findIndex((op) => op === `removeContainer:${app.containerName}`);
+    assert.ok(captureIndex >= 0, "the failed candidate's logs are captured");
+    assert.ok(removeIndex >= 0, "the failed candidate is removed");
+    assert.ok(captureIndex < removeIndex, "capture happens before removal");
   });
 });
