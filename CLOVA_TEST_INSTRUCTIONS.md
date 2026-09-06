@@ -69,11 +69,45 @@ hazard because it renames the previous container back to the canonical name.
 - `app-<name>` is only ever the app container's hostname — never a Caddy alias.
 - Caddy is **not** restarted as part of this fix (no ACME/cert churn).
 
+## Second fix under test — verifier must target the CANDIDATE container
+
+Separate from the DNS re-registration above: pre-promotion **internal**
+verification used to fall back to the canonical hostname
+(`replacementInternalAddress ?? containerName`). When the candidate had no
+freshly-resolved address, the probe hit `app-<name>`, which the API resolves
+via Docker DNS to whatever holds that name during promotion — the **previous**
+container — producing:
+
+    Container started, but nothing responded on port 80/ ECONNREFUSED 172.23.0.5:80
+
+even though the candidate was healthy at its own address (e.g. `.7`). Fixed:
+the verification target is now resolved from the **candidate's container ID**
+immediately before probing (`resolveCandidateManagedAddress`), and the code
+**refuses** to fall back to the canonical hostname — an unresolvable candidate
+address is a clean, diagnostic verification failure that rolls back, never a
+probe of the wrong container.
+
+Briefing additions for this fix (with a canonical container already running):
+1. Deploy a candidate; confirm it receives its **own** `deployment-apps` IP
+   (different from the canonical container's).
+2. In `docker logs deployment-platform-api`, confirm
+   `"Verifying candidate internal reachability at its own managed-network address"`
+   with `resolvedCandidateAddress` equal to the **candidate's** IP — never the
+   canonical container's IP, never a hostname.
+3. Confirm the candidate passes verification, is promoted, and the old
+   container becomes the rollback container.
+4. Force an unhealthy candidate; confirm rollback restores the old container,
+   and the **failed candidate's runtime log is preserved** in the deployment
+   record (visible in the Logs tab / failure modal under
+   `FAILED DEPLOYMENT CANDIDATE — RUNTIME LOG`) — captured before removal.
+
 ## Automated coverage (already added)
 
 - `apps/api/src/tests/github-deploy-rollback.test.ts` — promotion endpoint
   refresh (exact ID), wrong-IP rejection (public route never attempted),
   transient-retry, permanent-failure diagnostic, rollback endpoint refresh + IP
-  validation.
+  validation; **verifier targets the candidate's own IP not the canonical
+  container's**, candidate-address-unresolvable fails without probing the
+  hostname, and the failed candidate's runtime log is preserved before removal.
 - `apps/api/src/tests/redeploy-docker-ops.test.ts` — `refreshNetworkEndpoint`
   disconnect→connect ordering, by ID, with no copied EndpointConfig.

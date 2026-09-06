@@ -63,6 +63,13 @@ export interface RedeployDockerOps {
    * EndpointConfig is copied from another container.
    */
   refreshNetworkEndpoint(containerId: string, networkName: string): Promise<void>;
+  /**
+   * Best-effort capture of a container's combined stdout/stderr tail, used to
+   * preserve a FAILED deployment candidate's runtime output before it is
+   * removed (so a verification failure can be diagnosed from ClovaForge rather
+   * than being lost with the container). Optional: callers guard on presence.
+   */
+  captureContainerLogs?(nameOrId: string, tailLines?: number): Promise<string>;
   /** True if a container with this name/id exists, false on a 404. */
   containerExists(nameOrId: string): Promise<boolean>;
   /**
@@ -158,6 +165,26 @@ export function createDockerOps(docker: Docker): RedeployDockerOps {
       // default aliases — never any other container's configuration.
       await network.disconnect({ Container: containerId });
       await network.connect({ Container: containerId });
+    },
+
+    async captureContainerLogs(nameOrId, tailLines = 400) {
+      const raw = await docker.getContainer(nameOrId).logs({
+        stdout: true,
+        stderr: true,
+        tail: tailLines,
+        timestamps: false
+      });
+      // Bound to the most recent output, then strip Docker's 8-byte stream
+      // multiplexing frame headers and other non-printable control bytes,
+      // keeping tab (0x09), newline (0x0A) and carriage return (0x0D).
+      const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as unknown as string);
+      const MAX_BYTES = 16 * 1024;
+      const bounded = buffer.length > MAX_BYTES ? buffer.subarray(buffer.length - MAX_BYTES) : buffer;
+      const printable = Buffer.from(
+        [...bounded].filter((b) => b === 9 || b === 10 || b === 13 || (b >= 32 && b !== 127))
+      );
+      const text = printable.toString("utf8");
+      return buffer.length > MAX_BYTES ? `… (truncated)\n${text}` : text;
     },
 
     async containerExists(nameOrId) {

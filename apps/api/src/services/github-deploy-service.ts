@@ -310,6 +310,49 @@ async function refreshManagedEndpoint(
   return { expectedIp };
 }
 
+// Bounded wait for a just-(re)started/(re)connected candidate to actually have
+// a managed-network address reported by Docker. Small and fast — the address
+// is normally present on the first inspect; the retries only cover a brief
+// post-connect race. Never falls back to a hostname.
+const CANDIDATE_ADDRESS_ATTEMPTS = 6;
+const CANDIDATE_ADDRESS_DELAY_MS = 500;
+
+/**
+ * Resolves the verification target for a deployment candidate by inspecting it
+ * BY CONTAINER ID and reading its `deployment-apps` address — the candidate's
+ * own IP, never the canonical hostname.
+ *
+ * This is the crux of the "verifier probed the wrong container" bug: after the
+ * candidate is renamed to the canonical name, resolving that hostname (via the
+ * API's Docker DNS) can return the PREVIOUS container's address, so a probe of
+ * the hostname hits the old, now-stopped container and reports ECONNREFUSED
+ * even though the candidate is healthy at its own address. Tying the target to
+ * the candidate's container ID removes any dependence on name resolution.
+ */
+async function resolveCandidateManagedAddress(
+  dockerOps: GithubDeployDependencies["dockerOps"],
+  containerId: string,
+  logger: DeployLogger,
+  logContext: Record<string, unknown>,
+  options: { attempts: number; delayMs: number }
+): Promise<string | null> {
+  for (let attempt = 1; attempt <= options.attempts; attempt += 1) {
+    const inspected = await dockerOps.inspectContainer(containerId);
+    const address = inspected.networkAddresses?.[MANAGED_APPS_NETWORK];
+    if (address) {
+      return address;
+    }
+    logger.warn(
+      { ...logContext, containerId, network: MANAGED_APPS_NETWORK, attempt },
+      "Candidate has no managed-network address yet; retrying before verification"
+    );
+    if (attempt < options.attempts) {
+      await sleep(options.delayMs);
+    }
+  }
+  return null;
+}
+
 export type DeployStage =
   | "resolving-repository"
   | "resolving-branch"
@@ -396,6 +439,8 @@ export interface GithubDeployDependencies {
   logger?: DeployLogger;
   /** Test-only override for the post-rename DNS readiness loop's bounds. */
   dnsReadiness?: { attempts?: number; delayMs?: number };
+  /** Test-only override for the candidate-address resolution loop's bounds. */
+  candidateAddressRetry?: { attempts?: number; delayMs?: number };
   now?: () => Date;
   cloneTimeoutMs?: number;
   buildTimeoutMs?: number;
@@ -475,6 +520,10 @@ export async function deployFromGithub(
   const dnsReadinessOptions = {
     attempts: deps.dnsReadiness?.attempts ?? DNS_READINESS_ATTEMPTS,
     delayMs: deps.dnsReadiness?.delayMs ?? DNS_READINESS_DELAY_MS
+  };
+  const candidateAddressOptions = {
+    attempts: deps.candidateAddressRetry?.attempts ?? CANDIDATE_ADDRESS_ATTEMPTS,
+    delayMs: deps.candidateAddressRetry?.delayMs ?? CANDIDATE_ADDRESS_DELAY_MS
   };
   const now = deps.now ?? (() => new Date());
   const cloneTimeoutMs = deps.cloneTimeoutMs ?? DEFAULT_CLONE_TIMEOUT_MS;
@@ -955,11 +1004,66 @@ export async function deployFromGithub(
 
     const healthConfig = appDatabase.getAppHealthCheck(appId);
     const internalVerificationPath = healthConfig?.enabled ? healthConfig.path : "/";
+
+    // Resolve the verification target from the CANDIDATE container's own ID,
+    // immediately before probing — never the canonical hostname, which can
+    // resolve to the previous container after the rename. `refreshManagedEndpoint`
+    // above usually already set replacementInternalAddress to the candidate's
+    // post-reconnect IP; this re-confirms it by ID and covers the case where it
+    // came back empty, retrying briefly rather than falling back to a name.
+    if (!replacementInternalAddress) {
+      replacementInternalAddress = await resolveCandidateManagedAddress(
+        dockerOps,
+        replacementContainerId,
+        logger,
+        { appId, deploymentPhase: "promotion", canonicalName: containerName },
+        candidateAddressOptions
+      );
+    }
+    if (!replacementInternalAddress) {
+      // Refuse to verify against the canonical hostname — that is exactly the
+      // wrong-container probe this guards against. The old container is still
+      // preserved, so this fails cleanly and rolls back.
+      throw new GithubDeployError(
+        `Could not determine the deployment candidate's ${MANAGED_APPS_NETWORK} address (candidate container ${replacementContainerId}). Refusing to verify against the canonical hostname "${containerName}", which can resolve to the previous container after promotion.`,
+        "verifying-health"
+      );
+    }
+
+    logger.info(
+      {
+        appId,
+        deploymentPhase: "promotion",
+        candidateId: replacementContainerId,
+        candidateName: containerName,
+        candidateImage: imageTag,
+        network: MANAGED_APPS_NETWORK,
+        resolvedCandidateAddress: replacementInternalAddress,
+        targetPort: containerPort,
+        healthTarget: internalVerificationPath
+      },
+      "Verifying candidate internal reachability at its own managed-network address"
+    );
+
     internalCheckResult = await verifyInternalReachability(
       deps.healthCheckDeps.httpClient,
-      replacementInternalAddress ?? containerName,
+      replacementInternalAddress,
       containerPort,
       internalVerificationPath
+    );
+
+    logger.info(
+      {
+        appId,
+        deploymentPhase: "promotion",
+        candidateId: replacementContainerId,
+        resolvedCandidateAddress: replacementInternalAddress,
+        targetPort: containerPort,
+        reachable: internalCheckResult.reachable,
+        statusCode: internalCheckResult.statusCode,
+        result: internalCheckResult.message
+      },
+      "Candidate internal reachability result"
     );
 
     recordEvent({
@@ -1215,6 +1319,44 @@ export async function deployFromGithub(
     // regardless of which failure path is taken. `rolledBack` is refined
     // by the branches that actually restore the previous container.
     progressReporter.fail(message, stage, false);
+
+    // Preserve the FAILED candidate's runtime output BEFORE it is removed
+    // below, so a verification failure can be diagnosed directly from
+    // ClovaForge (the Logs tab / failure modal) rather than being lost with
+    // the container. Captured by candidate ID (rename-safe), appended to the
+    // build-log record without downgrading a genuinely successful build's
+    // status. Best-effort: diagnostics must never change the deploy result.
+    if (replacementContainerId && dockerOps.captureContainerLogs) {
+      try {
+        const candidateLog = await dockerOps.captureContainerLogs(replacementContainerId);
+        if (candidateLog.trim().length > 0) {
+          const existing = appDatabase.getBuildLog(appId);
+          const priorSection = existing?.log ? `${existing.log}\n\n` : "";
+          appDatabase.updateBuildLog(appId, {
+            log: `${priorSection}===== FAILED DEPLOYMENT CANDIDATE — RUNTIME LOG (stage: ${stage}) =====\n${candidateLog}`,
+            truncated: existing?.truncated ?? false,
+            status: existing?.status ?? "failed",
+            at: now().toISOString(),
+            commitSha
+          });
+          logger.info(
+            {
+              appId,
+              deploymentPhase: "failure",
+              candidateId: replacementContainerId,
+              stage,
+              capturedBytes: candidateLog.length
+            },
+            "Preserved failed candidate runtime log in the deployment record"
+          );
+        }
+      } catch (captureError) {
+        logger.warn(
+          { appId, candidateId: replacementContainerId, error: errorMessage(captureError) },
+          "Could not capture the failed candidate's runtime log"
+        );
+      }
+    }
 
     const eventMetadata: Record<string, unknown> = { stage };
     if (selectedContainerPort !== null) {
