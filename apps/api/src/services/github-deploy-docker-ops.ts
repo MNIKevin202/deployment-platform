@@ -1,4 +1,6 @@
 import { readdirSync } from "node:fs";
+import { relative, sep } from "node:path";
+import tar from "tar-fs";
 import type Docker from "dockerode";
 import { getErrorStatusCode } from "../docker-errors.js";
 
@@ -88,10 +90,9 @@ export interface GithubBuildDockerOps {
 export function createGithubBuildDockerOps(docker: Docker): GithubBuildDockerOps {
   return {
     async buildImage(input) {
-      let entries: string[];
-
+      // Confirm the prepared context is readable before streaming it.
       try {
-        entries = readdirSync(input.contextPath);
+        readdirSync(input.contextPath);
       } catch (error) {
         throw new BuildImageError(
           `Unable to read the prepared build context: ${error instanceof Error ? error.message : "unknown error"}`,
@@ -99,17 +100,38 @@ export function createGithubBuildDockerOps(docker: Docker): GithubBuildDockerOps
         );
       }
 
-      const stream = await docker.buildImage(
-        { context: input.contextPath, src: entries },
-        {
-          t: input.tag,
-          dockerfile: input.dockerfileRelativePath,
-          // dockerode forwards this as the /build API's `nocache` query
-          // param. Only sent when requested, so a normal build is byte-for-
-          // byte unchanged.
-          ...(input.noCache ? { nocache: true } : {})
+      // Pack the build context ourselves and hand Docker a raw tar STREAM.
+      //
+      // We deliberately do NOT use dockerode's `{ context, src }` shortcut.
+      // Its client-side .dockerignore handling (util.prepareBuildContext)
+      // filters the top-level entries through the repo's .dockerignore BEFORE
+      // the tar is sent — and a .dockerignore that lists "Dockerfile" (the
+      // standard way to keep it out of `COPY . .`) makes it strip the
+      // Dockerfile itself, so the daemon then fails almost instantly with
+      // "Cannot locate specified Dockerfile". Docker's own CLI never does this:
+      // the daemon always keeps the referenced Dockerfile and applies
+      // .dockerignore server-side (for COPY). Packing the whole context and
+      // letting the daemon filter reproduces that behaviour exactly, and
+      // guarantees the configured Dockerfile is present in the context — which
+      // is what makes a subdirectory/monorepo Dockerfile build work.
+      const context = input.contextPath;
+      const tarStream = tar.pack(context, {
+        // .git is never part of a build and can be large; everything else is
+        // left for the daemon to apply .dockerignore to, matching `docker build`.
+        ignore: (name: string) => {
+          const rel = relative(context, name);
+          return rel === ".git" || rel.startsWith(`.git${sep}`);
         }
-      );
+      });
+
+      const stream = await docker.buildImage(tarStream, {
+        t: input.tag,
+        dockerfile: input.dockerfileRelativePath,
+        // dockerode forwards this as the /build API's `nocache` query
+        // param. Only sent when requested, so a normal build is byte-for-
+        // byte unchanged.
+        ...(input.noCache ? { nocache: true } : {})
+      });
 
       const logLines: string[] = [];
       let logLength = 0;
