@@ -4,6 +4,7 @@ import type { AppDatabase } from "../database.js";
 import { buildContainerEnvArray } from "./environment-service.js";
 import { buildVolumeMounts } from "./storage-service.js";
 import { buildResourceHostConfig } from "./resource-limits.js";
+import { ensureManagedNameResolves } from "./managed-app-network.js";
 import { managedAppNetworkHostConfig } from "./managed-app-network.js";
 import { buildPublishedPortConfig } from "./port-bindings.js";
 import { getErrorStatusCode } from "../docker-errors.js";
@@ -510,6 +511,16 @@ export async function redeployApp(
 
     return { success: false, message };
   }
+
+  // The container answered to a temporary name until a moment ago, so its
+  // managed-network DNS entry is stale. Re-register it under the canonical name
+  // before anything is routed to it — the same repair the GitHub deploy path
+  // performs after ITS rename. Best-effort: never fails the redeploy.
+  await ensureManagedNameResolves({
+    ops: dockerOps,
+    containerId: confirmedNewContainerId,
+    containerName
+  });
 
   // The rename succeeded, so the replacement is confirmed to be the app's
   // container now. A failure to re-inspect it is very likely transient —
