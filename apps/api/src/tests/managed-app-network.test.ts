@@ -66,8 +66,8 @@ describe("ensureManagedNameResolves", () => {
     return {
       refreshes,
       ops: {
-        async inspectContainer() {
-          return { networkAddresses: current ? { [MANAGED_APPS_NETWORK]: current } : {} };
+        async inspectContainer(): Promise<{ networkAddresses?: Record<string, string> }> {
+          return current ? { networkAddresses: { [MANAGED_APPS_NETWORK]: current } } : {};
         },
         async refreshNetworkEndpoint(containerId: string, networkName: string) {
           refreshes.push(`${containerId}:${networkName}`);
