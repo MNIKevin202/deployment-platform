@@ -4,6 +4,7 @@ import type { AppDatabase } from "../database.js";
 import { buildContainerEnvArray } from "./environment-service.js";
 import { buildVolumeMounts } from "./storage-service.js";
 import { buildResourceHostConfig } from "./resource-limits.js";
+import { MANAGED_APPS_NETWORK, managedAppNetworkHostConfig } from "./managed-app-network.js";
 import { buildPublishedPortConfig } from "./port-bindings.js";
 import type { RedeployDockerOps } from "./redeploy-service.js";
 import type { GithubBuildDockerOps } from "./github-deploy-docker-ops.js";
@@ -171,8 +172,7 @@ export async function verifyPublicRoute(domain: string, path = "/"): Promise<Pub
   };
 }
 
-/** The managed-app Docker network every app container is attached to. */
-export const MANAGED_APPS_NETWORK = "deployment-apps";
+export { MANAGED_APPS_NETWORK } from "./managed-app-network.js";
 
 // Bounded readiness window for the promoted container's canonical hostname to
 // resolve, on the managed-app network's embedded DNS, to that container's
@@ -896,7 +896,7 @@ export async function deployFromGithub(
       },
       ExposedPorts: { [exposedPort]: {}, ...portConfig.ExposedPorts },
       HostConfig: {
-        NetworkMode: "deployment-apps",
+        ...managedAppNetworkHostConfig(),
         RestartPolicy: { Name: app.restartPolicy || "unless-stopped" },
         Mounts: buildVolumeMounts(volumes),
         PortBindings: portConfig.PortBindings,

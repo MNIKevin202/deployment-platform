@@ -4,6 +4,7 @@ import type { AppDatabase } from "../database.js";
 import { buildContainerEnvArray } from "./environment-service.js";
 import { buildVolumeMounts } from "./storage-service.js";
 import { buildResourceHostConfig } from "./resource-limits.js";
+import { managedAppNetworkHostConfig } from "./managed-app-network.js";
 import { buildPublishedPortConfig } from "./port-bindings.js";
 import { getErrorStatusCode } from "../docker-errors.js";
 import type { RecordEventFn } from "./deployment-event-service.js";
@@ -392,7 +393,7 @@ export async function redeployApp(
         ...portConfig.ExposedPorts
       },
       HostConfig: {
-        NetworkMode: "deployment-apps",
+        ...managedAppNetworkHostConfig(),
         RestartPolicy: {
           Name: app.restartPolicy || "unless-stopped"
         },

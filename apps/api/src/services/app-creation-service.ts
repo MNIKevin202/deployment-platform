@@ -7,6 +7,7 @@ import {
 } from "./redeploy-service.js";
 import { buildContainerEnvArray } from "./environment-service.js";
 import { buildResourceHostConfig } from "./resource-limits.js";
+import { managedAppNetworkHostConfig } from "./managed-app-network.js";
 import { buildPublishedPortConfig, isValidPort } from "./port-bindings.js";
 import {
   buildVolumeMounts,
@@ -498,7 +499,7 @@ async function performCreateAppWithConfig(
         ...portConfig.ExposedPorts
       },
       HostConfig: {
-        NetworkMode: "deployment-apps",
+        ...managedAppNetworkHostConfig(),
         RestartPolicy: {
           Name: restartPolicy
         },
