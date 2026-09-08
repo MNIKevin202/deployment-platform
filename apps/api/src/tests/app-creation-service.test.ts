@@ -263,6 +263,32 @@ describe("createAppWithConfig", () => {
     assert.deepEqual(createOptions.Env, []);
   });
 
+  test("REGRESSION: the container gets an empty DNS search list so container-name DNS works", async () => {
+    // Managed apps reach each other (and their databases) by container name on
+    // the shared network. Docker copies the HOST's resolv.conf search list into
+    // containers, so on a host running Tailscale (or any VPN/DHCP publishing a
+    // search domain) the resolver appends that suffix and asks for
+    // "app-foo-db.<suffix>", which the embedded DNS does not own — the bare
+    // container name is never answered and every app->db lookup dies with
+    // ENOTFOUND, while external names keep resolving and hide the breakage.
+    // "." clears the search list (docker run --dns-search=.).
+    const { ops, calls } = createFakeOps();
+
+    const result = await createAppWithConfig(deps({ dockerOps: ops }), {
+      name: "dns-app",
+      image: "nginx:alpine",
+      containerPort: 80
+    });
+
+    assert.equal(result.success, true);
+
+    const createOptions = calls.createContainerOptions[0] as {
+      HostConfig: { NetworkMode: string; DnsSearch: string[] };
+    };
+    assert.equal(createOptions.HostConfig.NetworkMode, "deployment-apps");
+    assert.deepEqual(createOptions.HostConfig.DnsSearch, ["."]);
+  });
+
   test("succeeds with environment variables and storage mounts, coordinated in one transaction", async () => {
     appDatabase.createGlobalEnvVar({
       key: "TZ",
