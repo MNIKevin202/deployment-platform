@@ -7,7 +7,7 @@ import {
 } from "./redeploy-service.js";
 import { buildContainerEnvArray } from "./environment-service.js";
 import { buildResourceHostConfig } from "./resource-limits.js";
-import { managedAppNetworkHostConfig } from "./managed-app-network.js";
+import { ensureManagedNameResolves, managedAppNetworkHostConfig } from "./managed-app-network.js";
 import { buildPublishedPortConfig, isValidPort } from "./port-bindings.js";
 import {
   buildVolumeMounts,
@@ -546,6 +546,12 @@ async function performCreateAppWithConfig(
         `New container failed to reach a running state (status: ${inspected.status})`
       );
     }
+
+    // The app is created with its final name, so register it with the
+    // managed-app network's DNS now — other apps address it as `app-<name>`,
+    // and on some hosts Docker does not register that name at creation.
+    // Best-effort: never fails the create.
+    await ensureManagedNameResolves({ ops: dockerOps, containerId, containerName });
 
     appDatabase.updateAppContainer(createdApp.id, {
       containerId: inspected.id,
