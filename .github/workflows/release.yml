@@ -149,8 +149,19 @@ jobs:
           SIGNING_PRIVATE_KEY_PEM_BASE64: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY }}
           SIGNING_KEY_ID: ${{ vars.RELEASE_SIGNING_KEY_ID || 'clovaforge-release-2' }}
         run: |
+          # Safe diagnostic: the character length only — never the value
+          # (GitHub also masks the value). 0 means the secret is empty/unset;
+          # a small non-zero length means it decodes to no real key.
+          echo "RELEASE_SIGNING_PRIVATE_KEY length: ${#SIGNING_PRIVATE_KEY_PEM_BASE64}"
+          echo "RELEASE_SIGNING_KEY_ID: ${SIGNING_KEY_ID}"
           if [ -z "$SIGNING_PRIVATE_KEY_PEM_BASE64" ]; then
-            echo "::error::Repo secret RELEASE_SIGNING_PRIVATE_KEY is not set — see docs/SELF_UPDATE_ARCHITECTURE.md 'Signing' for how to generate and provision it."
+            echo "::error::Repo secret RELEASE_SIGNING_PRIVATE_KEY is empty or unset. Re-set it locally with: node scripts/generate-signing-key.mjs clovaforge-release-2 (then 'gh secret set RELEASE_SIGNING_PRIVATE_KEY' and paste the printed private base64). See docs/SELF_UPDATE_ARCHITECTURE.md 'Signing'."
+            exit 1
+          fi
+          # Fail early and clearly if the base64 does not decode to a private
+          # key PEM, rather than surfacing a cryptic signing error later.
+          if ! printf '%s' "$SIGNING_PRIVATE_KEY_PEM_BASE64" | base64 -d 2>/dev/null | grep -q "BEGIN PRIVATE KEY"; then
+            echo "::error::RELEASE_SIGNING_PRIVATE_KEY does not base64-decode to a PKCS8 PRIVATE KEY PEM. Regenerate with scripts/generate-signing-key.mjs and re-set the secret to the exact printed base64."
             exit 1
           fi
           node scripts/generate-release-manifest.mjs manifest.json manifest.json.sig
