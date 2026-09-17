@@ -30,13 +30,15 @@ Generate a key pair **locally** (never on a CI runner), on Windows or any
 machine with Node:
 
 ```
-node scripts/generate-signing-key.mjs clovaforge-release-1
+node scripts/generate-signing-key.mjs clovaforge-release-2
 ```
 
-That writes the **public** key to `installer/trusted-keys/clovaforge-release-1.pem`
+That writes the **public** key to `installer/trusted-keys/clovaforge-release-2.pem`
 (commit it) and prints the **private** key (base64). Add the private key as
 the GitHub Actions repository secret `RELEASE_SIGNING_PRIVATE_KEY`, and set
-the repository variable `RELEASE_SIGNING_KEY_ID` to `clovaforge-release-1`.
+the repository variable `RELEASE_SIGNING_KEY_ID` to `clovaforge-release-2`.
+
+The active key is `clovaforge-release-2`.
 
 See `docs/SELF_UPDATE_ARCHITECTURE.md` → "Signing" for the full procedure and
 key rotation.

@@ -261,20 +261,22 @@ positively assert about rather than assume.
   run **locally** (never on a CI runner), on Windows/Mac/Linux:
 
   ```
-  node scripts/generate-signing-key.mjs clovaforge-release-1
+  node scripts/generate-signing-key.mjs clovaforge-release-2
   ```
 
-  That writes the **public** key to `installer/trusted-keys/clovaforge-release-1.pem`
+  That writes the **public** key to `installer/trusted-keys/clovaforge-release-2.pem`
   (commit it) and prints the **private** key (base64 PKCS8 PEM). Then:
   - add the private key as the GitHub Actions repository **secret**
     `RELEASE_SIGNING_PRIVATE_KEY`;
   - set the repository **variable** `RELEASE_SIGNING_KEY_ID` to
-    `clovaforge-release-1`;
+    `clovaforge-release-2`;
   - commit the new `.pem` and ship it in a release **before** the first
     signed release, so installations already trust the key when they first
     see a manifest signed with it.
+
+  (The active key is `clovaforge-release-2`.)
 - **Rotation**: run the keygen with a new keyId (e.g.
-  `clovaforge-release-2`), commit the new public `.pem` **alongside** the old
+  `clovaforge-release-3`), commit the new public `.pem` **alongside** the old
   one (both stay trusted, so releases signed before the rotation still
   verify), ship that as an ordinary release, then switch the CI
   secret/`RELEASE_SIGNING_KEY_ID` to the new key for the *next* release. Only

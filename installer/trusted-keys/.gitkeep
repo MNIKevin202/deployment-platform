@@ -1,6 +1,0 @@
-# Trusted keys directory
-# Release-signing PUBLIC keys live here as <keyId>.pem (SPKI PEM).
-# This placeholder keeps the directory present (and the API Dockerfile COPY
-# valid) before any key is provisioned. An empty directory = trust nothing =
-# every release rejected (fail closed). Remove this file once a real key
-# (e.g. clovaforge-release-1.pem) is added.

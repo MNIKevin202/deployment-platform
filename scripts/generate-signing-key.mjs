@@ -13,7 +13,7 @@
  *
  * Usage:
  *   node scripts/generate-signing-key.mjs [keyId]
- *   (keyId defaults to "clovaforge-release-1")
+ *   (keyId defaults to the next rotation id; pass one explicitly for clarity)
  */
 
 import { generateKeyPairSync } from "node:crypto";
@@ -22,7 +22,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const keyId = (process.argv[2] ?? "clovaforge-release-1").trim();
+const keyId = (process.argv[2] ?? "clovaforge-release-2").trim();
 
 if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(keyId)) {
   console.error(`Invalid keyId: ${JSON.stringify(keyId)} (letters, digits, . _ - only).`);

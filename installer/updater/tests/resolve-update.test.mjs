@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, test } from "node:test";
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "..", "resolve-update.mjs");
 
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-const KEY_ID = "clovaforge-release-1";
+const KEY_ID = "test-signing-key";
 
 function baseManifest(overrides = {}) {
   return {

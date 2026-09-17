@@ -147,7 +147,7 @@ jobs:
           # rather than publishing an unsigned/unverifiable release, until
           # it has actually been provisioned as a repo secret.
           SIGNING_PRIVATE_KEY_PEM_BASE64: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY }}
-          SIGNING_KEY_ID: ${{ vars.RELEASE_SIGNING_KEY_ID || 'clovaforge-release-1' }}
+          SIGNING_KEY_ID: ${{ vars.RELEASE_SIGNING_KEY_ID || 'clovaforge-release-2' }}
         run: |
           if [ -z "$SIGNING_PRIVATE_KEY_PEM_BASE64" ]; then
             echo "::error::Repo secret RELEASE_SIGNING_PRIVATE_KEY is not set — see docs/SELF_UPDATE_ARCHITECTURE.md 'Signing' for how to generate and provision it."

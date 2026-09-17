@@ -27,11 +27,11 @@ describe("loadTrustedKeysFromDir", () => {
   });
 
   test("loads every well-named .pem, keyed by basename", () => {
-    writePublicKey(dir, "clovaforge-release-1");
-    writePublicKey(dir, "clovaforge-release-2");
+    writePublicKey(dir, "example-key-a");
+    writePublicKey(dir, "example-key-b");
     const keys = loadTrustedKeysFromDir(dir);
-    assert.deepEqual(Object.keys(keys).sort(), ["clovaforge-release-1", "clovaforge-release-2"]);
-    assert.ok(keys["clovaforge-release-1"].includes("BEGIN PUBLIC KEY"));
+    assert.deepEqual(Object.keys(keys).sort(), ["example-key-a", "example-key-b"]);
+    assert.ok(keys["example-key-a"].includes("BEGIN PUBLIC KEY"));
   });
 
   test("ignores non-.pem files and files whose contents are not a public key", () => {
