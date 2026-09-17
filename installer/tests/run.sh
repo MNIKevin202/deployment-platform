@@ -2646,7 +2646,9 @@ echo "=== ShellCheck (if available) ==="
 if command -v shellcheck >/dev/null 2>&1; then
   SHELLCHECK_FAILURES=0
   for f in "$INSTALLER_DIR"/install.sh "$INSTALLER_DIR"/lib/*.sh; do
-    if ! shellcheck -x -S warning "$f" >/dev/null 2>&1; then
+    # Print the findings (never silently redirect to /dev/null) so a failure is
+    # actionable in CI logs rather than a black box.
+    if ! shellcheck -x -S warning "$f"; then
       SHELLCHECK_FAILURES=$((SHELLCHECK_FAILURES + 1))
       printf '[FAIL] shellcheck: %s\n' "$f"
     fi
@@ -2692,7 +2694,12 @@ FILESYSTEM_SH="$(cat "$INSTALLER_DIR/lib/filesystem.sh")"
 assert_contains "filesystem creates the trusted-keys directory" "$FILESYSTEM_SH" "config/trusted-keys"
 assert_contains "filesystem creates the updater directory" "$FILESYSTEM_SH" '"$INSTALL_ROOT/updater"'
 assert_contains "install_updater_assets is wired into setup_filesystem" "$FILESYSTEM_SH" "install_updater_assets"
-assert_contains "updater assets install the resolver" "$FILESYSTEM_SH" "resolve-update.mjs"
+# install_updater_assets ships every updater/*.mjs (the resolver, the DB helpers,
+# and the migration verifier) via a glob, so assert the resolver FILE is present
+# to be shipped rather than a now-removed literal reference in filesystem.sh.
+assert_eq "the resolver ships in installer/updater" "yes" \
+  "$([ -f "$INSTALLER_DIR/updater/resolve-update.mjs" ] && echo yes || echo no)"
+assert_contains "updater assets are installed via the *.mjs glob" "$FILESYSTEM_SH" "updater/*.mjs"
 assert_contains "updater assets install the deploy engine" "$FILESYSTEM_SH" "release-remote.sh"
 assert_contains "trusted keys are installed mode 600" "$FILESYSTEM_SH" 'chmod 600 "${INSTALL_ROOT}/config/trusted-keys/"'
 
