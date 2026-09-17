@@ -254,6 +254,87 @@ export async function registerPlatformUpdateRoutes(
     return { success: true, settings: parsed.data };
   });
 
+  // Writes the canonical, server-chosen manual apply request. trigger "manual"
+  // makes the resolver treat it as operator-requested: it bypasses the
+  // notify_only policy and the maintenance-window timing (the admin is present
+  // and asking now) but NEVER the requiresManualApproval kill switch — which a
+  // manual request already satisfies. Idempotent for the same target.
+  function writePendingApply(targetVersion: string): void {
+    appDatabase.setJsonSetting(UPDATE_APPLY_REQUEST_KEY, {
+      requestedAt: new Date().toISOString(),
+      targetVersion,
+      trigger: "manual"
+    } satisfies PendingApplyRequest);
+  }
+
+  type ApplyResolution =
+    | { ok: true; targetVersion: string; alreadyQueued: boolean }
+    | { ok: false; code: number; message: string; extra?: Record<string, unknown> };
+
+  // The single source of truth for "may this manual apply proceed, and to what
+  // version". Shared by /apply and /request-apply so the guard rules can never
+  // silently diverge. The target is ALWAYS taken from THIS installation's own
+  // verified status cache — never from the caller — and the host updater
+  // re-verifies it before applying.
+  function resolveManualApply(cache: UpdateStatusCache | null): ApplyResolution {
+    if (!cache || cache.result.outcome !== "update-available") {
+      return { ok: false, code: 409, message: "No verified update is available to apply. Run a check first." };
+    }
+    if (cache.result.requiresIncrementalUpgrade) {
+      return {
+        ok: false,
+        code: 409,
+        message: "This installation is too old to upgrade directly to the latest release. An incremental upgrade is required."
+      };
+    }
+    const targetVersion = cache.result.latestVersion;
+    if (!isValidSemVer(targetVersion)) {
+      return { ok: false, code: 500, message: "Verified update status has an invalid version." };
+    }
+    const live = readLiveUpdateState(appDatabase);
+    if (live.state === "manual_intervention_required") {
+      return {
+        ok: false,
+        code: 409,
+        message: "A previous update needs manual recovery before another can be started.",
+        extra: { state: live.state }
+      };
+    }
+    if (isInFlight(live.state)) {
+      return { ok: false, code: 409, message: "An update is already in progress.", extra: { state: live.state } };
+    }
+    const existing = appDatabase.getJsonSetting<PendingApplyRequest>(UPDATE_APPLY_REQUEST_KEY);
+    if (existing) {
+      if (existing.targetVersion === targetVersion) {
+        return { ok: true, targetVersion, alreadyQueued: true };
+      }
+      return {
+        ok: false,
+        code: 409,
+        message: `A different update (${existing.targetVersion}) is already queued.`,
+        extra: { queuedVersion: existing.targetVersion }
+      };
+    }
+    return { ok: true, targetVersion, alreadyQueued: false };
+  }
+
+  /** A compact, UI-facing summary of the most recent finished update attempt. */
+  function latestResultSummary() {
+    const [row] = appDatabase.listUpdateHistory(1);
+    if (!row) {
+      return null;
+    }
+    return {
+      fromVersion: row.fromVersion,
+      toVersion: row.toVersion,
+      result: row.result,
+      failureStage: row.failureStage ?? null,
+      failureReason: row.diagnostic ?? null,
+      rollbackResult: row.rollbackResult ?? null,
+      finishedAt: row.finishedAt ?? null
+    };
+  }
+
   fastify.get("/platform/updates/status", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async () => {
     const status = appDatabase.getJsonSetting<UpdateStatusCache>(UPDATE_STATUS_CACHE_KEY);
     const state = readLiveUpdateState(appDatabase);
@@ -266,9 +347,12 @@ export async function registerPlatformUpdateRoutes(
       latestSuccessfulUpdate: appDatabase.getLatestSuccessfulUpdate(),
       // Whether the "Update now" button should be enabled (policy-independent —
       // notify_only never blocks an explicit admin action), plus the pending
-      // request (if any) so the UI can show "queued"/"in progress" honestly.
+      // request (if any) so the UI can show "queued"/"in progress" honestly, and
+      // a compact summary of the last finished attempt (for rollback/failure UX
+      // without a second /history round-trip).
       updateNowAllowed: computeUpdateNowAllowed(status ?? null, state, pending ?? null),
-      pendingApply: pending ?? null
+      pendingApply: pending ?? null,
+      latestResult: latestResultSummary()
     };
   });
 
@@ -283,138 +367,84 @@ export async function registerPlatformUpdateRoutes(
     return { success: true, history: appDatabase.listUpdateHistory(Number.isFinite(limit) ? limit : 50) };
   });
 
-  // Records a manual apply request only — never applies anything itself (see
-  // the file-level doc). The target must be a version this installation has
-  // actually verified in its own most recent "update-available" check — never
-  // an arbitrary caller-supplied string, which would let anyone reaching this
-  // authenticated route request an "update" to a version nobody verified.
+  // LEGACY, kept for backward compatibility. Records a manual apply request from
+  // the LAST cached check and does NOT fire the host trigger — the update is
+  // applied by the 15-minute timer. New callers should use POST /apply, which
+  // re-checks and triggers immediately. Both share resolveManualApply so their
+  // guard rules can never diverge.
   fastify.post("/platform/updates/request-apply", { config: { rateLimit: { max: 6, timeWindow: "1 minute" } } }, async (_request, reply) => {
-    const cached = appDatabase.getJsonSetting<UpdateStatusCache>(UPDATE_STATUS_CACHE_KEY);
-    if (!cached || cached.result.outcome !== "update-available") {
-      return reply.code(409).send({
-        success: false,
-        message: "No verified update is available to apply. Run a check first."
-      });
+    const resolution = resolveManualApply(appDatabase.getJsonSetting<UpdateStatusCache>(UPDATE_STATUS_CACHE_KEY) ?? null);
+    if (!resolution.ok) {
+      return reply.code(resolution.code).send({ success: false, message: resolution.message, ...(resolution.extra ?? {}) });
     }
-    if (cached.result.requiresIncrementalUpgrade) {
-      return reply.code(409).send({
-        success: false,
-        message: "This installation is too old to upgrade directly to the latest release. An incremental upgrade is required."
-      });
+    if (!resolution.alreadyQueued) {
+      writePendingApply(resolution.targetVersion);
     }
-    const targetVersion = cached.result.latestVersion;
-    if (!isValidSemVer(targetVersion)) {
-      return reply.code(500).send({ success: false, message: "Cached update status has an invalid version." });
-    }
-
-    // A manual, operator-initiated apply overrides the maintenance-window
-    // timing restriction (the operator is present and asking now) but never
-    // the requiresManualApproval kill switch — which, being manual, this
-    // request already satisfies.
-    appDatabase.setJsonSetting(UPDATE_APPLY_REQUEST_KEY, {
-      requestedAt: new Date().toISOString(),
-      targetVersion,
-      trigger: "manual"
-    });
-
     return {
       success: true,
-      message: `An update to ${targetVersion} has been requested. The host update agent applies it on its next cycle.`,
-      targetVersion
+      message: `An update to ${resolution.targetVersion} has been requested. The host update agent applies it on its next cycle.`,
+      targetVersion: resolution.targetVersion
     };
   });
 
-  // The polished "Update now" endpoint: like request-apply, but it ALSO fires an
-  // immediate updater tick through the narrow host bridge so the operator does
-  // not wait up to 15 minutes for the timer. It never applies anything itself
-  // and never trusts a caller-supplied version — the target is always the one
-  // THIS installation verified in its most recent check, and the host updater
-  // re-verifies before applying.
+  // The polished "Update now" endpoint. Unlike request-apply it FIRST re-runs a
+  // fresh signed check (so the target reflects the channel pointer at click
+  // time, not a possibly-stale cache), then records the canonical apply request
+  // and asks the host to run one tick immediately via the narrow bridge.
+  //
+  // It never applies anything itself and never trusts a caller-supplied version
+  // — the target comes only from this installation's own fresh verified check,
+  // and the host updater re-verifies (signature, digests, compatibility,
+  // migrations) before applying.
+  //
+  // Bridge-failure model (deliberate, consistent for new AND already-queued
+  // requests): the pending request is the operator's explicit authorization and
+  // is ALWAYS kept. If the immediate trigger fails (bridge unavailable, e.g. a
+  // non-systemd host or a not-yet-recreated API container), we do NOT error and
+  // do NOT roll the request back — we return 202 with immediateTrigger:false and
+  // fallback:"scheduled", and the 15-minute timer applies it. A connect success
+  // means only "the host accepted the request to run a tick", NOT "the updater
+  // has started" — the durable state (which the UI polls) is authoritative.
   fastify.post("/platform/updates/apply", { config: { rateLimit: { max: 6, timeWindow: "1 minute" } } }, async (_request, reply) => {
-    const cached = appDatabase.getJsonSetting<UpdateStatusCache>(UPDATE_STATUS_CACHE_KEY);
-    if (!cached || cached.result.outcome !== "update-available") {
-      return reply.code(409).send({ success: false, message: "No verified update is available to apply. Run a check first." });
-    }
-    if (cached.result.requiresIncrementalUpgrade) {
-      return reply.code(409).send({
-        success: false,
-        message: "This installation is too old to upgrade directly to the latest release. An incremental upgrade is required."
-      });
-    }
-    const targetVersion = cached.result.latestVersion;
-    if (!isValidSemVer(targetVersion)) {
-      return reply.code(500).send({ success: false, message: "Cached update status has an invalid version." });
+    // Fresh verification at click time. A transient check failure surfaces as
+    // "no verified update available" (409) via resolveManualApply.
+    let cache: UpdateStatusCache;
+    try {
+      cache = await runCheck();
+    } catch (error) {
+      fastify.log.warn({ err: error }, "update check failed during /apply");
+      return reply.code(409).send({ success: false, message: "Could not verify the latest release just now. Please try again." });
     }
 
-    // Refuse while the updater is mid-flight or awaiting manual recovery — never
-    // start a second overlapping update.
-    const live = readLiveUpdateState(appDatabase);
-    if (live.state === "manual_intervention_required") {
-      return reply.code(409).send({
-        success: false,
-        message: "A previous update needs manual recovery before another can be started.",
-        state: live.state
-      });
-    }
-    if (isInFlight(live.state)) {
-      return reply.code(409).send({ success: false, message: "An update is already in progress.", state: live.state });
+    const resolution = resolveManualApply(cache);
+    if (!resolution.ok) {
+      return reply.code(resolution.code).send({ success: false, message: resolution.message, ...(resolution.extra ?? {}) });
     }
 
-    // Idempotent double-click / conflicting-pending handling.
-    const existing = appDatabase.getJsonSetting<PendingApplyRequest>(UPDATE_APPLY_REQUEST_KEY);
-    if (existing) {
-      if (existing.targetVersion === targetVersion) {
-        // Same target already queued — treat a repeat click as success, and
-        // (best-effort) re-poke the host in case the first trigger was missed.
-        try {
-          await triggerUpdateTick();
-        } catch {
-          /* the pending request stands; the timer will still apply it */
-        }
-        return reply.code(202).send({
-          success: true,
-          accepted: true,
-          idempotent: true,
-          targetVersion,
-          message: `An update to ${targetVersion} is already queued.`
-        });
-      }
-      return reply.code(409).send({
-        success: false,
-        message: `A different update (${existing.targetVersion}) is already queued.`,
-        queuedVersion: existing.targetVersion
-      });
+    if (!resolution.alreadyQueued) {
+      writePendingApply(resolution.targetVersion);
     }
 
-    // Write the canonical apply request (server-chosen target; trigger "manual"
-    // — which the resolver treats as operator-requested and therefore bypasses
-    // notify_only/maintenance-window timing, but never the manual-approval
-    // kill switch, which a manual request already satisfies).
-    appDatabase.setJsonSetting(UPDATE_APPLY_REQUEST_KEY, {
-      requestedAt: new Date().toISOString(),
-      targetVersion,
-      trigger: "manual"
-    } satisfies PendingApplyRequest);
-
-    // Fire exactly one immediate tick. If the bridge is unavailable, remove the
-    // request we just wrote so nothing is applied later by surprise, and return
-    // a clean error — pending state is left exactly as we found it.
+    let immediateTrigger = false;
     try {
       await triggerUpdateTick();
+      immediateTrigger = true;
     } catch (error) {
-      appDatabase.deleteSetting(UPDATE_APPLY_REQUEST_KEY);
-      fastify.log.warn({ err: error }, "update-trigger bridge unavailable; apply request rolled back");
-      return reply.code(503).send({
-        success: false,
-        message: "Could not reach the update trigger on the host; no update was started. Please try again shortly."
-      });
+      // Keep the (valid, explicitly-authorized) pending request; the timer is
+      // the designed fallback. This is NOT a failure of the request.
+      fastify.log.warn({ err: error }, "update-trigger bridge unavailable; falling back to the scheduled timer");
     }
 
     return reply.code(202).send({
       success: true,
       accepted: true,
-      targetVersion,
-      message: `Updating ClovaForge to ${targetVersion}…`
+      idempotent: resolution.alreadyQueued,
+      immediateTrigger,
+      fallback: immediateTrigger ? null : "scheduled",
+      targetVersion: resolution.targetVersion,
+      message: immediateTrigger
+        ? `Update to ${resolution.targetVersion} requested — starting now.`
+        : `Update to ${resolution.targetVersion} queued — it will apply on the next scheduled check (within ~15 minutes).`
     });
   });
 }

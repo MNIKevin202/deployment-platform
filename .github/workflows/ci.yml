@@ -1,0 +1,55 @@
+name: CI
+
+# Continuous verification on every push to main and every pull request. This is
+# the ONLY workflow that runs the full test matrix outside of a release: the
+# release workflow (release.yml) runs the API/web tests too, but only on a
+# vX.Y.Z tag, and it never runs the installer/updater suites. Running here on a
+# Linux runner is also what actually EXERCISES the POSIX-only tests that skip on
+# a Windows dev machine — notably the Unix-domain-socket update-trigger bridge
+# client (apps/api/src/tests/update-trigger-bridge.test.ts) and the shell/
+# systemd-unit structural suite (installer/tests/run.sh).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Environment
+        run: |
+          echo "OS: $(uname -a)"
+          echo "Node: $(node --version)"
+          echo "npm: $(npm --version)"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (api + web)
+        run: npm run build
+
+      - name: Test — API (includes the Unix-socket update-trigger bridge)
+        run: npm run test --workspace=@deployment-platform/api
+
+      - name: Test — web
+        run: npm run test --workspace=@deployment-platform/web
+
+      - name: Test — updater helpers (resolver, migration verifier, DB helpers)
+        run: node --test installer/updater/tests/*.test.mjs
+
+      - name: Test — installer + systemd unit structure + scheduler/bridge
+        run: bash installer/tests/run.sh
+
+      - name: Test — release helper scripts
+        run: bash scripts/tests/run.sh

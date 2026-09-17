@@ -250,12 +250,14 @@ describe("platform updates routes", () => {
     assert.equal(triggerCalls, 0);
   });
 
-  test("apply writes the pending request, triggers exactly one tick, and returns 202", async () => {
+  test("apply writes the pending request, triggers exactly one tick, and returns 202 with immediateTrigger", async () => {
     await makeUpdateAvailable("1.1.0");
     const response = await app.inject({ method: "POST", url: "/platform/updates/apply" });
     assert.equal(response.statusCode, 202);
     const body = response.json();
     assert.equal(body.accepted, true);
+    assert.equal(body.immediateTrigger, true);
+    assert.equal(body.fallback, null);
     assert.equal(body.targetVersion, "1.1.0");
     assert.equal(triggerCalls, 1);
     const pending = appDatabase.getJsonSetting<{ targetVersion: string; trigger: string }>(UPDATE_APPLY_REQUEST_KEY);
@@ -334,16 +336,32 @@ describe("platform updates routes", () => {
     assert.equal(triggerCalls, 0);
   });
 
-  test("an unavailable host bridge yields a 503 and leaves pending state uncorrupted", async () => {
+  test("an unavailable host bridge falls back to the scheduled timer (202, immediateTrigger=false, pending KEPT)", async () => {
     await makeUpdateAvailable("1.1.0");
     triggerImpl = async () => {
       throw new Error("ENOENT: socket missing");
     };
     const response = await app.inject({ method: "POST", url: "/platform/updates/apply" });
-    assert.equal(response.statusCode, 503);
+    // Deliberate model: the explicit request is honored; the timer is the
+    // designed fallback. NOT an error, and the pending request is KEPT so the
+    // scheduled tick applies it.
+    assert.equal(response.statusCode, 202);
+    const body = response.json();
+    assert.equal(body.accepted, true);
+    assert.equal(body.immediateTrigger, false);
+    assert.equal(body.fallback, "scheduled");
     assert.equal(triggerCalls, 1);
-    // The request we briefly wrote must have been rolled back — no surprise
-    // delayed auto-apply, and no leftover pending state.
+    const pending = appDatabase.getJsonSetting<{ targetVersion: string }>(UPDATE_APPLY_REQUEST_KEY);
+    assert.equal(pending?.targetVersion, "1.1.0");
+  });
+
+  test("apply re-verifies at click time: a fresh check with no update yields 409", async () => {
+    // Make a stale 'available' cache, then have the fresh check return up-to-date.
+    await makeUpdateAvailable("1.1.0");
+    checkManifest = async () => upToDateResult();
+    const response = await app.inject({ method: "POST", url: "/platform/updates/apply" });
+    assert.equal(response.statusCode, 409);
+    assert.equal(triggerCalls, 0);
     assert.equal(appDatabase.getJsonSetting(UPDATE_APPLY_REQUEST_KEY), null);
   });
 

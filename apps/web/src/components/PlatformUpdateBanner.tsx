@@ -97,6 +97,21 @@ export default function PlatformUpdateBanner() {
     );
   }
 
+  // --- Queued for the scheduled timer (bridge unavailable; explicit request kept) ---
+  if (update.scheduledQueued) {
+    return (
+      <section className="update-banner update-banner-available" role="status" aria-live="polite">
+        <div className="update-banner-main">
+          <span className="update-banner-badge">Queued</span>
+          <p className="update-banner-title">
+            {update.lastApplyMessage ||
+              "Update queued — it will apply automatically on the next scheduled check (within ~15 minutes)."}
+          </p>
+        </div>
+      </section>
+    );
+  }
+
   // --- Update available ---
   if (update.updateAvailable) {
     const directlyInstallable = !update.requiresIncrementalUpgrade && update.availableVersion != null;

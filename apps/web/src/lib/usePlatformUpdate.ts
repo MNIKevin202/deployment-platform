@@ -101,6 +101,12 @@ export interface PlatformUpdateModel {
   isUpdating: boolean;
   /** The API is temporarily unreachable during the expected container swap. */
   isReconnecting: boolean;
+  /** The reconnect has gone on long enough that we say "still waiting" (never "failed"). */
+  reconnectingLong: boolean;
+  /** The last apply was accepted but only QUEUED for the scheduled timer (bridge unavailable). */
+  scheduledQueued: boolean;
+  /** Human message from the last /apply response. */
+  lastApplyMessage: string | null;
   /** A terminal outcome of the most recent run, if any. */
   outcome: "successful" | "rolled_back" | "failed" | "manual_intervention_required" | null;
   actionError: string | null;
@@ -126,9 +132,16 @@ export function usePlatformUpdate(): PlatformUpdateModel {
   const [data, setData] = useState<StatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [isReconnecting, setReconnecting] = useState(false);
+  // Consecutive failed polls during an active update — after a while the UI
+  // stops calling it a routine "restart" and says it is still waiting, WITHOUT
+  // ever claiming the update failed (only durable state can say that).
+  const [reconnectTicks, setReconnectTicks] = useState(0);
   const [checking, setChecking] = useState(false);
   const [applying, setApplying] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // The outcome of the last /apply POST — lets the UI distinguish "starting now"
+  // (immediateTrigger) from "queued for the scheduled timer" (bridge fallback).
+  const [lastApply, setLastApply] = useState<{ immediateTrigger: boolean; message: string } | null>(null);
   // Once an apply is initiated we keep the flow "active" (polling, showing
   // progress, tolerating disconnects) until a terminal state is observed —
   // even across the window where state briefly reads idle/update_available.
@@ -146,6 +159,7 @@ export function usePlatformUpdate(): PlatformUpdateModel {
     if (!mounted.current) return;
     setData(next);
     setReconnecting(false);
+    setReconnectTicks(0);
     setLoading(false);
     if (TERMINAL.has(next.state.state)) {
       setActiveUpdate(false);
@@ -203,7 +217,10 @@ export function usePlatformUpdate(): PlatformUpdateModel {
         // Expected during the container swap — the API is momentarily down.
         // Do NOT treat this as a failure; keep polling and tell the UI we are
         // reconnecting.
-        if (!cancelled && mounted.current) setReconnecting(true);
+        if (!cancelled && mounted.current) {
+          setReconnecting(true);
+          setReconnectTicks((n) => n + 1);
+        }
       } finally {
         if (!cancelled && mounted.current) {
           pollTimer.current = setTimeout(tick, POLL_MS);
@@ -253,9 +270,20 @@ export function usePlatformUpdate(): PlatformUpdateModel {
     reloadedRef.current = false;
     try {
       const response = await fetch("/api/platform/updates/apply", { method: "POST" });
-      const body = (await response.json().catch(() => ({}))) as { success?: boolean; message?: string };
+      const body = (await response.json().catch(() => ({}))) as {
+        success?: boolean;
+        message?: string;
+        immediateTrigger?: boolean;
+      };
       if (response.status === 202 && body.success) {
-        setActiveUpdate(true);
+        const immediate = body.immediateTrigger === true;
+        setLastApply({ immediateTrigger: immediate, message: body.message ?? "" });
+        // Only show live progress when the host actually took the request now.
+        // On the scheduled fallback the updater has NOT started yet, so we must
+        // not pretend it is installing — the banner shows a "queued" notice.
+        if (immediate) {
+          setActiveUpdate(true);
+        }
         await refresh();
         return;
       }
@@ -276,12 +304,21 @@ export function usePlatformUpdate(): PlatformUpdateModel {
   const availableVersion =
     result?.outcome === "update-available" ? result.latestVersion ?? data?.state?.targetVersion ?? null : null;
 
+  // ~60s of failed polls (40 × 1.5s): stop calling it a routine restart, but do
+  // NOT claim failure — only durable state can.
+  const RECONNECT_LONG_TICKS = 40;
+  const reconnectLabel =
+    reconnectTicks >= RECONNECT_LONG_TICKS ? "Still waiting for ClovaForge to come back…" : "ClovaForge is restarting…";
+
   return {
     loading,
     currentVersion: data?.currentVersion ?? "…",
     liveState,
     detail: data?.state?.detail ?? null,
-    phaseLabel: isReconnecting ? "ClovaForge is restarting…" : PHASE_LABELS[liveState],
+    phaseLabel: isReconnecting ? reconnectLabel : PHASE_LABELS[liveState],
+    reconnectingLong: isReconnecting && reconnectTicks >= RECONNECT_LONG_TICKS,
+    scheduledQueued: lastApply != null && lastApply.immediateTrigger === false && !isUpdating && !TERMINAL.has(liveState),
+    lastApplyMessage: lastApply?.message ?? null,
     availableVersion,
     updateAvailable: result?.outcome === "update-available",
     requiresIncrementalUpgrade: result?.requiresIncrementalUpgrade === true,

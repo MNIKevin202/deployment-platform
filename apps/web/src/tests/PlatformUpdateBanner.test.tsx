@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import PlatformUpdateBanner from "../components/PlatformUpdateBanner";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -47,7 +47,7 @@ function status(opts: StatusOpts) {
 
 /** A fetch mock that serves a SEQUENCE of /status responses ("reject" simulates
  *  the API being down during the container swap), a POST /apply, and /check. */
-function mountFetch(statusSequence: (object | "reject")[], applyStatusCode = 202) {
+function mountFetch(statusSequence: (object | "reject")[], applyBody: Record<string, unknown> = { success: true, accepted: true, immediateTrigger: true, targetVersion: "1.5.0" }) {
   let idx = 0;
   let applyCalls = 0;
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -61,7 +61,7 @@ function mountFetch(statusSequence: (object | "reject")[], applyStatusCode = 202
     }
     if (method === "POST" && url.endsWith("/api/platform/updates/apply")) {
       applyCalls += 1;
-      return jsonResponse({ success: true, accepted: true, targetVersion: "1.5.0" }, applyStatusCode);
+      return jsonResponse(applyBody, 202);
     }
     if (method === "POST" && url.endsWith("/api/platform/updates/check")) {
       return jsonResponse({ success: true });
@@ -127,6 +127,18 @@ describe("PlatformUpdateBanner", () => {
     fireEvent.click(install);
     await screen.findByText("Installing ClovaForge…");
     expect(h.calls).toBe(1);
+  });
+
+  test("a scheduled-fallback apply (bridge unavailable) shows a 'queued' notice, not progress", async () => {
+    mountFetch(
+      [status({ outcome: "update-available", state: "update_available", latestVersion: "1.5.0", updateNowAllowed: true })],
+      { success: true, accepted: true, immediateTrigger: false, fallback: "scheduled", targetVersion: "1.5.0", message: "Update to 1.5.0 queued — it will apply on the next scheduled check (within ~15 minutes)." }
+    );
+    render(<PlatformUpdateBanner />);
+    fireEvent.click(await screen.findByRole("button", { name: "Update Now" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Install Update" }));
+    await screen.findByText(/it will apply on the next scheduled check/i);
+    expect(screen.queryByText("Installing ClovaForge…")).toBeNull();
   });
 
   test("tolerates the API restart: shows 'restarting' on a failed poll, not a failure", async () => {
