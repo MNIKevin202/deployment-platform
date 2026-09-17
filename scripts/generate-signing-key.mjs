@@ -22,7 +22,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const keyId = (process.argv[2] ?? "clovaforge-release-2").trim();
+const args = process.argv.slice(2);
+const force = args.includes("--force");
+const keyId = (args.find((a) => !a.startsWith("--")) ?? "clovaforge-release-2").trim();
 
 if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(keyId)) {
   console.error(`Invalid keyId: ${JSON.stringify(keyId)} (letters, digits, . _ - only).`);
@@ -30,9 +32,10 @@ if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(keyId)) {
 }
 
 const publicKeyPath = join(repoRoot, "installer", "trusted-keys", `${keyId}.pem`);
-if (existsSync(publicKeyPath)) {
+if (existsSync(publicKeyPath) && !force) {
   console.error(`Refusing to overwrite an existing trusted key: ${publicKeyPath}`);
-  console.error("Pick a new keyId (for rotation) or remove the file deliberately first.");
+  console.error("Re-run with --force to regenerate this exact key id (invalidates the old key pair),");
+  console.error("or pick a new keyId (for rotation).");
   process.exit(1);
 }
 
