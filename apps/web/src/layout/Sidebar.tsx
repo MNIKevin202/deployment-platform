@@ -164,6 +164,13 @@ export default function Sidebar({ active, onSelect, username }: SidebarProps) {
           <p className="sidebar-foot-role">Owner</p>
         </div>
       </div>
+
+      {/* Running ClovaForge version — the build-time injected value
+          (__APP_VERSION__, from the APP_VERSION build arg), never hardcoded.
+          Kept deliberately faint so it reads as a footnote, not a control. */}
+      <p className="sidebar-version" title={`ClovaForge ${__APP_VERSION__} · ${__APP_COMMIT__}`}>
+        v{__APP_VERSION__}
+      </p>
     </div>
   );
 }
