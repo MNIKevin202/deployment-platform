@@ -37,8 +37,22 @@
  * comments on the same point).
  */
 
-import { writeFileSync } from "node:fs";
+import { writeFileSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { sign as cryptoSign } from "node:crypto";
+
+// Numeric (never lexicographic) semver compare — mirrors resolve-update.mjs and
+// apps/api's isOlderSemVer, kept tiny and dependency-free like the rest of this
+// script. Returns <0, 0, >0.
+function cmpSemver(a, b) {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  }
+  return 0;
+}
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -83,6 +97,32 @@ if (!COMMIT_PATTERN.test(sourceCommit)) fail(`SOURCE_COMMIT is not a 40-char low
 if (!DIGEST_PATTERN.test(apiDigest)) fail(`API_IMAGE_DIGEST is not sha256:<64-hex>: ${apiDigest}`);
 if (!DIGEST_PATTERN.test(webDigest)) fail(`WEB_IMAGE_DIGEST is not sha256:<64-hex>: ${webDigest}`);
 if (!SEMVER_PATTERN.test(minimumUpgradeVersion)) fail(`MINIMUM_UPGRADE_VERSION is not MAJOR.MINOR.PATCH: ${minimumUpgradeVersion}`);
+
+// Release-validation gate (the check that would have caught v1.3.0's
+// minimumUpgradeVersion=1.0.0 gating out real production at 0.1.31): the
+// manifest MUST admit the oldest supported installed version. minimumUpgradeVersion
+// is the floor an installation must be at OR ABOVE to jump straight to this
+// release, so it must be <= oldestSupportedUpgradeFrom. release-compatibility.json
+// is the single, authoritative, deliberate source of that floor — never a
+// per-tag heuristic. See its own "note" for why version-string gating is the
+// wrong guard for the legacy 0.1.x fleet (the true guard is computeRollbackSafety
+// at apply time).
+const OLDEST_SUPPORTED = (() => {
+  const p = join(dirname(fileURLToPath(import.meta.url)), "..", "release-compatibility.json");
+  const cfg = JSON.parse(readFileSync(p, "utf8"));
+  const v = cfg.oldestSupportedUpgradeFrom;
+  if (typeof v !== "string" || !SEMVER_PATTERN.test(v)) {
+    fail(`release-compatibility.json oldestSupportedUpgradeFrom is not MAJOR.MINOR.PATCH: ${v}`);
+  }
+  return v;
+})();
+if (cmpSemver(minimumUpgradeVersion, OLDEST_SUPPORTED) > 0) {
+  fail(
+    `minimumUpgradeVersion (${minimumUpgradeVersion}) is HIGHER than the oldest supported installed version (${OLDEST_SUPPORTED} from release-compatibility.json). ` +
+      `This release would gate that production version out of upgrading. Lower MINIMUM_UPGRADE_VERSION to <= ${OLDEST_SUPPORTED}, ` +
+      `or, only after validating a higher floor with tests, raise oldestSupportedUpgradeFrom.`
+  );
+}
 
 const manifest = {
   schemaVersion: 1,

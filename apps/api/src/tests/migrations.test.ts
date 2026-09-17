@@ -47,6 +47,19 @@ describe("computeRollbackSafety", () => {
   test("previousMaxVersion of 0 (brand-new database) is unsafe, since migration 002 is breaking and would run", () => {
     assert.equal(computeRollbackSafety(0), false);
   });
+
+  test("the real production state (applied max 28) is a zero-migration, rollback-safe upgrade to this release", () => {
+    // srv652219 reported appliedMax=28, and this release ships exactly 28
+    // migrations — so a 0.1.31 -> 1.3.x upgrade runs NO migrations and is
+    // vacuously rollback-safe (container swap-back only). This is why the
+    // direct upgrade is genuinely safe despite the low version string.
+    const PROD_APPLIED_MAX = 28;
+    const highestShipped = Math.max(...listMigrations().map((m) => m.version));
+    assert.equal(highestShipped, PROD_APPLIED_MAX, "this release must ship exactly the 28 migrations production has applied");
+    const pending = listMigrations().filter((m) => m.version > PROD_APPLIED_MAX);
+    assert.equal(pending.length, 0, "no migrations should run from the real production applied-max");
+    assert.equal(computeRollbackSafety(PROD_APPLIED_MAX), true);
+  });
 });
 
 describe("getAppliedMaxVersion", () => {

@@ -1,0 +1,7 @@
+{
+  "oldestSupportedUpgradeFrom": "0.1.31",
+  "note": "The oldest INSTALLED ClovaForge version a direct upgrade to a current release is validated to support. Every published release's manifest.minimumUpgradeVersion MUST be <= this value, so no production box is gated out of upgrading (enforced in scripts/generate-release-manifest.mjs and covered by tests). This is a DELIBERATE compatibility claim, not a heuristic: the real production fleet includes legacy release.sh installs whose version string is a per-box 0.1.x counter DECOUPLED from schema age (srv652219 ran app 0.1.31 while its DB was already at migration 28 — i.e. schema fully current). Version-string gating is therefore meaningless for these boxes; the true per-upgrade guard is computeRollbackSafety() over the migrations newer than the box's applied max, evaluated at apply time, plus the pre-update backup. Raise this floor deliberately (with tests) only once every box on the older line has been retired.",
+  "history": [
+    "0.1.31 — set 2026-09-17: real production floor (srv652219). v1.3.0 was mistakenly published with minimumUpgradeVersion=1.0.0 (a previous-tag default), which gated 0.1.31 out; v1.3.1 corrects it."
+  ]
+}

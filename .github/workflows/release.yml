@@ -114,22 +114,20 @@ jobs:
       - name: Determine the minimum supported upgrade version
         id: min-version
         run: |
-          # Conservative default: the previous published release tag (one
-          # step back), so a direct jump always spans at most one release's
-          # migrations. Falls back to this release's own version (a
-          # same-version floor, effectively "no older install may jump
-          # here") when there is no earlier tag — e.g. the very first
-          # release ever published.
-          previous_tag="$(git tag --sort=-v:refname --list 'v*.*.*' | grep -v "^${GITHUB_REF_NAME}\$" | head -1 || true)"
-          if [ -n "$previous_tag" ]; then
-            echo "version=${previous_tag#v}" >> "$GITHUB_OUTPUT"
-          else
-            # First release: floor at 0.0.0 so any existing installation
-            # (including this project's own server, currently on a per-box
-            # 0.1.x counter) can upgrade to it. Subsequent releases use the
-            # previous tag, so a jump spans at most one release's migrations.
-            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
-          fi
+          set -Eeuo pipefail
+          # DELIBERATE floor, from release-compatibility.json — NOT a previous-tag
+          # heuristic. The previous-tag default (e.g. 1.0.0 for v1.3.0) wrongly
+          # gated the real production fleet out: srv652219 runs a legacy release.sh
+          # per-box counter (0.1.31) whose DB was already fully migrated (applied
+          # max 28), so a version-string floor of 1.0.0 refused an upgrade that is
+          # in fact a zero-migration image swap. The true per-upgrade safety guard
+          # is computeRollbackSafety() at apply time; this floor names the oldest
+          # INSTALLED version we validate a direct jump from. generate-release-
+          # manifest.mjs additionally FAILS the release if this ever exceeds that
+          # floor, so a too-high minimum can never be published again.
+          oldest="$(node -p "require('./release-compatibility.json').oldestSupportedUpgradeFrom")"
+          echo "Minimum supported upgrade-from version (release-compatibility.json): ${oldest}"
+          echo "version=${oldest}" >> "$GITHUB_OUTPUT"
 
       - name: Generate and sign the release manifest
         env:

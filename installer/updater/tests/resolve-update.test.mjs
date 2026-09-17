@@ -231,3 +231,49 @@ describe("resolve-update: manual override + channel", () => {
     assert.equal(d.action, "apply");
   });
 });
+
+// Regression for the real production fleet: srv652219 runs a legacy release.sh
+// per-box counter (app version 0.1.31) whose DB is already at migration 28, and
+// follows the beta channel under notify_only. The version string is DECOUPLED
+// from schema age, so a minimumUpgradeVersion set by a previous-tag heuristic
+// (1.0.0) wrongly gated it out. These lock in: (a) the exact bug, and (b) that a
+// correctly-floored release admits it as an available update.
+describe("resolve-update: real legacy production (0.1.31, appliedMax=28, beta/notify_only)", () => {
+  const prod = {
+    currentVersion: "0.1.31",
+    channel: "beta",
+    policy: "notify_only",
+    appliedMaxMigrationVersion: 28
+  };
+
+  test("minimumUpgradeVersion=1.0.0 (the v1.3.0 bug) gates 0.1.31 out", () => {
+    const d = resolve(prod, {
+      manifest: baseManifest({ version: "1.3.0", channel: "stable", minimumUpgradeVersion: "1.0.0" })
+    });
+    assert.equal(d.action, "notify");
+    assert.equal(d.reason, "incremental-upgrade-required");
+    assert.equal(d.minimumUpgradeVersion, "1.0.0");
+  });
+
+  test("minimumUpgradeVersion=0.1.31 (the fix) admits 0.1.31 as an available update", () => {
+    const d = resolve(prod, {
+      manifest: baseManifest({ version: "1.3.0", channel: "stable", minimumUpgradeVersion: "0.1.31" })
+    });
+    assert.equal(d.action, "notify");
+    // Admitted through the version/minimum gate — the block reason is the
+    // deliberate notify_only policy, NOT an incremental-upgrade requirement.
+    assert.equal(d.reason, "policy-notify-only");
+    assert.notEqual(d.reason, "incremental-upgrade-required");
+    assert.equal(d.targetVersion, "1.3.0");
+  });
+
+  test("even under 'automatic', 0.1.31 -> 1.3.0 is admitted but held for manual (major jump), never auto-applied", () => {
+    const d = resolve(
+      { ...prod, policy: "automatic" },
+      { manifest: baseManifest({ version: "1.3.0", channel: "stable", minimumUpgradeVersion: "0.1.31" }) }
+    );
+    assert.equal(d.action, "notify");
+    assert.equal(d.reason, "major-requires-manual");
+    assert.notEqual(d.reason, "incremental-upgrade-required");
+  });
+});

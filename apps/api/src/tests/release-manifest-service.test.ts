@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
 import type { ReleaseManifest } from "../schemas/release-manifest.js";
 import {
@@ -254,6 +257,63 @@ describe("evaluateUpdateAvailability", () => {
   test("surfaces requiresManualApproval from the manifest unchanged", () => {
     const result = evaluateUpdateAvailability("1.0.0", baseManifest({ requiresManualApproval: true }));
     assert.equal(result.requiresManualApproval, true);
+  });
+});
+
+// Reads the authoritative compatibility floor by walking up from this file to
+// the repo root — independent of whether tests run from src/ or dist/.
+function findRepoFile(name: string): string {
+  let d = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 8; i++) {
+    const candidate = join(d, name);
+    if (existsSync(candidate)) return candidate;
+    d = dirname(d);
+  }
+  throw new Error(`${name} not found walking up from the test file`);
+}
+
+// Real production regression: srv652219 runs a legacy release.sh per-box counter
+// (app 0.1.31) whose DB is already at migration 28. Its version string is
+// DECOUPLED from schema age, so a minimumUpgradeVersion floor set from a
+// previous-tag heuristic (1.0.0) wrongly gated it out of upgrading. These tests
+// lock the bug and its fix, and — critically — validate every real release's
+// declared floor against the authoritative oldest-supported version so this
+// dev-VPS/production-version confusion cannot recur.
+describe("release compatibility: the real production fleet floor (0.1.31)", () => {
+  const compat = JSON.parse(readFileSync(findRepoFile("release-compatibility.json"), "utf8")) as {
+    oldestSupportedUpgradeFrom: string;
+  };
+  const oldest = compat.oldestSupportedUpgradeFrom;
+
+  test("release-compatibility.json declares a valid oldest-supported version", () => {
+    assert.match(oldest, /^\d+\.\d+\.\d+$/);
+  });
+
+  test("the real production version 0.1.31 is at or above the declared floor", () => {
+    // If this fails, production (0.1.31) would be gated out; the floor was
+    // raised without retiring that box.
+    const [oa, ob, oc] = oldest.split(".").map(Number);
+    const [pa, pb, pc] = "0.1.31".split(".").map(Number);
+    const prodMeetsFloor = pa > oa || (pa === oa && (pb > ob || (pb === ob && pc >= oc)));
+    assert.equal(prodMeetsFloor, true, `production 0.1.31 is below the declared floor ${oldest}`);
+  });
+
+  test("a release floored at the fleet floor admits the real production version (no incremental gate)", () => {
+    const result = evaluateUpdateAvailability(
+      "0.1.31",
+      baseManifest({ version: "1.3.0", minimumUpgradeVersion: oldest })
+    );
+    assert.equal(result.updateAvailable, true);
+    assert.equal(result.requiresIncrementalUpgrade, false);
+    assert.equal(result.latestVersion, "1.3.0");
+  });
+
+  test("the v1.3.0 mistake (minimumUpgradeVersion=1.0.0) DID gate 0.1.31 out", () => {
+    const result = evaluateUpdateAvailability(
+      "0.1.31",
+      baseManifest({ version: "1.3.0", minimumUpgradeVersion: "1.0.0" })
+    );
+    assert.equal(result.requiresIncrementalUpgrade, true);
   });
 });
 
