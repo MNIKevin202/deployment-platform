@@ -2665,13 +2665,33 @@ assert_contains "updater records history via the raw-SQL helper" "$UPDATE_TMPL" 
 assert_contains "updater has an end_incomplete hard-fail path for check-only" "$UPDATE_TMPL" "end_incomplete"
 assert_contains "updater only passes check-only on a verified decision" "$UPDATE_TMPL" "CHAIN_VERIFIED"
 
-# The raw-SQL helpers exist and are valid.
-for mjs in db-read-config db-seed-config db-write-setting db-history; do
+# The raw-SQL helpers + the migration verifier exist and are valid.
+for mjs in db-read-config db-seed-config db-write-setting db-history verify-migrations; do
   MJS_SYNTAX=0
   node --check "$INSTALLER_DIR/updater/${mjs}.mjs" 2>/dev/null || MJS_SYNTAX=1
   assert_eq "updater helper ${mjs}.mjs is valid JS" "0" "$MJS_SYNTAX"
 done
 assert_contains "install_updater_assets ships every db-*.mjs helper" "$FILESYSTEM_SH" "updater/*.mjs"
+
+echo
+echo "=== Pre-cutover migration extraction/verification (no post-cutover surprises) ==="
+# The first production cutover extracted an EMPTY migrations dir (docker cp's
+# destination parent apps/api/src was never created) and a silent fallback
+# turned that into "no migrations", so the packaging failure only surfaced AFTER
+# the container swap (rollback then fired). These lock in the fix: the parent is
+# created, extraction failure is HARD, and verification happens before the swap.
+assert_contains "prepare_release_dir creates the apps/api/src parent before docker cp" "$UPDATE_TMPL" 'mkdir -p "$dir/apps/api/src"'
+assert_not_contains "prepare_release_dir has NO silent empty-migrations fallback" "$UPDATE_TMPL" 'mkdir -p "$dir/apps/api/src/migrations"'
+assert_not_contains "the old 'older images without baked migrations' fallback comment is gone" "$UPDATE_TMPL" "Older images without baked migrations"
+assert_contains "a failed migration extraction is a hard failure (no containers touched)" "$UPDATE_TMPL" "No containers were touched"
+assert_contains "the updater verifies the migration payload before the swap" "$UPDATE_TMPL" "verify_migration_payload"
+assert_contains "the updater runs the shipped verify-migrations.mjs inside the target image" "$UPDATE_TMPL" "verify-migrations.mjs"
+assert_contains "a verification failure aborts PRE-cutover" "$UPDATE_TMPL" "pre-cutover: migration payload extraction/verification failed"
+# The verifier must refuse an empty/mismatched/downgrade payload, never treat it as "no migrations".
+VERIFY_MJS="$(cat "$INSTALLER_DIR/updater/verify-migrations.mjs")"
+assert_contains "verifier rejects an empty extraction explicitly" "$VERIFY_MJS" "is NOT"
+assert_contains "verifier cross-checks source against the compiled migration list" "$VERIFY_MJS" "does not match the compiled list"
+assert_contains "verifier refuses a downgrade (DB ahead of target)" "$VERIFY_MJS" "refusing a downgrade"
 
 echo
 echo "=== Regression: updater must not abort with a bare exit on a legacy box ==="

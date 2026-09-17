@@ -302,33 +302,90 @@ preflight() {
   return 0
 }
 
+# Verifies the extracted migration payload BEFORE any live container is touched.
+# This is the pre-cutover guard for the exact failure that previously only
+# surfaced AFTER the swap ("Could not determine expected migrations from
+# source"): it proves the migration set is real, parseable by the SAME parser
+# release-remote.sh uses during the swap, matches the target image's compiled
+# migration list, was extracted completely, and is compatible with this DB's
+# applied max. Any failure returns non-zero so the caller aborts before the
+# swap. Runs the shipped verify-migrations.mjs INSIDE the target image (which
+# carries both the source and the compiled list), sandboxed (no network).
+verify_migration_payload() {
+  local dir="$1" api_pull="$2" api_digest="$3" applied_max="$4"
+  local srcdir="${dir}/apps/api/src/migrations"
+
+  [ -d "$srcdir" ] || { log "Pre-cutover: extracted migrations dir is missing (${srcdir})."; return 1; }
+  local host_count
+  host_count="$(find "$srcdir" -maxdepth 1 -type f 2>/dev/null | grep -cE '/[0-9]+[^/]*\.ts$' || true)"
+  [ -n "$host_count" ] || host_count=0
+  if [ "$host_count" -eq 0 ]; then
+    log "Pre-cutover: NO migration source files were extracted into ${srcdir} — an empty/failed extraction is NOT 'no migrations'. Aborting before any container is touched."
+    return 1
+  fi
+
+  # The shipped verifier ships next to this script; mount it read-only into the
+  # target image and run it against the image's own source + compiled list. It
+  # cross-checks the host-extracted count too (DP_EXPECT_COUNT).
+  local verifier="${UPDATER_DIR}/verify-migrations.mjs"
+  [ -f "$verifier" ] || { log "Pre-cutover: verify-migrations.mjs not found at ${verifier}."; return 1; }
+
+  local out
+  if ! out="$(docker run --rm --network none \
+      --security-opt no-new-privileges --cap-drop ALL --read-only --tmpfs /tmp \
+      -e DP_APPLIED="$applied_max" -e DP_EXPECT_COUNT="$host_count" \
+      --mount "type=bind,src=${verifier},dst=/verify-migrations.mjs,readonly" \
+      "${api_pull}@${api_digest}" node /verify-migrations.mjs 2>"$TMP/verify-migrations.err")"; then
+    log "Pre-cutover: migration-payload verification FAILED — $(tr -d '\n' < "$TMP/verify-migrations.err" 2>/dev/null)"
+    return 1
+  fi
+  local to_run
+  to_run="$(printf '%s' "$out" | grep -oE '"toRun":[0-9]+' | grep -oE '[0-9]+' || echo '?')"
+  log "Pre-cutover: migration payload verified (${out}). appliedMax=${applied_max}, migrations to run=${to_run}."
+  dbg "verify-migrations stdout: ${out}"
+  return 0
+}
+
 # Builds the minimal, persistent release directory release-remote.sh needs in
 # registry mode: stub package.json + Dockerfiles (existence-only checks) plus
 # the target image's real migration source (copied out of the pulled image),
 # so the from-source migration-verification step verifies against exactly what
-# this release ships — no host source checkout required.
+# this release ships — no host source checkout required. HARD-fails (non-zero,
+# no silent fallback) if the migration source cannot be extracted or verified,
+# so a packaging problem is caught HERE (pre-cutover) rather than after the
+# container swap. The destination path (dir) is chosen by the caller so this
+# function can log freely without corrupting a captured return value.
 prepare_release_dir() {
-  local target="$1" source_commit="$2" api_pull="$3" api_digest="$4"
-  local ts short dir
-  ts="$(date -u +%Y%m%dT%H%M%SZ)"
-  short="${source_commit:0:12}"
-  dir="${INSTALL_ROOT}/source/releases/release-${ts}-${short}"
-  mkdir -p "$dir/apps/api" "$dir/apps/web"
+  local dir="$1" target="$2" source_commit="$3" api_pull="$4" api_digest="$5" applied_max="$6"
+
+  # Create the FULL destination hierarchy — including apps/api/src — BEFORE the
+  # docker cp below. docker cp requires the destination's PARENT to exist; the
+  # previous code created only apps/api, so the copy of .../src/migrations
+  # failed and (worse) was silently turned into an empty dir. Both are fixed.
+  mkdir -p "$dir/apps/api/src" "$dir/apps/web" || { log "Pre-cutover: could not create release dir ${dir}."; return 1; }
   printf '{"version":"%s"}\n' "$target" > "$dir/package.json"
   printf '# registry release %s (stub for existence checks)\n' "$target" > "$dir/apps/api/Dockerfile"
   printf '# registry release %s (stub for existence checks)\n' "$target" > "$dir/apps/web/Dockerfile"
 
-  # Copy the migration source out of the pulled API image.
+  # Extract the migration source out of the target image. A failure here is a
+  # HARD pre-cutover failure — the migration set the swap must verify could not
+  # be obtained, so we must NOT proceed into the container swap. NO silent
+  # empty-dir fallback (that is what let a packaging failure reach post-cutover).
   local cid
-  cid="$(docker create "${api_pull}@${api_digest}")" || return 1
+  if ! cid="$(docker create "${api_pull}@${api_digest}")"; then
+    log "Pre-cutover: 'docker create' of the target image failed; cannot extract migration source."
+    return 1
+  fi
   if ! docker cp "${cid}:/app/apps/api/src/migrations" "$dir/apps/api/src/migrations" >/dev/null 2>&1; then
-    # Older images without baked migrations: fall back to an empty dir; the
-    # verification step will find nothing expected, which release-remote.sh
-    # treats as "no new migrations to verify".
-    mkdir -p "$dir/apps/api/src/migrations"
+    docker rm "$cid" >/dev/null 2>&1 || true
+    log "Pre-cutover: FAILED to extract migration source (/app/apps/api/src/migrations) from the target image. This is a hard failure — refusing to continue. No containers were touched."
+    return 1
   fi
   docker rm "$cid" >/dev/null 2>&1 || true
-  printf '%s' "$dir"
+
+  # Prove the extracted payload before returning success.
+  verify_migration_payload "$dir" "$api_pull" "$api_digest" "$applied_max" || return 1
+  return 0
 }
 
 # Rollback safety: are all migrations newer than the currently-applied max
@@ -550,11 +607,22 @@ state_write verifying "$TARGET" "computing rollback safety"
 ROLLBACK_SAFE="$(compute_rollback_safe "$API_PULL" "$API_DIGEST" "$APPLIED_MAX")"
 log "Rollback safety for this update: ${ROLLBACK_SAFE} (1=safe container swap-back, 0=breaking migration -> DB restore path)."
 
-state_write preparing "$TARGET" "preparing release dir"
-RELEASE_DIR="$(prepare_release_dir "$TARGET" "$SOURCE_COMMIT" "$API_PULL" "$API_DIGEST")"
-[ -n "$RELEASE_DIR" ] && [ -d "$RELEASE_DIR" ] || {
-  state_write failed "$TARGET" "could not prepare release dir"
-  history_finish "$HISTORY_ID" "failed" "prepare" "" 0 "" "could not prepare release directory"
+state_write preparing "$TARGET" "preparing + verifying migration payload (pre-cutover)"
+# Choose the release dir path HERE so prepare_release_dir can log freely (its
+# stdout is not captured). prepare_release_dir extracts AND verifies the
+# migration payload; if it fails, this is a HARD pre-cutover failure — the old
+# containers are never renamed and no replacement containers are started (the
+# swap, below, is never reached). We no longer depend on post-cutover rollback
+# for a packaging problem that is detectable now.
+RELEASE_DIR="${INSTALL_ROOT}/source/releases/release-$(date -u +%Y%m%dT%H%M%SZ)-${SOURCE_COMMIT:0:12}"
+if ! prepare_release_dir "$RELEASE_DIR" "$TARGET" "$SOURCE_COMMIT" "$API_PULL" "$API_DIGEST" "$APPLIED_MAX"; then
+  state_write failed "$TARGET" "pre-cutover: migration payload extraction/verification failed (no containers touched)"
+  history_finish "$HISTORY_ID" "failed" "prepare" "" 0 "" "migration source could not be extracted/verified before cutover"
+  exit 1
+fi
+[ -d "$RELEASE_DIR" ] || {
+  state_write failed "$TARGET" "release dir missing after prepare"
+  history_finish "$HISTORY_ID" "failed" "prepare" "" 0 "" "release dir missing after prepare"
   exit 1
 }
 
