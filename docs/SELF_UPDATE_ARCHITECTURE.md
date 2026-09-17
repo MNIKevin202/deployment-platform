@@ -646,3 +646,125 @@ publishing the same version normally.
 
 Do **not** hand-build a one-off image to "test" this — exercising the real
 tag → Actions → GHCR → signed manifest → updater chain is the point.
+
+## 15. One-click "Update now" from the web UI — IMPLEMENTED
+
+An authenticated admin can install an available signed release from the web UI
+(Overview banner or Settings → Updates) without SSH, shell, or systemctl. This
+is only an OPERATOR INTERFACE to the existing host updater — the API never
+verifies, backs up, swaps, health-checks, or rolls back anything itself. It
+records an apply request and asks the host to run one updater tick now.
+
+### The narrow host trigger bridge
+
+The API container cannot (and must not) run `systemctl` or self-swap. It reaches
+the host through one deliberately minimal channel:
+
+- **Socket:** `/run/deployment-platform/trigger.sock` — owner `root`, group
+  `root`, mode `0660` (unix socket). Created by systemd socket activation.
+- **Units:** `deployment-platform-update-trigger.socket` (`Accept=yes`) →
+  `deployment-platform-update-trigger@.service` (`Type=oneshot`), whose ENTIRE
+  body is `ExecStart=/usr/bin/systemctl start --no-block
+  deployment-platform-update.service`, with `StandardInput=null`.
+- **Runtime dir:** `/run/deployment-platform` (tmpfiles, `0755 root root`) is
+  bind-mounted into the API container at the same path. This directory's
+  CONTRACT: it holds ONLY the trigger socket — never secrets, credentials, or
+  arbitrary state. Nothing else may be written there.
+
+**What a connection can and cannot do.** Connecting is the whole capability.
+The activated service ignores the connection payload entirely (`StandardInput=
+null`), takes no arguments from it, and can start ONLY the fixed updater
+service. A caller cannot pass a command, a version, or any data. So even a fully
+compromised API can do no more than "wake the signed updater up" — never "tell
+root what to run". The authorization to APPLY is the `platform_update_apply_
+request` row the API writes (server-chosen target), which the updater
+re-verifies (signature, digests, compatibility, migrations) before doing
+anything; a bare tick with no pending request is a safe no-op.
+
+**"Connect" ≠ "updater started".** The API's bridge client resolves as soon as
+the host ACCEPTS the connection (systemd then starts the tick). That proves only
+"the request to run a tick was accepted", NOT that the updater has started or
+succeeded. The API says so (`immediateTrigger: true` = *requested*, not *done*).
+The durable update state (which the UI polls) is the single authority for
+progress and outcome.
+
+### API contract
+
+- `GET /platform/updates/status` — `currentVersion`, `status` (last verified
+  check), `state` (durable live state), `latestSuccessfulUpdate`,
+  `updateNowAllowed` (policy-independent), `pendingApply`, and `latestResult`
+  (from/to/result/failureStage/failureReason/rollbackResult of the last attempt).
+- `POST /platform/updates/check` — safe re-verify; applies nothing.
+- `POST /platform/updates/apply` — admin-only (global session gate; the update
+  routes are not in the public allowlist). Re-runs a FRESH signed check at click
+  time (so the target reflects the current channel pointer, never a stale
+  cache), refuses if there is no verified/compatible update, if one is already
+  in flight, if manual recovery is pending, or if a DIFFERENT version is already
+  queued. It ignores any caller-supplied version — the target is always the
+  server's own freshly verified one. On success it writes the canonical
+  `platform_update_apply_request` (`trigger: "manual"`) and fires one immediate
+  tick via the bridge. Returns `202 {accepted, immediateTrigger, fallback,
+  idempotent, targetVersion}`.
+- `POST /platform/updates/request-apply` — LEGACY: records the request from the
+  last cached check and does NOT trigger (the 15-min timer applies it). Shares
+  the same `resolveManualApply` guards as `/apply`.
+
+### notify_only and explicit intent
+
+`notify_only` only prevents UNATTENDED automatic application. An explicit admin
+"Update now" is `trigger: "manual"`, which the resolver treats as
+operator-requested: it bypasses the policy and the maintenance-window timing,
+but never the `requiresManualApproval` kill switch (a manual request already
+satisfies it). Automatic scheduled ticks continue to respect the policy.
+
+### Bridge-unavailable / non-systemd behavior (deliberate, consistent)
+
+The pending apply request is the operator's explicit authorization and is ALWAYS
+kept. If the immediate trigger fails — bridge not present (non-systemd host, or
+an API container not yet recreated with the mount) or transiently unreachable —
+`/apply` does NOT error and does NOT roll the request back. It returns `202` with
+`immediateTrigger: false, fallback: "scheduled"`, and the 15-minute timer (or
+the per-minute cron on a non-systemd host) applies it. The UI shows a "queued"
+notice rather than fake progress. So "Update now" is never a dead end.
+
+### Reconnect during the swap
+
+Applying swaps BOTH the API and web containers, so the browser's open page loses
+the API (and briefly the web origin) for a window. The UI polls
+`/platform/updates/status` every ~1.5s and treats a failed poll as "ClovaForge
+is restarting…" (never a failure — only durable state can report failure). After
+~60s it says "Still waiting for ClovaForge to come back…", still not a failure.
+On `state=successful` it reloads once so the new web bundle and version load.
+
+### First-release bootstrap (1.4.0 → 1.5.0) and every update after
+
+The host units + the mount-injecting `release-remote.sh` are HOST assets that
+reach a box via the installer/bootstrap checkout, not via the pulled images. A
+box running a pre-bridge version therefore needs a ONE-TIME host refresh before
+the button works:
+
+1. On the server: `git pull` in the installer checkout, then
+   `sudo bash scripts/bootstrap-production.sh --apply` (idempotent, no cutover).
+   This installs the trigger socket/service + tmpfiles and the mount-injecting
+   `release-remote.sh`, and provisions the full runtime dir set.
+2. The RUNNING API container still lacks the `/run/deployment-platform` mount
+   until it is recreated. That recreation happens on the first image update —
+   which for 1.4.0 → 1.5.0 is applied by the existing path (the timer applying a
+   `request-apply`, i.e. the pre-existing "Update now" that waits for the timer,
+   or a manual `deployment-platform-update` tick). `release-remote.sh` injects
+   the mount into the new API container during that swap.
+3. Once 1.5.0 is running, the API container has the mount and the socket bridge
+   is live — the one-click button works from then on.
+
+For EVERY subsequent update (1.5.0 → 1.6.0 → …) nothing manual is needed: the
+units are host-level and survive container swaps, and `release-remote.sh`
+re-injects the `/run/deployment-platform` mount on each API recreate (idempotent
+— added only when absent), so the bridge is never a one-use ladder.
+
+### Rollback
+
+A rollback to a pre-bridge version (e.g. 1.4.0) restores that version's
+container config, which has no mount — the button simply won't work there, which
+is correct (that version has no one-click feature). The host bridge units remain
+installed and harmless (a tick with no pending request is a no-op). Uninstall
+removes the socket, service, tmpfiles rule, and `/run/deployment-platform`.

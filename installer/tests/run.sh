@@ -2632,8 +2632,18 @@ assert_contains "scheduler provisions the socket dir via tmpfiles" "$SCHED_SH_BO
 # The API container must mount ONLY the narrow trigger dir (not a broad path).
 assert_contains "fresh install mounts the narrow trigger dir into the API container" \
   "$(cat "$INSTALLER_DIR/lib/platform.sh")" "-v /run/deployment-platform:/run/deployment-platform"
+RELEASE_REMOTE_SH="$(cat "$INSTALLER_DIR/../scripts/release-remote.sh")"
 assert_contains "release-remote injects the trigger mount on API recreate" \
-  "$(cat "$INSTALLER_DIR/../scripts/release-remote.sh")" 'TRIGGER_MOUNT_TARGET="/run/deployment-platform"'
+  "$RELEASE_REMOTE_SH" 'TRIGGER_MOUNT_TARGET="/run/deployment-platform"'
+# Idempotent: the mount is injected only when a mount for that target is not
+# already present, so EVERY future update (B->C->…) recreates the API container
+# WITH the bridge mount and never passes docker a duplicate --mount. The bridge
+# is not a one-use ladder — the units are host-level (systemd) and survive
+# container swaps, and the mount is re-applied on each recreate.
+assert_contains "release-remote injects the trigger mount only if absent (idempotent, dedup by target)" \
+  "$RELEASE_REMOTE_SH" "_has_trigger_mount"
+assert_contains "the injected mount binds source==target (same in-container path)" \
+  "$RELEASE_REMOTE_SH" 'source=${TRIGGER_MOUNT_TARGET},target=${TRIGGER_MOUNT_TARGET}'
 
 # Uninstall removes the bridge (units, tmpfiles, runtime dir).
 UNINSTALL_BODY="$(cat "$INSTALLER_DIR/lib/uninstall.sh")"
