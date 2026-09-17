@@ -533,7 +533,8 @@ rotate_admin_password() {
   [ "$created_password_file" -eq 1 ] && rm -f "$password_file"
 
   # --- back up, write, recreate, verify, roll back on failure ---
-  local auth_backup="${AUTH_FILE_PATH}.backup-$(date -u +%Y%m%dT%H%M%SZ)"
+  local auth_backup
+  auth_backup="${AUTH_FILE_PATH}.backup-$(date -u +%Y%m%dT%H%M%SZ)"
   cp "$AUTH_FILE_PATH" "$auth_backup"
   chmod 600 "$auth_backup"
   log_info "Previous secrets file backed up (mode 600) alongside $AUTH_FILE_PATH"

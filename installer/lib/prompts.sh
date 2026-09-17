@@ -66,8 +66,8 @@ validate_domain() {
     return 1
   fi
 
-  local IFS='.'
-  local -a labels=($domain)
+  local -a labels
+  IFS='.' read -ra labels <<< "$domain"
   local label
   for label in "${labels[@]}"; do
     if [[ ! "$label" =~ $DOMAIN_LABEL_PATTERN ]]; then
@@ -102,8 +102,8 @@ validate_domain_pair() {
 validate_ipv4() {
   local ip="$1"
   [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
-  local IFS='.'
-  local -a octets=($ip)
+  local -a octets
+  IFS='.' read -ra octets <<< "$ip"
   local octet
   for octet in "${octets[@]}"; do
     [ "$octet" -ge 0 ] && [ "$octet" -le 255 ] || return 1
