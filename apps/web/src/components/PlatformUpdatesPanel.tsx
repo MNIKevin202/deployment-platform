@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import UpdateConfirmModal from "./UpdateConfirmModal";
 
 /**
  * The platform self-update control surface — talks to /api/platform/updates/*.
@@ -132,6 +133,7 @@ export default function PlatformUpdatesPanel() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [windowEnabled, setWindowEnabled] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -200,17 +202,21 @@ export default function PlatformUpdatesPanel() {
     }
   };
 
+  // Immediate apply through the narrow host bridge (POST /apply), so the update
+  // starts now rather than waiting for the 15-minute timer. The host updater
+  // remains the sole authority; this only records the request and pokes it.
   const updateNow = async () => {
     try {
       setApplying(true);
       setError("");
-      const response = await fetch("/api/platform/updates/request-apply", { method: "POST" });
+      const response = await fetch("/api/platform/updates/apply", { method: "POST" });
       const body = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(body?.message || "Could not request the update.");
-      setNotice(body?.message || "Update requested.");
+      if (!response.ok) throw new Error(body?.message || "Could not start the update.");
+      setNotice(body?.message || "Update started.");
+      setConfirmOpen(false);
       await load();
     } catch (applyError) {
-      setError(applyError instanceof Error ? applyError.message : "Could not request the update.");
+      setError(applyError instanceof Error ? applyError.message : "Could not start the update.");
     } finally {
       setApplying(false);
     }
@@ -291,11 +297,29 @@ export default function PlatformUpdatesPanel() {
               {checking ? "Checking…" : "Check for updates"}
             </button>
             {canUpdateNow && (
-              <button className="primary-button" type="button" onClick={() => void updateNow()} disabled={applying || inFlight}>
-                {applying ? "Requesting…" : `Update now to ${result?.latestVersion}`}
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => setConfirmOpen(true)}
+                disabled={applying || inFlight}
+              >
+                {applying ? "Starting…" : `Update now to ${result?.latestVersion}`}
               </button>
             )}
           </div>
+
+          <UpdateConfirmModal
+            open={confirmOpen}
+            currentVersion={status.currentVersion}
+            newVersion={result?.latestVersion ?? ""}
+            signedVerified={result?.outcome === "update-available"}
+            compatible={!result?.requiresIncrementalUpgrade}
+            rollbackSafe={result?.rollbackSafe !== false}
+            confirming={applying}
+            error={error || null}
+            onConfirm={() => void updateNow()}
+            onCancel={() => setConfirmOpen(false)}
+          />
           {inFlight && (
             <p className="text-faint">
               An update is in progress ({STATE_LABELS[state]}). This page reflects the host updater's state; it does not need to stay open.

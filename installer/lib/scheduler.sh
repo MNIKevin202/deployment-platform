@@ -23,6 +23,11 @@ UPDATE_LOOP_BIN="/usr/local/bin/deployment-platform-update-loop"   # legacy (rem
 UPDATE_SERVICE_UNIT="/etc/systemd/system/deployment-platform-update.service"
 UPDATE_TIMER_UNIT="/etc/systemd/system/deployment-platform-update.timer"
 UPDATE_CRON_FILE="/etc/cron.d/deployment-platform-update"
+# Narrow host bridge: a socket-activated trigger that lets the API request ONE
+# immediate updater tick (see the .socket/@.service templates). systemd-only.
+UPDATE_TRIGGER_SOCKET_UNIT="/etc/systemd/system/deployment-platform-update-trigger.socket"
+UPDATE_TRIGGER_SERVICE_UNIT="/etc/systemd/system/deployment-platform-update-trigger@.service"
+UPDATE_TRIGGER_TMPFILES="/etc/tmpfiles.d/deployment-platform-update.conf"
 
 systemd_available() {
   command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
@@ -68,6 +73,28 @@ install_update_scheduler_systemd() {
   log_pass "Enabled signed-release auto-updates (systemd timer every 15 min → oneshot flock'd tick)."
 }
 
+# Installs the narrow socket-activated update-trigger bridge (systemd only). The
+# API connects to /run/deployment-platform/trigger.sock to request ONE immediate
+# updater tick; connecting is the only capability (see the unit templates). No
+# custom root code is installed — just systemd units + a tmpfiles rule for the
+# socket's parent dir. Idempotent.
+install_update_trigger_bridge() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log_info "[dry-run] Would install the update-trigger socket bridge (deployment-platform-update-trigger.socket + @.service + tmpfiles) and enable the socket"
+    return 0
+  fi
+  cp "${DEPLOYMENT_PLATFORM_INSTALLER_ROOT}/templates/deployment-platform-update-trigger.socket.template" "$UPDATE_TRIGGER_SOCKET_UNIT"
+  cp "${DEPLOYMENT_PLATFORM_INSTALLER_ROOT}/templates/deployment-platform-update-trigger@.service.template" "$UPDATE_TRIGGER_SERVICE_UNIT"
+  cp "${DEPLOYMENT_PLATFORM_INSTALLER_ROOT}/templates/deployment-platform-update.tmpfiles.template" "$UPDATE_TRIGGER_TMPFILES"
+  chmod 644 "$UPDATE_TRIGGER_SOCKET_UNIT" "$UPDATE_TRIGGER_SERVICE_UNIT" "$UPDATE_TRIGGER_TMPFILES"
+  # Create the socket's parent dir now (and at every boot via the tmpfiles rule).
+  systemd-tmpfiles --create "$UPDATE_TRIGGER_TMPFILES" >/dev/null 2>&1 || mkdir -p /run/deployment-platform
+  systemctl daemon-reload
+  systemctl enable deployment-platform-update-trigger.socket >/dev/null 2>&1 || true
+  systemctl restart deployment-platform-update-trigger.socket
+  log_pass "Installed the update-trigger socket bridge (immediate 'Update now' from the web UI)."
+}
+
 install_update_scheduler_cron() {
   if [ "$DRY_RUN" -eq 1 ]; then
     log_info "[dry-run] Would install $UPDATE_CRON_FILE (per-minute one-shot tick fallback)"
@@ -93,8 +120,10 @@ install_update_scheduler() {
   install_update_tick_wrapper
   if systemd_available; then
     install_update_scheduler_systemd
+    install_update_trigger_bridge
   else
     log_warn "systemd not detected — using a per-minute cron fallback (one lock-protected tick per run) for auto-updates."
+    log_warn "The immediate-'Update now' socket bridge needs systemd; without it, a manual apply is picked up by the next per-minute cron tick instead."
     install_update_scheduler_cron
   fi
 }

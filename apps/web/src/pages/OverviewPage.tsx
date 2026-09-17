@@ -3,6 +3,7 @@ import StatCard from "../components/StatCard";
 import AppCard from "../components/AppCard";
 import AppTable from "../components/AppTable";
 import AttentionPanel from "../components/AttentionPanel";
+import PlatformUpdateBanner from "../components/PlatformUpdateBanner";
 import { useSpeedtest } from "../hooks/useSpeedtest";
 
 // Pulls in recharts (a large dependency) only once Overview actually
@@ -256,6 +257,7 @@ export default function OverviewPage({
 
   return (
     <div className="page">
+      <PlatformUpdateBanner />
       <section className="stats-grid platform-health-grid">
         <StatCard
           label="Platform Health"

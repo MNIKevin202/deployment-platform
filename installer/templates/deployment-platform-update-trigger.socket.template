@@ -1,0 +1,26 @@
+[Unit]
+Description=ClovaForge update-trigger socket (connecting requests exactly one updater tick)
+Documentation=https://github.com/MNIKevin202/deployment-platform
+
+[Socket]
+# The narrow host bridge. The API container connects to this socket to ask the
+# host to run ONE updater tick immediately (instead of waiting for the 15-min
+# timer). Connecting is the ONLY capability it grants: no command, no arguments,
+# and no target version can be passed — the activated service ignores the
+# connection entirely (see the @.service). The real authorization to APPLY an
+# update is the admin-written platform_update_apply_request row in the DB, which
+# the updater re-verifies; a bare tick with no pending request is a safe no-op.
+ListenStream=/run/deployment-platform/trigger.sock
+# Accept=yes: systemd accept()s each connection (draining the backlog cleanly,
+# avoiding the Accept=no re-trigger pitfall) and spawns one
+# deployment-platform-update-trigger@.service instance per connection.
+Accept=yes
+# Root-owned, mode 0660: reachable only by host root and the API container,
+# which runs as root and already holds the equivalent /var/run/docker.sock
+# capability. No new privilege is introduced.
+SocketUser=root
+SocketGroup=root
+SocketMode=0660
+
+[Install]
+WantedBy=sockets.target

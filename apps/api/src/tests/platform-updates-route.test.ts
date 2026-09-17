@@ -6,7 +6,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import Fastify, { type FastifyInstance } from "fastify";
 import { createAppDatabase, type AppDatabase } from "../database.js";
-import { registerPlatformUpdateRoutes } from "../routes/platform-updates.js";
+import {
+  registerPlatformUpdateRoutes,
+  UPDATE_APPLY_REQUEST_KEY,
+  UPDATE_STATE_KEY
+} from "../routes/platform-updates.js";
 import type { ManifestResult } from "../services/release-manifest-service.js";
 
 const VALID_SETTINGS = {
@@ -45,12 +49,16 @@ describe("platform updates routes", () => {
   let app: FastifyInstance;
   let checkManifest: () => Promise<ManifestResult>;
   let capturedUrls: { manifestUrl: string; signatureUrl: string } | null;
+  let triggerCalls: number;
+  let triggerImpl: () => Promise<void>;
 
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), "clovaforge-updates-test-"));
     appDatabase = createAppDatabase(join(tempDir, `${randomUUID()}.sqlite`));
     checkManifest = async () => upToDateResult();
     capturedUrls = null;
+    triggerCalls = 0;
+    triggerImpl = async () => {};
 
     app = Fastify({ logger: false });
     await registerPlatformUpdateRoutes(app, {
@@ -59,6 +67,10 @@ describe("platform updates routes", () => {
       checkManifest: (manifestUrl, signatureUrl) => {
         capturedUrls = { manifestUrl, signatureUrl };
         return checkManifest();
+      },
+      triggerUpdateTick: async () => {
+        triggerCalls += 1;
+        return triggerImpl();
       }
     });
   });
@@ -214,5 +226,139 @@ describe("platform updates routes", () => {
     assert.equal(rows.length, 1);
     assert.equal(rows[0].result, "successful");
     assert.equal(rows[0].toVersion, "1.1.0");
+  });
+
+  // ---- POST /platform/updates/apply (immediate host-triggered apply) ----
+
+  async function makeUpdateAvailable(version = "1.1.0", overrides: Record<string, unknown> = {}) {
+    await configure();
+    checkManifest = async () => updateAvailableResult(version, overrides);
+    await app.inject({ method: "POST", url: "/platform/updates/check" });
+  }
+
+  test("apply is refused (409) when no verified update is available", async () => {
+    const response = await app.inject({ method: "POST", url: "/platform/updates/apply" });
+    assert.equal(response.statusCode, 409);
+    assert.equal(triggerCalls, 0);
+    assert.equal(appDatabase.getJsonSetting(UPDATE_APPLY_REQUEST_KEY), null);
+  });
+
+  test("apply is refused (409) when the target requires an incremental upgrade", async () => {
+    await makeUpdateAvailable("2.0.0", { minimumUpgradeVersion: "1.5.0" });
+    const response = await app.inject({ method: "POST", url: "/platform/updates/apply" });
+    assert.equal(response.statusCode, 409);
+    assert.equal(triggerCalls, 0);
+  });
+
+  test("apply writes the pending request, triggers exactly one tick, and returns 202", async () => {
+    await makeUpdateAvailable("1.1.0");
+    const response = await app.inject({ method: "POST", url: "/platform/updates/apply" });
+    assert.equal(response.statusCode, 202);
+    const body = response.json();
+    assert.equal(body.accepted, true);
+    assert.equal(body.targetVersion, "1.1.0");
+    assert.equal(triggerCalls, 1);
+    const pending = appDatabase.getJsonSetting<{ targetVersion: string; trigger: string }>(UPDATE_APPLY_REQUEST_KEY);
+    assert.equal(pending?.targetVersion, "1.1.0");
+    assert.equal(pending?.trigger, "manual");
+  });
+
+  test("apply ignores a browser-supplied targetVersion and uses the server-verified one", async () => {
+    await makeUpdateAvailable("1.1.0");
+    const response = await app.inject({
+      method: "POST",
+      url: "/platform/updates/apply",
+      payload: { targetVersion: "9.9.9" }
+    });
+    assert.equal(response.statusCode, 202);
+    assert.equal(response.json().targetVersion, "1.1.0");
+    const pending = appDatabase.getJsonSetting<{ targetVersion: string }>(UPDATE_APPLY_REQUEST_KEY);
+    assert.equal(pending?.targetVersion, "1.1.0");
+  });
+
+  test("notify_only policy still permits an explicit manual apply", async () => {
+    // VALID_SETTINGS.policy is notify_only; apply must still work (explicit
+    // operator action; policy only gates unattended automatic applies).
+    await makeUpdateAvailable("1.1.0");
+    const response = await app.inject({ method: "POST", url: "/platform/updates/apply" });
+    assert.equal(response.statusCode, 202);
+    assert.equal(triggerCalls, 1);
+  });
+
+  test("apply is refused (409) while an update is already in flight", async () => {
+    await makeUpdateAvailable("1.1.0");
+    appDatabase.setJsonSetting(UPDATE_STATE_KEY, {
+      state: "installing",
+      targetVersion: "1.1.0",
+      detail: null,
+      updatedAt: new Date().toISOString()
+    });
+    const response = await app.inject({ method: "POST", url: "/platform/updates/apply" });
+    assert.equal(response.statusCode, 409);
+    assert.equal(triggerCalls, 0);
+  });
+
+  test("apply is refused (409) when awaiting manual intervention", async () => {
+    await makeUpdateAvailable("1.1.0");
+    appDatabase.setJsonSetting(UPDATE_STATE_KEY, {
+      state: "manual_intervention_required",
+      targetVersion: "1.1.0",
+      detail: "breaking migration",
+      updatedAt: new Date().toISOString()
+    });
+    const response = await app.inject({ method: "POST", url: "/platform/updates/apply" });
+    assert.equal(response.statusCode, 409);
+    assert.equal(triggerCalls, 0);
+  });
+
+  test("a duplicate apply for the same target is idempotent (202) and does not stack a second request", async () => {
+    await makeUpdateAvailable("1.1.0");
+    const first = await app.inject({ method: "POST", url: "/platform/updates/apply" });
+    assert.equal(first.statusCode, 202);
+    const second = await app.inject({ method: "POST", url: "/platform/updates/apply" });
+    assert.equal(second.statusCode, 202);
+    assert.equal(second.json().idempotent, true);
+    const pending = appDatabase.getJsonSetting<{ targetVersion: string }>(UPDATE_APPLY_REQUEST_KEY);
+    assert.equal(pending?.targetVersion, "1.1.0");
+  });
+
+  test("apply is refused (409) when a different update is already queued", async () => {
+    await makeUpdateAvailable("1.1.0");
+    appDatabase.setJsonSetting(UPDATE_APPLY_REQUEST_KEY, {
+      requestedAt: new Date().toISOString(),
+      targetVersion: "1.0.5",
+      trigger: "manual"
+    });
+    const response = await app.inject({ method: "POST", url: "/platform/updates/apply" });
+    assert.equal(response.statusCode, 409);
+    assert.equal(triggerCalls, 0);
+  });
+
+  test("an unavailable host bridge yields a 503 and leaves pending state uncorrupted", async () => {
+    await makeUpdateAvailable("1.1.0");
+    triggerImpl = async () => {
+      throw new Error("ENOENT: socket missing");
+    };
+    const response = await app.inject({ method: "POST", url: "/platform/updates/apply" });
+    assert.equal(response.statusCode, 503);
+    assert.equal(triggerCalls, 1);
+    // The request we briefly wrote must have been rolled back — no surprise
+    // delayed auto-apply, and no leftover pending state.
+    assert.equal(appDatabase.getJsonSetting(UPDATE_APPLY_REQUEST_KEY), null);
+  });
+
+  test("status exposes updateNowAllowed (true when available, false once in flight)", async () => {
+    await makeUpdateAvailable("1.1.0");
+    let status = (await app.inject({ method: "GET", url: "/platform/updates/status" })).json();
+    assert.equal(status.updateNowAllowed, true);
+
+    appDatabase.setJsonSetting(UPDATE_STATE_KEY, {
+      state: "installing",
+      targetVersion: "1.1.0",
+      detail: null,
+      updatedAt: new Date().toISOString()
+    });
+    status = (await app.inject({ method: "GET", url: "/platform/updates/status" })).json();
+    assert.equal(status.updateNowAllowed, false);
   });
 });

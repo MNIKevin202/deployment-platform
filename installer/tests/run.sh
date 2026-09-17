@@ -2588,6 +2588,60 @@ assert_contains "scheduler removes the legacy loop wrapper on migrate" "$SCHED_S
 assert_contains "scheduler disables standalone service boot-enable (timer owns it)" "$SCHED_SH_BODY" "systemctl disable deployment-platform-update.service"
 
 echo
+echo "=== Narrow host update-trigger bridge (web-UI 'Update now') ==="
+# The API asks the host to run ONE updater tick by connecting to a root-owned
+# socket. The bridge must grant ONLY that — no arbitrary command, no arguments,
+# no target from the caller. These lock the security boundary.
+TRIGGER_SOCKET="$INSTALLER_DIR/templates/deployment-platform-update-trigger.socket.template"
+TRIGGER_SERVICE="$INSTALLER_DIR/templates/deployment-platform-update-trigger@.service.template"
+TRIGGER_TMPFILES="$INSTALLER_DIR/templates/deployment-platform-update.tmpfiles.template"
+assert_eq "the trigger socket template exists" "yes" "$([ -f "$TRIGGER_SOCKET" ] && echo yes || echo no)"
+assert_eq "the trigger @.service template exists" "yes" "$([ -f "$TRIGGER_SERVICE" ] && echo yes || echo no)"
+assert_eq "the trigger tmpfiles template exists" "yes" "$([ -f "$TRIGGER_TMPFILES" ] && echo yes || echo no)"
+
+TRIGGER_SOCKET_BODY="$(cat "$TRIGGER_SOCKET" 2>/dev/null || echo '')"
+assert_contains "the socket listens on the dedicated trigger path" "$TRIGGER_SOCKET_BODY" "ListenStream=/run/deployment-platform/trigger.sock"
+assert_contains "the socket uses Accept=yes (per-connection, no re-trigger backlog)" "$TRIGGER_SOCKET_BODY" "Accept=yes"
+assert_contains "the socket is mode 0660 (root-owned, not world-accessible)" "$TRIGGER_SOCKET_BODY" "SocketMode=0660"
+
+TRIGGER_SERVICE_BODY="$(cat "$TRIGGER_SERVICE" 2>/dev/null || echo '')"
+# The ONLY thing the bridge can do is start the fixed updater service.
+assert_contains "the trigger service starts ONLY the updater service" "$TRIGGER_SERVICE_BODY" "ExecStart=/usr/bin/systemctl start --no-block deployment-platform-update.service"
+assert_contains "the trigger service ignores the connection payload" "$TRIGGER_SERVICE_BODY" "StandardInput=null"
+# It must NOT be able to run an arbitrary command or read caller input into one.
+assert_not_contains "the trigger service runs no shell" "$TRIGGER_SERVICE_BODY" "/bin/sh"
+assert_not_contains "the trigger service runs no bash" "$TRIGGER_SERVICE_BODY" "/bin/bash"
+assert_not_contains "the trigger service does not eval" "$TRIGGER_SERVICE_BODY" "eval"
+assert_not_contains "the trigger service takes no ExecStart argument placeholders" "$TRIGGER_SERVICE_BODY" "%i"
+
+assert_contains "the tmpfiles rule creates the socket dir root-owned 0755" "$(cat "$TRIGGER_TMPFILES" 2>/dev/null || echo '')" "d /run/deployment-platform 0755 root root"
+
+# Templates must be syntactically valid systemd units (no stray shell).
+UNIT_SYNTAX_OK=1
+for u in "$TRIGGER_SOCKET" "$TRIGGER_SERVICE"; do
+  grep -qE '^\[(Unit|Socket|Service|Install)\]' "$u" || UNIT_SYNTAX_OK=0
+done
+assert_eq "trigger unit templates have systemd section headers" "1" "$UNIT_SYNTAX_OK"
+
+# scheduler.sh installs + enables the socket bridge (systemd path), and does NOT
+# install any custom root-executed bridge script (systemd-only, minimal surface).
+assert_contains "scheduler installs the trigger bridge" "$SCHED_SH_BODY" "install_update_trigger_bridge"
+assert_contains "scheduler enables the trigger socket" "$SCHED_SH_BODY" "systemctl enable deployment-platform-update-trigger.socket"
+assert_contains "scheduler provisions the socket dir via tmpfiles" "$SCHED_SH_BODY" "systemd-tmpfiles --create"
+
+# The API container must mount ONLY the narrow trigger dir (not a broad path).
+assert_contains "fresh install mounts the narrow trigger dir into the API container" \
+  "$(cat "$INSTALLER_DIR/lib/platform.sh")" "-v /run/deployment-platform:/run/deployment-platform"
+assert_contains "release-remote injects the trigger mount on API recreate" \
+  "$(cat "$INSTALLER_DIR/../scripts/release-remote.sh")" 'TRIGGER_MOUNT_TARGET="/run/deployment-platform"'
+
+# Uninstall removes the bridge (units, tmpfiles, runtime dir).
+UNINSTALL_BODY="$(cat "$INSTALLER_DIR/lib/uninstall.sh")"
+assert_contains "uninstall disables the trigger socket" "$UNINSTALL_BODY" "deployment-platform-update-trigger.socket"
+assert_contains "uninstall removes the trigger @.service unit" "$UNINSTALL_BODY" "deployment-platform-update-trigger@.service"
+assert_contains "uninstall removes the trigger runtime dir" "$UNINSTALL_BODY" "rm -rf /run/deployment-platform"
+
+echo
 echo "=== ShellCheck (if available) ==="
 if command -v shellcheck >/dev/null 2>&1; then
   SHELLCHECK_FAILURES=0

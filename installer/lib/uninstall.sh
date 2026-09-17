@@ -106,18 +106,24 @@ run_uninstall() {
   # mid-uninstall.
   if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     # Disable the timer (the cadence owner) and the oneshot service; also cover
-    # a legacy Type=simple loop service from an older install.
+    # a legacy Type=simple loop service from an older install, and the narrow
+    # update-trigger socket bridge.
     systemctl disable --now deployment-platform-update.timer >/dev/null 2>&1 || true
     systemctl disable --now deployment-platform-update.service >/dev/null 2>&1 || true
+    systemctl disable --now deployment-platform-update-trigger.socket >/dev/null 2>&1 || true
     rm -f /etc/systemd/system/deployment-platform-update.timer
     rm -f /etc/systemd/system/deployment-platform-update.service
+    rm -f /etc/systemd/system/deployment-platform-update-trigger.socket
+    rm -f /etc/systemd/system/deployment-platform-update-trigger@.service
+    rm -f /etc/tmpfiles.d/deployment-platform-update.conf
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
   rm -f /etc/cron.d/deployment-platform-update
   rm -f /usr/local/bin/deployment-platform-update-tick
   rm -f /usr/local/bin/deployment-platform-update-loop
   rm -f /usr/local/bin/deployment-platform-update
-  log_pass "Stopped and removed the auto-updater (timer, service, tick, and any legacy loop)."
+  rm -rf /run/deployment-platform
+  log_pass "Stopped and removed the auto-updater (timer, service, tick, trigger bridge, and any legacy loop)."
 
   _remove_container_if_exists "$CADDY_CONTAINER_NAME"
   _remove_container_if_exists "$WEB_CONTAINER_NAME"

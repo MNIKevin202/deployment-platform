@@ -1,0 +1,6 @@
+# ClovaForge update-trigger runtime directory. Holds ONLY the update-trigger
+# socket (see deployment-platform-update-trigger.socket). Created at boot so the
+# socket unit and the API container's narrow bind mount of this single directory
+# have a stable parent. tmpfs (/run) → cleared on reboot; the socket unit
+# recreates the socket. Root-owned; the API container (root) mounts it.
+d /run/deployment-platform 0755 root root -

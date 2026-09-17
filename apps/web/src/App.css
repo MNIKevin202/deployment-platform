@@ -4664,6 +4664,61 @@ code {
   opacity: 0.75;
 }
 
+/* ---- Platform self-update banner (Overview) + confirm modal ---- */
+.update-banner {
+  border: 1px solid var(--color-hair);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  background: var(--color-surface, #14161f);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.update-banner-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.update-banner-title { margin: 0; font-size: 13.5px; font-weight: 600; }
+.update-banner-sub { margin: 2px 0 0; font-size: 12px; color: var(--color-text-faint); }
+.update-banner-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.update-banner-badge {
+  flex: none; align-self: flex-start;
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 999px;
+  color: #fff; background: linear-gradient(135deg, var(--color-accent), #4b3fd6);
+}
+.update-banner-available { border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-hair)); }
+.update-banner-uptodate .update-banner-title { color: var(--color-text-faint); font-weight: 500; }
+.update-banner-success { border-color: #2f9e5f; }
+.update-banner-warn { border-color: #b9892f; }
+.update-banner-danger { border-color: #c0453f; }
+.update-banner-progress { border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-hair)); }
+.update-spinner {
+  flex: none; width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+  border-top-color: var(--color-accent);
+  animation: update-spin 0.8s linear infinite;
+}
+@keyframes update-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .update-spinner { animation: none; } }
+
+.update-confirm-modal { max-width: 460px; }
+.update-confirm-versions {
+  display: flex; align-items: center; gap: 16px; margin: 4px 0 14px;
+}
+.update-confirm-label { display: block; font-size: 11px; color: var(--color-text-faint); }
+.update-confirm-version { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.update-confirm-version-new { color: var(--color-accent); }
+.update-confirm-arrow { color: var(--color-text-faint); font-size: 18px; }
+.update-confirm-checks { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 8px; }
+.update-confirm-checks li { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; }
+.update-confirm-tick {
+  flex: none; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; color: #fff;
+}
+.update-confirm-checks li.ok .update-confirm-tick { background: #2f9e5f; }
+.update-confirm-checks li.warn .update-confirm-tick { background: #b9892f; }
+
 /* ---- Header / command bar ---- */
 .app-topbar {
   background: rgba(10, 14, 23, 0.8);

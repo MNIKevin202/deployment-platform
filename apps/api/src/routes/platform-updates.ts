@@ -16,7 +16,11 @@ import {
   type MaintenanceWindow,
   type UpdatePolicy
 } from "../services/update-policy.js";
-import { isUpdateState, type UpdateState } from "../services/update-state-machine.js";
+import { isInFlight, isUpdateState, type UpdateState } from "../services/update-state-machine.js";
+import {
+  createUpdateTriggerBridge,
+  type TriggerUpdateTick
+} from "../services/update-trigger-bridge.js";
 
 /**
  * Platform self-update status/settings/history — the API surface for
@@ -132,6 +136,47 @@ interface RegisterPlatformUpdateRoutesOptions {
   currentVersion: string;
   /** Injectable for tests; defaults to fetchAndVerifyManifest's real-fetch default. */
   checkManifest?: (manifestUrl: string, signatureUrl: string) => Promise<ManifestResult>;
+  /**
+   * Fires exactly one immediate updater tick through the narrow host bridge.
+   * Injectable for tests; defaults to the real Unix-socket trigger. It carries
+   * NO target — the host reads the platform_update_apply_request this route
+   * wrote and re-verifies it. A failure here must not corrupt pending state.
+   */
+  triggerUpdateTick?: TriggerUpdateTick;
+}
+
+/** Shape of the pending manual apply request written for the host updater. */
+interface PendingApplyRequest {
+  requestedAt: string;
+  targetVersion: string;
+  trigger: "manual";
+}
+
+/**
+ * Whether an admin may click "Update now" right now: a verified, directly-
+ * applicable update exists, nothing is mid-flight, no request is already
+ * queued, and the installation is not awaiting manual recovery. Deliberately
+ * INDEPENDENT of policy — notify_only only gates UNATTENDED automatic applies,
+ * never an explicit operator action.
+ */
+export function computeUpdateNowAllowed(
+  cache: UpdateStatusCache | null,
+  live: LiveUpdateState,
+  pending: PendingApplyRequest | null
+): boolean {
+  if (!cache || cache.result.outcome !== "update-available") {
+    return false;
+  }
+  if (cache.result.requiresIncrementalUpgrade || !isValidSemVer(cache.result.latestVersion)) {
+    return false;
+  }
+  if (live.state === "manual_intervention_required" || isInFlight(live.state)) {
+    return false;
+  }
+  if (pending) {
+    return false;
+  }
+  return true;
 }
 
 export function readUpdateSettings(appDatabase: AppDatabase): UpdateSettings {
@@ -148,7 +193,12 @@ export function readLiveUpdateState(appDatabase: AppDatabase): LiveUpdateState {
 
 export async function registerPlatformUpdateRoutes(
   fastify: FastifyInstance,
-  { appDatabase, currentVersion, checkManifest = fetchAndVerifyManifest }: RegisterPlatformUpdateRoutesOptions
+  {
+    appDatabase,
+    currentVersion,
+    checkManifest = fetchAndVerifyManifest,
+    triggerUpdateTick = createUpdateTriggerBridge()
+  }: RegisterPlatformUpdateRoutesOptions
 ): Promise<void> {
   async function runCheck(): Promise<UpdateStatusCache> {
     const settings = readUpdateSettings(appDatabase);
@@ -205,12 +255,20 @@ export async function registerPlatformUpdateRoutes(
   });
 
   fastify.get("/platform/updates/status", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async () => {
+    const status = appDatabase.getJsonSetting<UpdateStatusCache>(UPDATE_STATUS_CACHE_KEY);
+    const state = readLiveUpdateState(appDatabase);
+    const pending = appDatabase.getJsonSetting<PendingApplyRequest>(UPDATE_APPLY_REQUEST_KEY);
     return {
       success: true,
       currentVersion,
-      status: appDatabase.getJsonSetting<UpdateStatusCache>(UPDATE_STATUS_CACHE_KEY),
-      state: readLiveUpdateState(appDatabase),
-      latestSuccessfulUpdate: appDatabase.getLatestSuccessfulUpdate()
+      status,
+      state,
+      latestSuccessfulUpdate: appDatabase.getLatestSuccessfulUpdate(),
+      // Whether the "Update now" button should be enabled (policy-independent —
+      // notify_only never blocks an explicit admin action), plus the pending
+      // request (if any) so the UI can show "queued"/"in progress" honestly.
+      updateNowAllowed: computeUpdateNowAllowed(status ?? null, state, pending ?? null),
+      pendingApply: pending ?? null
     };
   });
 
@@ -264,5 +322,99 @@ export async function registerPlatformUpdateRoutes(
       message: `An update to ${targetVersion} has been requested. The host update agent applies it on its next cycle.`,
       targetVersion
     };
+  });
+
+  // The polished "Update now" endpoint: like request-apply, but it ALSO fires an
+  // immediate updater tick through the narrow host bridge so the operator does
+  // not wait up to 15 minutes for the timer. It never applies anything itself
+  // and never trusts a caller-supplied version — the target is always the one
+  // THIS installation verified in its most recent check, and the host updater
+  // re-verifies before applying.
+  fastify.post("/platform/updates/apply", { config: { rateLimit: { max: 6, timeWindow: "1 minute" } } }, async (_request, reply) => {
+    const cached = appDatabase.getJsonSetting<UpdateStatusCache>(UPDATE_STATUS_CACHE_KEY);
+    if (!cached || cached.result.outcome !== "update-available") {
+      return reply.code(409).send({ success: false, message: "No verified update is available to apply. Run a check first." });
+    }
+    if (cached.result.requiresIncrementalUpgrade) {
+      return reply.code(409).send({
+        success: false,
+        message: "This installation is too old to upgrade directly to the latest release. An incremental upgrade is required."
+      });
+    }
+    const targetVersion = cached.result.latestVersion;
+    if (!isValidSemVer(targetVersion)) {
+      return reply.code(500).send({ success: false, message: "Cached update status has an invalid version." });
+    }
+
+    // Refuse while the updater is mid-flight or awaiting manual recovery — never
+    // start a second overlapping update.
+    const live = readLiveUpdateState(appDatabase);
+    if (live.state === "manual_intervention_required") {
+      return reply.code(409).send({
+        success: false,
+        message: "A previous update needs manual recovery before another can be started.",
+        state: live.state
+      });
+    }
+    if (isInFlight(live.state)) {
+      return reply.code(409).send({ success: false, message: "An update is already in progress.", state: live.state });
+    }
+
+    // Idempotent double-click / conflicting-pending handling.
+    const existing = appDatabase.getJsonSetting<PendingApplyRequest>(UPDATE_APPLY_REQUEST_KEY);
+    if (existing) {
+      if (existing.targetVersion === targetVersion) {
+        // Same target already queued — treat a repeat click as success, and
+        // (best-effort) re-poke the host in case the first trigger was missed.
+        try {
+          await triggerUpdateTick();
+        } catch {
+          /* the pending request stands; the timer will still apply it */
+        }
+        return reply.code(202).send({
+          success: true,
+          accepted: true,
+          idempotent: true,
+          targetVersion,
+          message: `An update to ${targetVersion} is already queued.`
+        });
+      }
+      return reply.code(409).send({
+        success: false,
+        message: `A different update (${existing.targetVersion}) is already queued.`,
+        queuedVersion: existing.targetVersion
+      });
+    }
+
+    // Write the canonical apply request (server-chosen target; trigger "manual"
+    // — which the resolver treats as operator-requested and therefore bypasses
+    // notify_only/maintenance-window timing, but never the manual-approval
+    // kill switch, which a manual request already satisfies).
+    appDatabase.setJsonSetting(UPDATE_APPLY_REQUEST_KEY, {
+      requestedAt: new Date().toISOString(),
+      targetVersion,
+      trigger: "manual"
+    } satisfies PendingApplyRequest);
+
+    // Fire exactly one immediate tick. If the bridge is unavailable, remove the
+    // request we just wrote so nothing is applied later by surprise, and return
+    // a clean error — pending state is left exactly as we found it.
+    try {
+      await triggerUpdateTick();
+    } catch (error) {
+      appDatabase.deleteSetting(UPDATE_APPLY_REQUEST_KEY);
+      fastify.log.warn({ err: error }, "update-trigger bridge unavailable; apply request rolled back");
+      return reply.code(503).send({
+        success: false,
+        message: "Could not reach the update trigger on the host; no update was started. Please try again shortly."
+      });
+    }
+
+    return reply.code(202).send({
+      success: true,
+      accepted: true,
+      targetVersion,
+      message: `Updating ClovaForge to ${targetVersion}…`
+    });
   });
 }

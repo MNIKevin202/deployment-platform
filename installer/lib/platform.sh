@@ -103,12 +103,19 @@ ensure_api_container() {
   # this codebase already assumes (see docker-metrics-service.ts,
   # redeploy-service.ts, github-deploy-service.ts). The web and Caddy
   # containers never receive the socket.
+  # Narrow bind mount of the update-trigger socket's parent dir only (created by
+  # the tmpfiles rule / bridge install). This is how the API asks the host to run
+  # ONE immediate updater tick for a web-UI "Update now"; it grants nothing but
+  # connecting to that one socket. NOT a broad host mount and NOT the docker
+  # socket path. Ensure the dir exists so the mount has a stable source.
+  mkdir -p /run/deployment-platform 2>/dev/null || true
   docker create --name "$API_CONTAINER_NAME" \
     --network "$PLATFORM_NETWORK_NAME" \
     --restart unless-stopped \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "${API_DATA_VOLUME_NAME}:/data" \
     -v "${INSTALL_ROOT}/caddy/routes:/app/caddy-routes" \
+    -v /run/deployment-platform:/run/deployment-platform \
     "${GITHUB_KEY_MOUNT_ARGS[@]}" \
     --env-file "${INSTALL_ROOT}/config/auth.env" \
     --env-file "$platform_env_file" \

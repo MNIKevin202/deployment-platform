@@ -1667,6 +1667,23 @@ if [ "${MODE}" = "api" ] || [ "${MODE}" = "both" ]; then
   fi
   API_MOUNT_ARGS=("${MERGED_MOUNT_ARGS[@]}")
 
+  # Ensure the narrow update-trigger socket dir is mounted so the recreated API
+  # can request an immediate updater tick for a web-UI "Update now". capture_mounts
+  # reapplies whatever the live container already had; on the FIRST update after
+  # this feature ships the live container lacks it, so inject it here. Idempotent:
+  # only added when a mount for this exact target is not already present, so a
+  # later update never passes docker a duplicate --mount.
+  TRIGGER_MOUNT_TARGET="/run/deployment-platform"
+  _has_trigger_mount=0
+  for _m in "${API_MOUNT_ARGS[@]}"; do
+    case "${_m}" in *"target=${TRIGGER_MOUNT_TARGET}"*) _has_trigger_mount=1 ;; esac
+  done
+  if [ "${_has_trigger_mount}" -eq 0 ]; then
+    mkdir -p "${TRIGGER_MOUNT_TARGET}" 2>/dev/null || true
+    API_MOUNT_ARGS+=("--mount" "type=bind,source=${TRIGGER_MOUNT_TARGET},target=${TRIGGER_MOUNT_TARGET}")
+    info "Injected the update-trigger socket mount (${TRIGGER_MOUNT_TARGET}) into the new API container."
+  fi
+
   capture_runtime_config "API" "${API_CONTAINER}" "${API_IMAGE_REPO}:${API_VERSION}"
   # Deliberately not using "${arr[@]:-}" here: when an array is
   # genuinely empty (e.g. no command override), that fallback form
@@ -2033,6 +2050,22 @@ if [ "${DEPLOY_INSTALLER}" -eq 1 ]; then
         # running the sleep loop alongside the new timer (the oneshot unit file
         # now installed will be used for the timer-triggered ticks).
         info "Auto-updates enabled (systemd timer every 15 min → oneshot flock'd tick)."
+
+        # Narrow update-trigger socket bridge (immediate web-UI "Update now").
+        TRIGGER_SOCKET_TEMPLATE="${INSTALL_ROOT}/installer/templates/deployment-platform-update-trigger.socket.template"
+        TRIGGER_SERVICE_TEMPLATE="${INSTALL_ROOT}/installer/templates/deployment-platform-update-trigger@.service.template"
+        TRIGGER_TMPFILES_TEMPLATE="${INSTALL_ROOT}/installer/templates/deployment-platform-update.tmpfiles.template"
+        if [ -f "${TRIGGER_SOCKET_TEMPLATE}" ] && [ -f "${TRIGGER_SERVICE_TEMPLATE}" ] && [ -f "${TRIGGER_TMPFILES_TEMPLATE}" ]; then
+          cp "${TRIGGER_SOCKET_TEMPLATE}" /etc/systemd/system/deployment-platform-update-trigger.socket
+          cp "${TRIGGER_SERVICE_TEMPLATE}" /etc/systemd/system/deployment-platform-update-trigger@.service
+          cp "${TRIGGER_TMPFILES_TEMPLATE}" /etc/tmpfiles.d/deployment-platform-update.conf
+          chmod 644 /etc/systemd/system/deployment-platform-update-trigger.socket /etc/systemd/system/deployment-platform-update-trigger@.service /etc/tmpfiles.d/deployment-platform-update.conf
+          systemd-tmpfiles --create /etc/tmpfiles.d/deployment-platform-update.conf >/dev/null 2>&1 || mkdir -p /run/deployment-platform
+          systemctl daemon-reload || true
+          systemctl enable deployment-platform-update-trigger.socket >/dev/null 2>&1 || true
+          systemctl restart deployment-platform-update-trigger.socket >/dev/null 2>&1 || systemctl start deployment-platform-update-trigger.socket >/dev/null 2>&1 || true
+          info "Update-trigger socket bridge enabled (immediate 'Update now')."
+        fi
       else
         info "WARNING: could not install the updater systemd timer/service; auto-updates may not run."
       fi

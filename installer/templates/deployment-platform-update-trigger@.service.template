@@ -1,0 +1,21 @@
+[Unit]
+Description=ClovaForge update trigger — start exactly one updater tick
+Documentation=https://github.com/MNIKevin202/deployment-platform
+Requires=deployment-platform-update-trigger.socket
+After=deployment-platform-update-trigger.socket
+
+[Service]
+Type=oneshot
+# The ENTIRE capability of this bridge: ask systemd to start one oneshot updater
+# tick. There is deliberately NO shell, NO arguments derived from the connection,
+# and the client's connection is not even readable (StandardInput=null) — so
+# nothing a caller sends can change what runs. This can ONLY ever start
+# deployment-platform-update.service; it cannot run an arbitrary command or
+# choose a version. The updater remains the sole authority for verifying,
+# backing up, swapping, health-checking, and rolling back, and applies an update
+# only when a valid, admin-written platform_update_apply_request is present.
+# --no-block returns immediately so the trigger never blocks on the (possibly
+# minutes-long) tick, and the connection is closed as soon as this exits.
+ExecStart=/usr/bin/systemctl start --no-block deployment-platform-update.service
+# Guarantee the connection payload can never influence anything.
+StandardInput=null
