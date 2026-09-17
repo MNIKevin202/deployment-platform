@@ -124,7 +124,11 @@ jobs:
           if [ -n "$previous_tag" ]; then
             echo "version=${previous_tag#v}" >> "$GITHUB_OUTPUT"
           else
-            echo "version=${{ steps.version.outputs.version }}" >> "$GITHUB_OUTPUT"
+            # First release: floor at 0.0.0 so any existing installation
+            # (including this project's own server, currently on a per-box
+            # 0.1.x counter) can upgrade to it. Subsequent releases use the
+            # previous tag, so a jump spans at most one release's migrations.
+            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Generate and sign the release manifest
