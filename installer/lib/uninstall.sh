@@ -105,14 +105,19 @@ run_uninstall() {
   # install a new release onto the containers we are about to remove,
   # mid-uninstall.
   if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    # Disable the timer (the cadence owner) and the oneshot service; also cover
+    # a legacy Type=simple loop service from an older install.
+    systemctl disable --now deployment-platform-update.timer >/dev/null 2>&1 || true
     systemctl disable --now deployment-platform-update.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/deployment-platform-update.timer
     rm -f /etc/systemd/system/deployment-platform-update.service
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
   rm -f /etc/cron.d/deployment-platform-update
+  rm -f /usr/local/bin/deployment-platform-update-tick
   rm -f /usr/local/bin/deployment-platform-update-loop
   rm -f /usr/local/bin/deployment-platform-update
-  log_pass "Stopped and removed the continuous auto-updater."
+  log_pass "Stopped and removed the auto-updater (timer, service, tick, and any legacy loop)."
 
   _remove_container_if_exists "$CADDY_CONTAINER_NAME"
   _remove_container_if_exists "$WEB_CONTAINER_NAME"

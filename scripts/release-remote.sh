@@ -416,6 +416,11 @@ emit_summary() {
   printf 'RELEASE_SUMMARY_LIVE_WEB_IMAGE=%s\n' "${10}"
   printf 'RELEASE_SUMMARY_ROLLBACK_CONTAINERS_STATE=%s\n' "${11}"
   printf 'RELEASE_SUMMARY_CURRENT_POINTER=%s\n' "${12}"
+  # Field 13 (append-only; consumers parse by key name): the actual failure
+  # reason on a rollback/abort, empty on success. This is the exact message
+  # passed to fail()/trigger_rollback (e.g. the migration-verification error),
+  # so a caller records WHAT failed instead of guessing a stage.
+  printf 'RELEASE_SUMMARY_FAIL_REASON=%s\n' "${13:-}"
 }
 
 rollback_component() {
@@ -500,6 +505,9 @@ discard_image_built_here() {
 
 trigger_rollback() {
   local reason="$1"
+  # Single-line, bounded copy for the machine-parseable summary (field 13).
+  local reason_line
+  reason_line="$(printf '%s' "$reason" | tr '\n\r\t' '   ' | cut -c1-300)"
 
   if [ "${ROLLBACK_TRIGGERED}" -eq 1 ]; then
     return 0
@@ -551,7 +559,7 @@ trigger_rollback() {
     emit_summary "n/a" "n/a" "${BACKUP_PATH}" "${preserved_names}" "not reached" "not reached" "not reached" \
       "MANUAL_INTERVENTION_REQUIRED" "UNKNOWN — breaking migration ran; previous image not safe to restore automatically" \
       "UNKNOWN — see above" "preserved (stopped) under the rollback name(s) above; manual recovery required" \
-      "unchanged (rollback occurred before any pointer update)"
+      "unchanged (rollback occurred before any pointer update)" "${reason_line}"
     return
   fi
 
@@ -635,7 +643,7 @@ trigger_rollback() {
 
   print_header "RELEASE COMPLETE"
   emit_summary "n/a" "n/a" "${BACKUP_PATH}" "${rollback_names}" "not reached" "not reached" "not reached" "${status}" \
-    "${live_api_image}" "${live_web_image}" "${rollback_containers_state}" "unchanged (rollback occurred before any pointer update)"
+    "${live_api_image}" "${live_web_image}" "${rollback_containers_state}" "unchanged (rollback occurred before any pointer update)" "${reason_line}"
 }
 
 fail() {
@@ -1988,51 +1996,55 @@ if [ "${DEPLOY_INSTALLER}" -eq 1 ]; then
     info "Update command refreshed: ${UPDATE_TARGET}"
   fi
 
-  # Continuous auto-updater: install (or refresh) the loop wrapper and the
-  # scheduler that runs it. This is what makes an install track upstream on
-  # its own. Installs that predate this feature have no scheduler, so this is
-  # run on EVERY refresh (not just when other files changed) to converge them
-  # onto it. All steps are idempotent and tolerate being absent.
-  UPDATE_LOOP_TARGET="/usr/local/bin/deployment-platform-update-loop"
-  UPDATE_LOOP_TEMPLATE="${INSTALL_ROOT}/installer/templates/deployment-platform-update-loop.template"
-  if [ -f "${UPDATE_LOOP_TEMPLATE}" ]; then
-    if bash -n "${UPDATE_LOOP_TEMPLATE}" 2>/dev/null && cp "${UPDATE_LOOP_TEMPLATE}" "${UPDATE_LOOP_TARGET}"; then
-      chmod 755 "${UPDATE_LOOP_TARGET}"
+  # Auto-updater scheduling (Option A: a systemd TIMER fires a oneshot service
+  # that runs ONE flock-protected tick; no continuous sleep loop). Installs that
+  # predate the scheduler, or that ran the older continuous-loop model, are
+  # converged onto it here on EVERY refresh. All steps are idempotent and
+  # tolerate being absent. This mirrors installer/lib/scheduler.sh so a
+  # release-time host refresh and a fresh install produce the same architecture.
+  UPDATE_TICK_TARGET="/usr/local/bin/deployment-platform-update-tick"
+  UPDATE_TICK_TEMPLATE="${INSTALL_ROOT}/installer/templates/deployment-platform-update-tick.template"
+  if [ -f "${UPDATE_TICK_TEMPLATE}" ]; then
+    if bash -n "${UPDATE_TICK_TEMPLATE}" 2>/dev/null && cp "${UPDATE_TICK_TEMPLATE}" "${UPDATE_TICK_TARGET}"; then
+      chmod 755 "${UPDATE_TICK_TARGET}"
     else
-      info "WARNING: could not install ${UPDATE_LOOP_TARGET}; continuous auto-updates may not run."
+      info "WARNING: could not install ${UPDATE_TICK_TARGET}; auto-updates may not run."
     fi
+    # Retire the legacy continuous-loop wrapper if present.
+    rm -f /usr/local/bin/deployment-platform-update-loop
 
     if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
       SERVICE_TEMPLATE="${INSTALL_ROOT}/installer/templates/deployment-platform-update.service.template"
-      if [ -f "${SERVICE_TEMPLATE}" ] && cp "${SERVICE_TEMPLATE}" /etc/systemd/system/deployment-platform-update.service; then
-        chmod 644 /etc/systemd/system/deployment-platform-update.service
+      TIMER_TEMPLATE="${INSTALL_ROOT}/installer/templates/deployment-platform-update.timer.template"
+      if [ -f "${SERVICE_TEMPLATE}" ] && [ -f "${TIMER_TEMPLATE}" ] \
+        && cp "${SERVICE_TEMPLATE}" /etc/systemd/system/deployment-platform-update.service \
+        && cp "${TIMER_TEMPLATE}" /etc/systemd/system/deployment-platform-update.timer; then
+        chmod 644 /etc/systemd/system/deployment-platform-update.service /etc/systemd/system/deployment-platform-update.timer
         rm -f /etc/cron.d/deployment-platform-update
         systemctl daemon-reload || true
-        systemctl enable deployment-platform-update.service >/dev/null 2>&1 || true
-        # Deliberately NOT a restart: this refresh may itself be running
-        # inside the updater service, and restarting would kill the process
-        # tree executing it. Only start when not already active, so the
-        # bootstrap turns it on without an in-flight update killing itself.
-        # A changed unit is picked up on the next natural (re)start;
-        # KillMode=process keeps any in-flight update alive regardless.
-        if systemctl is-active --quiet deployment-platform-update.service; then
-          info "Continuous auto-updates already running (systemd)."
-        else
-          systemctl start deployment-platform-update.service || true
-          info "Continuous auto-updates enabled (systemd, checks every 30s)."
-        fi
+        # The oneshot service must not be boot-enabled on its own; the TIMER is.
+        systemctl disable deployment-platform-update.service >/dev/null 2>&1 || true
+        systemctl enable deployment-platform-update.timer >/dev/null 2>&1 || true
+        # A oneshot tick cannot be "the process running this refresh" (that was
+        # only true of the old always-on loop), so it is safe to (re)start the
+        # TIMER here to pick up the unit change immediately.
+        systemctl restart deployment-platform-update.timer >/dev/null 2>&1 || systemctl start deployment-platform-update.timer >/dev/null 2>&1 || true
+        # Converge an older continuous-loop service: stop it so it is not left
+        # running the sleep loop alongside the new timer (the oneshot unit file
+        # now installed will be used for the timer-triggered ticks).
+        info "Auto-updates enabled (systemd timer every 15 min → oneshot flock'd tick)."
       else
-        info "WARNING: could not install the updater systemd unit; continuous auto-updates may not run."
+        info "WARNING: could not install the updater systemd timer/service; auto-updates may not run."
       fi
     else
       cat > /etc/cron.d/deployment-platform-update <<'CRON'
-# Deployment Platform continuous auto-updater (cron fallback for hosts
-# without systemd). Checks every minute; the update command exits early via
-# `git ls-remote` unless upstream has actually moved.
-* * * * * root flock -n /run/lock/deployment-platform-update.lock /usr/local/bin/deployment-platform-update >/dev/null 2>&1
+# Deployment Platform auto-updater (cron fallback for hosts without systemd).
+# Runs one lock-protected update tick per minute; the tick exits early after a
+# cheap signed-manifest check unless a newer permitted release exists.
+* * * * * root /usr/local/bin/deployment-platform-update-tick >/dev/null 2>&1
 CRON
       chmod 644 /etc/cron.d/deployment-platform-update
-      info "Continuous auto-updates enabled (cron fallback, checks every minute)."
+      info "Auto-updates enabled (cron fallback: one lock-protected tick per minute)."
     fi
   fi
 fi
@@ -2404,4 +2416,4 @@ info "Release directory (preserved, not deleted): ${SOURCE_DIR}"
 
 emit_summary "${FINAL_NEW_API_IMAGE}" "${FINAL_NEW_WEB_IMAGE}" "${BACKUP_PATH}" "${ROLLBACK_NAMES}" \
   "HTTP ${RESULT_PANEL}" "HTTP ${RESULT_WIZARD}" "HTTP ${RESULT_SQLITE}" "${FINAL_STATUS}" \
-  "${FINAL_NEW_API_IMAGE}" "${FINAL_NEW_WEB_IMAGE}" "preserved (not renamed back)" "${CURRENT_POINTER_RESULT}"
+  "${FINAL_NEW_API_IMAGE}" "${FINAL_NEW_WEB_IMAGE}" "preserved (not renamed back)" "${CURRENT_POINTER_RESULT}" ""

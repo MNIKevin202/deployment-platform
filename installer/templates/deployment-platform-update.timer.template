@@ -1,0 +1,20 @@
+[Unit]
+Description=Deployment Platform signed-release self-updater cadence (every 15 min)
+Documentation=https://github.com/MNIKevin202/deployment-platform
+
+[Timer]
+# The single authoritative cadence for update checks (Option A). Fire shortly
+# after boot, then every 15 minutes measured from the end of the previous tick,
+# so a long apply never causes overlapping runs. A manual "Update Now" is picked
+# up on the next tick regardless. 15 minutes is responsive for platform updates
+# and gentle on the release endpoint across many installations.
+OnBootSec=2min
+OnUnitActiveSec=15min
+# If the machine was off when a tick was due, run one promptly after boot
+# instead of silently skipping the whole downtime.
+Persistent=true
+AccuracySec=1min
+Unit=deployment-platform-update.service
+
+[Install]
+WantedBy=timers.target

@@ -11,9 +11,11 @@
 #   5. for an "apply" decision: preflight -> backup -> pull-by-digest ->
 #      release-remote.sh (registry mode, migration-aware rollback) -> record.
 #
-# It runs as a plain host process (looped by deployment-platform-update-loop,
-# a systemd service) precisely so it survives replacing the very containers
-# it updates. See docs/SELF_UPDATE_ARCHITECTURE.md.
+# It runs as a plain host process (one tick per firing of
+# deployment-platform-update.timer, via the oneshot deployment-platform-update.service
+# and the flock'd deployment-platform-update-tick wrapper) precisely so it
+# survives replacing the very containers it updates. The systemd timer owns the
+# cadence — there is no internal sleep loop. See docs/SELF_UPDATE_ARCHITECTURE.md.
 #
 # Flags:
 #   (none)        one normal tick (may apply an update per policy)
@@ -661,6 +663,31 @@ printf '%s\n' "$RELEASE_OUTPUT"
 STATUS="$(printf '%s\n' "$RELEASE_OUTPUT" | grep -oE '^RELEASE_SUMMARY_STATUS=.*$' | tail -n1 | cut -d= -f2- || true)"
 [ -n "$STATUS" ] || STATUS="UNKNOWN"
 
+# The ACTUAL failure reason release-remote reported (empty on success). Recorded
+# verbatim in history/detail instead of guessing — the failed v1.3.1 attempt was
+# a migration-verification failure but history hardcoded "health_check".
+FAIL_REASON="$(printf '%s\n' "$RELEASE_OUTPUT" | grep -oE '^RELEASE_SUMMARY_FAIL_REASON=.*$' | tail -n1 | cut -d= -f2- || true)"
+
+# Derive a coarse failure stage from that reason (best-effort classification;
+# the full reason is always preserved as the detail). This is deliberately just
+# a label for the history's failure_stage column.
+failure_stage_from_reason() {
+  local r="$1"
+  case "$r" in
+    *migration*|*schema*)                 printf 'migration_verify' ;;
+    *health*|*HTTP*|*unhealthy*)          printf 'health_check' ;;
+    *image*|*digest*|*pull*)              printf 'image_verify' ;;
+    *network*)                            printf 'network_verify' ;;
+    *backup*)                             printf 'backup' ;;
+    *[Cc]addy*|*route*|*proxy*)           printf 'caddy' ;;
+    *migrate*)                            printf 'migrate' ;;
+    "")                                   printf 'release' ;;
+    *)                                    printf 'release' ;;
+  esac
+}
+FAIL_STAGE="$(failure_stage_from_reason "$FAIL_REASON")"
+[ -n "$FAIL_REASON" ] || FAIL_REASON="see ${LOG_FILE}"
+
 clear_pending_apply
 
 case "$STATUS" in
@@ -679,16 +706,16 @@ case "$STATUS" in
     fi
     ;;
   ROLLED_BACK)
-    state_write rolled_back "$TARGET" "health failed; rolled back to previous version"
-    history_finish "$HISTORY_ID" "rolled_back" "health_check" "failed" 1 "rolled_back" "auto-rolled back to ${PREV_API_VERSION}"
+    state_write rolled_back "$TARGET" "rolled back to previous version (${FAIL_STAGE}): ${FAIL_REASON}"
+    history_finish "$HISTORY_ID" "rolled_back" "$FAIL_STAGE" "failed" 1 "rolled_back" "auto-rolled back to ${PREV_API_VERSION}; failure: ${FAIL_REASON}"
     ;;
   MANUAL_INTERVENTION_REQUIRED)
-    state_write manual_intervention_required "$TARGET" "breaking migration + failure; DB restore required (see update.log)"
-    history_finish "$HISTORY_ID" "manual_intervention_required" "health_check" "failed" 1 "unsafe-not-attempted" "breaking migration ran; automatic rollback unsafe"
+    state_write manual_intervention_required "$TARGET" "DB restore required (${FAIL_STAGE}): ${FAIL_REASON}"
+    history_finish "$HISTORY_ID" "manual_intervention_required" "$FAIL_STAGE" "failed" 1 "unsafe-not-attempted" "breaking migration ran; automatic rollback unsafe; failure: ${FAIL_REASON}"
     ;;
   ROLLBACK_FAILED)
-    state_write manual_intervention_required "$TARGET" "rollback itself failed — active incident"
-    history_finish "$HISTORY_ID" "manual_intervention_required" "rollback" "failed" 1 "rollback_failed" "rollback did not fully succeed"
+    state_write manual_intervention_required "$TARGET" "rollback itself failed — active incident (${FAIL_STAGE}): ${FAIL_REASON}"
+    history_finish "$HISTORY_ID" "manual_intervention_required" "rollback" "failed" 1 "rollback_failed" "rollback did not fully succeed after failure: ${FAIL_REASON}"
     ;;
   FAILED|*)
     # Failed before any cutover: the previous version is untouched.

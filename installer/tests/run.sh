@@ -2541,31 +2541,51 @@ source "$INSTALLER_DIR/lib/scheduler.sh"
 assert_success "scheduler.sh defines install_update_scheduler" declare -F install_update_scheduler
 assert_success "scheduler.sh defines systemd_available" declare -F systemd_available
 
-# The loop wrapper is a real bash script the service/cron run — it must parse.
-assert_success "update-loop template has valid bash syntax" \
-  bash -n "$INSTALLER_DIR/templates/deployment-platform-update-loop.template"
+# ONE authoritative cadence (Option A): a systemd TIMER fires a oneshot SERVICE
+# that runs a single flock-protected tick wrapper. No continuous sleep loop, no
+# duplicate/overlapping scheduling.
 
-# A dry run must never touch the host (no cp/systemctl/cron writes) and must
-# still succeed on both the systemd and non-systemd branches.
+# The tick wrapper is a real bash script the service/cron run — it must parse.
+assert_success "update-tick template has valid bash syntax" \
+  bash -n "$INSTALLER_DIR/templates/deployment-platform-update-tick.template"
+# The legacy continuous-loop template must be gone.
+assert_eq "the legacy update-loop template is removed" "absent" \
+  "$([ -e "$INSTALLER_DIR/templates/deployment-platform-update-loop.template" ] && echo present || echo absent)"
+
+# A dry run must never touch the host and must still succeed.
 SCHED_DRY_OUTPUT="$(DRY_RUN=1 install_update_scheduler 2>&1)" && SCHED_DRY_STATUS=0 || SCHED_DRY_STATUS=$?
 assert_eq "install_update_scheduler succeeds in dry-run" "0" "$SCHED_DRY_STATUS"
-assert_contains "dry-run scheduler announces the loop wrapper install" \
+assert_contains "dry-run scheduler installs the one-shot tick wrapper" \
+  "$SCHED_DRY_OUTPUT" "deployment-platform-update-tick"
+assert_not_contains "dry-run scheduler does NOT install a continuous loop wrapper" \
   "$SCHED_DRY_OUTPUT" "deployment-platform-update-loop"
 
-# The systemd unit must keep the loop alive and never tear a running update
-# out from under itself (KillMode=process), and the cron fallback must be
-# per-minute so "always checking" holds without systemd.
+# The service is oneshot and runs the tick wrapper — no Restart=always loop, and
+# it is NOT boot-enabled on its own (the timer owns [Install]).
 SERVICE_TEMPLATE_BODY="$(cat "$INSTALLER_DIR/templates/deployment-platform-update.service.template")"
-assert_contains "updater unit runs the loop wrapper" \
-  "$SERVICE_TEMPLATE_BODY" "ExecStart=/usr/local/bin/deployment-platform-update-loop"
-assert_contains "updater unit restarts always" "$SERVICE_TEMPLATE_BODY" "Restart=always"
-assert_contains "updater unit uses KillMode=process" "$SERVICE_TEMPLATE_BODY" "KillMode=process"
+assert_contains "updater service is Type=oneshot (one tick, then exit)" "$SERVICE_TEMPLATE_BODY" "Type=oneshot"
+assert_contains "updater service runs the tick wrapper" "$SERVICE_TEMPLATE_BODY" "ExecStart=/usr/local/bin/deployment-platform-update-tick"
+assert_not_contains "updater service does NOT run a continuous loop" "$SERVICE_TEMPLATE_BODY" "deployment-platform-update-loop"
+assert_not_contains "updater service does NOT Restart=always (no sleep loop to keep alive)" "$SERVICE_TEMPLATE_BODY" "Restart=always"
+assert_not_contains "updater service is not independently boot-enabled (timer owns cadence)" "$SERVICE_TEMPLATE_BODY" "WantedBy=multi-user.target"
 
-# The one-shot update command must do the cheap ls-remote pre-check so a
-# continuous loop does not clone every tick.
-UPDATE_TEMPLATE_BODY="$(cat "$INSTALLER_DIR/templates/deployment-platform-update.template")"
-assert_contains "update command pre-checks the remote HEAD with ls-remote" \
-  "$UPDATE_TEMPLATE_BODY" "ls-remote"
+# The timer owns the cadence and triggers the service.
+TIMER_TEMPLATE_BODY="$(cat "$INSTALLER_DIR/templates/deployment-platform-update.timer.template")"
+assert_contains "the timer sets a recurring cadence" "$TIMER_TEMPLATE_BODY" "OnUnitActiveSec="
+assert_contains "the timer triggers the update service" "$TIMER_TEMPLATE_BODY" "Unit=deployment-platform-update.service"
+assert_contains "the timer installs into timers.target" "$TIMER_TEMPLATE_BODY" "WantedBy=timers.target"
+
+# The tick wrapper takes an exclusive flock (non-overlap) and has NO sleep loop.
+TICK_TEMPLATE_BODY="$(cat "$INSTALLER_DIR/templates/deployment-platform-update-tick.template")"
+assert_contains "the tick wrapper uses flock for non-overlap" "$TICK_TEMPLATE_BODY" "flock -n"
+assert_not_contains "the tick wrapper has NO internal sleep loop" "$TICK_TEMPLATE_BODY" "while true"
+
+# scheduler.sh: enable the TIMER (not the service), and migrate off the legacy loop.
+SCHED_SH_BODY="$(cat "$INSTALLER_DIR/lib/scheduler.sh")"
+assert_contains "scheduler enables the TIMER" "$SCHED_SH_BODY" "systemctl enable deployment-platform-update.timer"
+assert_contains "scheduler stops any legacy loop service before replacing the unit" "$SCHED_SH_BODY" "systemctl stop deployment-platform-update.service"
+assert_contains "scheduler removes the legacy loop wrapper on migrate" "$SCHED_SH_BODY" "\$UPDATE_LOOP_BIN"
+assert_contains "scheduler disables standalone service boot-enable (timer owns it)" "$SCHED_SH_BODY" "systemctl disable deployment-platform-update.service"
 
 echo
 echo "=== ShellCheck (if available) ==="
@@ -2692,6 +2712,20 @@ VERIFY_MJS="$(cat "$INSTALLER_DIR/updater/verify-migrations.mjs")"
 assert_contains "verifier rejects an empty extraction explicitly" "$VERIFY_MJS" "is NOT"
 assert_contains "verifier cross-checks source against the compiled migration list" "$VERIFY_MJS" "does not match the compiled list"
 assert_contains "verifier refuses a downgrade (DB ahead of target)" "$VERIFY_MJS" "refusing a downgrade"
+
+echo
+echo "=== Update-history telemetry: preserve the REAL failure stage/reason ==="
+# The failed v1.3.1 attempt was a migration-verification failure, but history
+# recorded failure_stage=health_check (hardcoded). release-remote now emits the
+# actual reason and the updater records it (and a derived stage) instead of
+# guessing.
+RELEASE_REMOTE_BODY="$(cat "$INSTALLER_DIR/../scripts/release-remote.sh")"
+assert_contains "release-remote emits the actual failure reason field" "$RELEASE_REMOTE_BODY" "RELEASE_SUMMARY_FAIL_REASON"
+assert_contains "updater parses RELEASE_SUMMARY_FAIL_REASON" "$UPDATE_TMPL" "RELEASE_SUMMARY_FAIL_REASON"
+assert_contains "updater derives a failure stage from the real reason" "$UPDATE_TMPL" "failure_stage_from_reason"
+assert_contains "ROLLED_BACK history uses the derived stage, not a hardcoded one" "$UPDATE_TMPL" 'history_finish "$HISTORY_ID" "rolled_back" "$FAIL_STAGE"'
+assert_not_contains "ROLLED_BACK no longer hardcodes failure_stage=health_check" "$UPDATE_TMPL" '"rolled_back" "health_check"'
+assert_contains "the reason maps a migration failure to migration_verify" "$UPDATE_TMPL" "migration_verify"
 
 echo
 echo "=== Regression: updater must not abort with a bare exit on a legacy box ==="
