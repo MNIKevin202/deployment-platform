@@ -2718,12 +2718,107 @@ assert_contains "updater emits named stage markers for tracing" "$UPDATE_TMPL" "
 assert_contains "updater guards current_version against a pipefail abort" "$UPDATE_TMPL" "awk -F: '{print \$NF}' || true"
 
 echo
+echo "=== Legacy bootstrap: complete updater runtime-directory provisioning ==="
+
+# A legacy release.sh box never created several updater dirs (notably state/),
+# which is what made state_write()'s mktemp abort at line 99. The updater,
+# bootstrap, and installer must all guarantee the full runtime layout exists,
+# from a single definition, idempotently, without touching existing contents.
+
+# ensure_dir chowns root:root; a non-root test user cannot, and CI does not run
+# as root. A fake chown (the suite's standard fixture pattern) lets ensure_dir
+# succeed so real chmod modes can be asserted, without needing privilege.
+FAKE_BIN_CHOWN="$TMP_ROOT/fakebin-chown"
+mkdir -p "$FAKE_BIN_CHOWN"
+cat > "$FAKE_BIN_CHOWN/chown" <<'FAKECHOWN'
+#!/usr/bin/env bash
+exit 0
+FAKECHOWN
+chmod +x "$FAKE_BIN_CHOWN/chown"
+
+# A legacy install: only the install root exists (no state/logs/config/...).
+RUNTIME_ROOT="$TMP_ROOT/legacy-install/opt/deployment-platform"
+rm -rf "$RUNTIME_ROOT"; mkdir -p "$RUNTIME_ROOT"
+
+run_provisioner() {  # runs ensure_updater_runtime_dirs in a hermetic subshell
+  PATH="$FAKE_BIN_CHOWN:$REAL_PATH" bash -c '
+    set -Eeuo pipefail
+    export DEPLOYMENT_PLATFORM_INSTALLER_ROOT="'"$INSTALLER_DIR"'"
+    export INSTALL_ROOT="'"$RUNTIME_ROOT"'"
+    export INSTALLER_LOG_FILE="'"$TMP_ROOT"'/provision.log"
+    export DRY_RUN=0
+    source "'"$INSTALLER_DIR"'/lib/common.sh"
+    source "'"$INSTALLER_DIR"'/lib/filesystem.sh"
+    ensure_updater_runtime_dirs
+  '
+}
+
+PROVISION_RC=0
+run_provisioner >/dev/null 2>&1 || PROVISION_RC=$?
+assert_eq "ensure_updater_runtime_dirs completes on a legacy install with no state dir" "0" "$PROVISION_RC"
+
+for d in logs state config config/trusted-keys updater source source/releases backups; do
+  assert_eq "provisioned runtime directory exists: $d" "yes" \
+    "$([ -d "$RUNTIME_ROOT/$d" ] && echo yes || echo no)"
+done
+assert_eq "state directory is 0700 (sensitive updater state, not weakened)" "700" \
+  "$(get_file_mode "$RUNTIME_ROOT/state" 2>/dev/null || echo '?')"
+assert_eq "config/trusted-keys directory is 0700" "700" \
+  "$(get_file_mode "$RUNTIME_ROOT/config/trusted-keys" 2>/dev/null || echo '?')"
+assert_eq "logs directory is 0750" "750" \
+  "$(get_file_mode "$RUNTIME_ROOT/logs" 2>/dev/null || echo '?')"
+
+# Idempotent + never reinitializes existing state: seed an in-flight state file,
+# re-provision, and assert it is byte-for-byte preserved.
+printf 'state=installing\ntargetVersion=9.9.9\n' > "$RUNTIME_ROOT/state/update-state.json"
+chmod 600 "$RUNTIME_ROOT/state/update-state.json"
+REPROVISION_RC=0
+run_provisioner >/dev/null 2>&1 || REPROVISION_RC=$?
+assert_eq "re-provisioning an already-provisioned install is idempotent" "0" "$REPROVISION_RC"
+assert_eq "an existing in-flight update-state file is preserved across provisioning" \
+  "state=installing" "$(head -n1 "$RUNTIME_ROOT/state/update-state.json" 2>/dev/null || echo MISSING)"
+
+# The updater's own startup self-heal: reproduce the exact line-99 mktemp abort
+# and prove that ensuring the state dir first (as the updater now does) fixes it.
+SELFHEAL_ROOT="$TMP_ROOT/selfheal/opt/deployment-platform"
+rm -rf "$SELFHEAL_ROOT"; mkdir -p "$SELFHEAL_ROOT"   # no state/ dir, like production was
+NOHEAL_RC=0
+bash -c '
+  set -Eeuo pipefail
+  INSTALL_ROOT="'"$SELFHEAL_ROOT"'"
+  tmp="$(mktemp "${INSTALL_ROOT}/state/.update-state.XXXXXX")"
+' >/dev/null 2>&1 || NOHEAL_RC=$?
+assert_eq "state_write's mktemp aborts when the state dir is missing (the reported bug)" "1" "$NOHEAL_RC"
+HEAL_RC=0
+bash -c '
+  set -Eeuo pipefail
+  INSTALL_ROOT="'"$SELFHEAL_ROOT"'"
+  mkdir -p "${INSTALL_ROOT}/state" && chmod 700 "${INSTALL_ROOT}/state" || true
+  tmp="$(mktemp "${INSTALL_ROOT}/state/.update-state.XXXXXX")"
+  printf "state=idle\n" > "$tmp"
+  mv -f "$tmp" "${INSTALL_ROOT}/state/update-state.json"
+' >/dev/null 2>&1 || HEAL_RC=$?
+assert_eq "state_write succeeds on the first-ever updater run once the state dir is ensured" "0" "$HEAL_RC"
+assert_eq "the first-run state file is written" "state=idle" \
+  "$(cat "$SELFHEAL_ROOT/state/update-state.json" 2>/dev/null || echo MISSING)"
+
+# Structural: the fix is actually in the shipped artifacts, not incidental.
+assert_contains "updater self-provisions its runtime dirs at startup" "$UPDATE_TMPL" "ensure_runtime_dirs"
+assert_contains "updater ensures the state dir before any state_write" "$UPDATE_TMPL" 'mkdir -p "${INSTALL_ROOT}/state"'
+assert_contains "updater keeps the self-healed state dir at 0700" "$UPDATE_TMPL" 'chmod 700 "${INSTALL_ROOT}/state"'
+assert_contains "filesystem defines a single shared runtime-dir provisioner" "$FILESYSTEM_SH" "ensure_updater_runtime_dirs()"
+assert_contains "setup_filesystem provisions via the shared function" "$FILESYSTEM_SH" "ensure_updater_runtime_dirs"
+assert_contains "shared provisioner creates the state dir at 0700" "$FILESYSTEM_SH" 'ensure_dir "$INSTALL_ROOT/state" 700'
+
+echo
 echo "=== Production bootstrap: legacy-safe seeding + honest success criteria ==="
 BOOTSTRAP_SH="$(cat "$INSTALLER_DIR/../scripts/bootstrap-production.sh" 2>/dev/null || echo '')"
 if [ -n "$BOOTSTRAP_SH" ]; then
   assert_not_contains "bootstrap does NOT depend on getJsonSetting" "$BOOTSTRAP_SH" "getJsonSetting"
   assert_not_contains "bootstrap does NOT import the app DB module" "$BOOTSTRAP_SH" "createAppDatabase"
   assert_contains "bootstrap seeds settings via the raw-SQL helper" "$BOOTSTRAP_SH" "db-seed-config.mjs"
+  assert_contains "bootstrap provisions the FULL updater runtime dir set (shared function)" "$BOOTSTRAP_SH" "ensure_updater_runtime_dirs"
+  assert_not_contains "bootstrap no longer uses the partial ad-hoc mkdir for updater dirs" "$BOOTSTRAP_SH" 'mkdir -p "${INSTALL_ROOT}/updater" "${INSTALL_ROOT}/config/trusted-keys"'
   assert_contains "bootstrap FAILS (fatal) when the check-only probe does not verify" "$BOOTSTRAP_SH" "Bootstrap verification failed"
   assert_not_contains "bootstrap no longer prints the old always-PASS message" "$BOOTSTRAP_SH" "discover/verify chain was exercised"
   BOOTSTRAP_SYNTAX=0

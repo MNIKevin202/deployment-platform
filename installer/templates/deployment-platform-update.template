@@ -58,7 +58,26 @@ for _arg in "$@"; do
   esac
 done
 
-mkdir -p "${INSTALL_ROOT}/logs"
+# Guarantee the host-side runtime directories this updater writes to (and the
+# trusted-keys dir it mounts) exist BEFORE anything uses them. A LEGACY box
+# (bootstrapped from an old release.sh install) may never have had them created,
+# and the updater must self-heal on EVERY run — legacy, fresh, repaired, service
+# restart, or reboot recovery — so state_write() can never fail merely because
+# the state dir was never created (the historical line-99 mktemp abort).
+# Strictly idempotent: it only creates what is missing and asserts
+# least-privilege modes; it NEVER touches directory contents, so an existing
+# in-flight update-state file is preserved. Sensitive dirs stay 0700; logs 0750.
+# The updater runs as root (systemd), so these creates succeed; each is guarded
+# so a genuinely un-writable filesystem surfaces later via the ERR trap with a
+# precise message, not a bare early abort.
+ensure_runtime_dirs() {
+  mkdir -p "${INSTALL_ROOT}/logs"            && chmod 750 "${INSTALL_ROOT}/logs"            || true  # tee target below
+  mkdir -p "${INSTALL_ROOT}/state"           && chmod 700 "${INSTALL_ROOT}/state"           || true  # state_write() atomic temp + file
+  mkdir -p "${INSTALL_ROOT}/config"          && chmod 700 "${INSTALL_ROOT}/config"          || true
+  mkdir -p "${TRUSTED_KEYS_DIR}"             && chmod 700 "${TRUSTED_KEYS_DIR}"             || true  # resolver mounts this read-only
+}
+ensure_runtime_dirs
+
 exec > >(tee -a "$LOG_FILE") 2>&1
 echo "===== $(date -u +%Y-%m-%dT%H:%M:%SZ) deployment-platform update (check-only=${CHECK_ONLY}) ====="
 

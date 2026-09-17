@@ -143,8 +143,14 @@ fi
 #    (These are the exact installer functions; DRY_RUN gates them.)
 # ============================================================
 log_stage "UPDATER PROVISIONING"
-mkdir -p "${INSTALL_ROOT}/updater" "${INSTALL_ROOT}/config/trusted-keys" 2>/dev/null || true
-[ "$MODE" = "apply" ] && { chmod 755 "${INSTALL_ROOT}/updater"; chmod 700 "${INSTALL_ROOT}/config/trusted-keys"; }
+# Provision the COMPLETE updater runtime filesystem (state, logs, config,
+# trusted-keys, updater, source/releases, backups) with correct modes, using
+# the same single definition the fresh installer uses. A legacy release.sh box
+# is missing several of these (notably state/), and the host updater must not
+# depend on any of them being created incidentally later. Honors DRY_RUN, so
+# --check reports what it would create and changes nothing; idempotent and
+# content-safe on --apply (existing state/backups/keys are preserved).
+ensure_updater_runtime_dirs
 
 install_updater_assets       # resolve-update.mjs + release-remote.sh + trusted keys
 install_update_command       # /usr/local/bin/deployment-platform-update -> registry updater

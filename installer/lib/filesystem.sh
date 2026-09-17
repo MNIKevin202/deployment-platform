@@ -39,21 +39,34 @@ ensure_dir() {
   fi
 }
 
+# Provisions EVERY host-side directory the self-updater relies on, with
+# least-privilege modes. This is the single source of truth for the updater
+# runtime filesystem: both setup_filesystem (fresh install) and
+# bootstrap-production.sh (migrating a legacy release.sh install) call it, so a
+# legacy box gets exactly the same complete, correctly-permissioned layout a
+# fresh install does — no directory is left to be created incidentally by some
+# newer code path. Idempotent (ensure_dir creates only what is missing and fixes
+# ownership/mode) and content-safe (it never touches files inside a directory,
+# so existing state/backups/keys are preserved). Sensitive dirs are 0700.
+ensure_updater_runtime_dirs() {
+  ensure_dir "$INSTALL_ROOT" 755
+  ensure_dir "$INSTALL_ROOT/logs" 750            # updater + installer logs
+  ensure_dir "$INSTALL_ROOT/state" 700           # durable update-state.json (the legacy gap)
+  ensure_dir "$INSTALL_ROOT/config" 700
+  ensure_dir "$INSTALL_ROOT/config/trusted-keys" 700  # release-signing public keys (mounted into resolver)
+  ensure_dir "$INSTALL_ROOT/updater" 755         # resolver + db-*.mjs + release-remote.sh
+  ensure_dir "$INSTALL_ROOT/source" 755
+  ensure_dir "$INSTALL_ROOT/source/releases" 755 # per-update prepared release dirs
+  ensure_dir "$INSTALL_ROOT/backups" 700         # pre-update DB backups
+}
+
 setup_filesystem() {
   log_stage "FILESYSTEM"
 
-  ensure_dir "$INSTALL_ROOT" 755
-  ensure_dir "$INSTALL_ROOT/source" 755
-  ensure_dir "$INSTALL_ROOT/source/releases" 755
-  ensure_dir "$INSTALL_ROOT/config" 700
-  ensure_dir "$INSTALL_ROOT/config/trusted-keys" 700
+  ensure_updater_runtime_dirs
   ensure_dir "$INSTALL_ROOT/caddy" 755
   ensure_dir "$INSTALL_ROOT/caddy/routes" 755
   ensure_dir "$INSTALL_ROOT/installer" 755
-  ensure_dir "$INSTALL_ROOT/updater" 755
-  ensure_dir "$INSTALL_ROOT/logs" 750
-  ensure_dir "$INSTALL_ROOT/backups" 700
-  ensure_dir "$INSTALL_ROOT/state" 700
 
   install_installer_copy
   install_cli_command
