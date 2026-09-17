@@ -20,6 +20,11 @@
 #   --check-only  run discovery + verify + decide, record status, apply
 #                 NOTHING. Safe to run any time, on production, to prove the
 #                 whole chain works.
+#   --debug       verbose per-stage tracing (config-read, config-parse,
+#                 current-version, panel-domain, manifest-url, manifest-fetch,
+#                 signature-fetch, trusted-key-lookup, signature-verify+decide,
+#                 decision). Combine with --check-only for a safe, fully-traced
+#                 production probe. Never logs secrets.
 set -Eeuo pipefail
 
 INSTALL_ROOT="${INSTALL_ROOT:-/opt/deployment-platform}"
@@ -44,7 +49,14 @@ HISTORY_RETENTION="${DP_UPDATE_HISTORY_RETENTION:-50}"
 IMAGE_RETENTION_KEEP="${DP_UPDATE_IMAGE_KEEP:-3}"
 
 CHECK_ONLY=0
-[ "${1:-}" = "--check-only" ] && CHECK_ONLY=1
+DEBUG=0
+for _arg in "$@"; do
+  case "$_arg" in
+    --check-only) CHECK_ONLY=1 ;;
+    --debug)      DEBUG=1 ;;
+    *) : ;;  # ignore unknown flags (forward-compatible)
+  esac
+done
 
 mkdir -p "${INSTALL_ROOT}/logs"
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -56,6 +68,23 @@ cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
 log() { printf '%s\n' "$*"; }
+
+# ---- Diagnostics -------------------------------------------------------------
+# A single always-on failure trap so an early abort under `set -Eeuo pipefail`
+# can NEVER produce only the header line again: it names the stage reached, the
+# failing line, the exit code, and the offending command. --debug additionally
+# traces every stage as it is entered. Neither leaks secrets — no command in
+# this updater carries a credential on its argv (the only base64 payloads are
+# non-secret update-state JSON), and STAGE holds only coarse stage names.
+STAGE="startup"
+dbg()   { [ "${DEBUG:-0}" -eq 1 ] && log "[debug] $*" || true; }
+stage() { STAGE="$1"; dbg "--- stage: $1"; }
+on_err() {
+  local rc=$?
+  log "ERROR: updater aborted (exit ${rc}) at line ${1:-?} during stage '${STAGE}'; last command: ${BASH_COMMAND}"
+  return 0
+}
+trap 'on_err $LINENO' ERR
 
 # ============================================================
 # Durable update-state file (atomic writes; the always-alive host process
@@ -116,8 +145,11 @@ read_update_config() {
 }
 
 current_version() {
-  # The running API image's tag == the installed platform version.
-  docker inspect --format '{{.Config.Image}}' "$API_CONTAINER" 2>/dev/null | awk -F: '{print $NF}'
+  # The running API image's tag == the installed platform version. Guarded with
+  # `|| true` so a transient docker hiccup here (pipefail would otherwise make
+  # the whole pipeline non-zero) can never abort the tick — the caller treats an
+  # empty result as "unknown".
+  docker inspect --format '{{.Config.Image}}' "$API_CONTAINER" 2>/dev/null | awk -F: '{print $NF}' || true
 }
 
 mirror_state_to_db() {
@@ -160,10 +192,13 @@ history_finish() {
 # ============================================================
 json_field() {
   local json="$1" field="$2"
+  # Guarded with `|| true`: a jq/node parse error must yield an empty field, not
+  # a non-zero pipeline that (under pipefail + set -e) would abort the caller's
+  # assignment. Callers already treat empty as "absent / use default".
   if command -v jq >/dev/null 2>&1; then
-    printf '%s' "$json" | jq -r --arg f "$field" '.[$f] // empty'
+    printf '%s' "$json" | jq -r --arg f "$field" '.[$f] // empty' 2>/dev/null || true
   else
-    printf '%s' "$json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const o=JSON.parse(s);const v=o[process.argv[1]];process.stdout.write(v==null?"":String(v));}catch{process.stdout.write("");}})' "$field"
+    printf '%s' "$json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const o=JSON.parse(s);const v=o[process.argv[1]];process.stdout.write(v==null?"":String(v));}catch{process.stdout.write("");}})' "$field" 2>/dev/null || true
   fi
 }
 
@@ -343,31 +378,64 @@ end_incomplete() {  # <state> <detail> [exit-code]
   exit 0
 }
 
+stage config-read
 CONFIG_JSON="$(read_update_config)"
 [ -n "$CONFIG_JSON" ] || end_incomplete idle "could not read update config from the platform database" 3
+dbg "config JSON read from DB ($(printf '%s' "$CONFIG_JSON" | wc -c | tr -d ' ') bytes)"
 
-CHANNEL="$(json_field "$(json_field "$CONFIG_JSON" settings)" channel)"; [ -n "$CHANNEL" ] || CHANNEL="stable"
-POLICY="$(json_field "$(json_field "$CONFIG_JSON" settings)" policy)"; [ -n "$POLICY" ] || POLICY="notify_only"
-MANIFEST_BASE="$(json_field "$(json_field "$CONFIG_JSON" settings)" manifestBaseUrl)"
+stage config-parse
+SETTINGS_JSON="$(json_field "$CONFIG_JSON" settings)"
+CHANNEL="$(json_field "$SETTINGS_JSON" channel)"; [ -n "$CHANNEL" ] || CHANNEL="stable"
+POLICY="$(json_field "$SETTINGS_JSON" policy)"; [ -n "$POLICY" ] || POLICY="notify_only"
+MANIFEST_BASE="$(json_field "$SETTINGS_JSON" manifestBaseUrl)"
 [ -n "$MANIFEST_BASE" ] || end_incomplete idle "no manifestBaseUrl configured (run the bootstrap to seed update settings)" 3
-MAINT_WINDOW="$(json_field "$(json_field "$CONFIG_JSON" settings)" maintenanceWindow)"
+MAINT_WINDOW="$(json_field "$SETTINGS_JSON" maintenanceWindow)"
 PENDING="$(json_field "$CONFIG_JSON" pending)"
 APPLIED_MAX="$(json_field "$CONFIG_JSON" appliedMax)"; [ -n "$APPLIED_MAX" ] || APPLIED_MAX=0
+dbg "parsed config: channel=${CHANNEL} policy=${POLICY} appliedMax=${APPLIED_MAX} manifestBase=${MANIFEST_BASE}"
 
+stage current-version
 CURRENT="$(current_version)"
-PANEL_DOMAIN="$(grep -oE '"panelDomain"[[:space:]]*:[[:space:]]*"[^"]*"' "$INSTALLER_STATE_FILE" 2>/dev/null | sed -E 's/.*"([^"]*)"$/\1/' | head -n1)"
+dbg "current running version: ${CURRENT:-unknown}"
 
+# Panel domain is only needed to build --url-panel for an actual APPLY. It lives
+# in the NEW installer's state file, which a LEGACY box (set up by the old
+# release.sh) simply does not have. A missing file or missing key here is normal
+# and must never abort the tick: unguarded, grep exits 2 on a missing file (or 1
+# on no match) and — under `set -o pipefail` + `set -e` — that killed the whole
+# updater right after the header with a bare exit 2 (the legacy check-only bug
+# this fixes). Guard the file test and the pipeline; absent -> empty is fine.
+stage panel-domain
+PANEL_DOMAIN=""
+if [ -f "$INSTALLER_STATE_FILE" ]; then
+  PANEL_DOMAIN="$(grep -oE '"panelDomain"[[:space:]]*:[[:space:]]*"[^"]*"' "$INSTALLER_STATE_FILE" 2>/dev/null | sed -E 's/.*"([^"]*)"$/\1/' | head -n1 || true)"
+  dbg "panel domain from state file: ${PANEL_DOMAIN:-<none found>}"
+else
+  dbg "installer state file absent (${INSTALLER_STATE_FILE}) — legacy box; panel domain unknown (only needed for APPLY)"
+fi
+
+stage manifest-url
 MANIFEST_URL="${MANIFEST_BASE%/}/${CHANNEL}-latest/manifest.json"
 SIGNATURE_URL="${MANIFEST_BASE%/}/${CHANNEL}-latest/manifest.json.sig"
+dbg "manifest URL:  ${MANIFEST_URL}"
+dbg "signature URL: ${SIGNATURE_URL}"
 
 state_write checking "" "checking ${CHANNEL} channel"
 
 # --- fetch (HTTPS only; curl on the host, no secrets) ---
 case "$MANIFEST_URL" in https://*) ;; *) end_incomplete failed "refusing non-HTTPS manifest URL" 4 ;; esac
-if ! curl -fsSL --max-time 30 "$MANIFEST_URL" -o "$TMP/manifest.json" \
-   || ! curl -fsSL --max-time 30 "$SIGNATURE_URL" -o "$TMP/manifest.json.sig"; then
-  end_incomplete idle "could not fetch the release manifest/signature (endpoint unavailable?)" 4
+stage manifest-fetch
+if ! curl -fsSL --max-time 30 "$MANIFEST_URL" -o "$TMP/manifest.json"; then
+  end_incomplete idle "could not fetch the release manifest (${MANIFEST_URL} unavailable?)" 4
 fi
+stage signature-fetch
+if ! curl -fsSL --max-time 30 "$SIGNATURE_URL" -o "$TMP/manifest.json.sig"; then
+  end_incomplete idle "could not fetch the release signature (${SIGNATURE_URL} unavailable?)" 4
+fi
+dbg "fetched manifest ($(wc -c < "$TMP/manifest.json" 2>/dev/null | tr -d ' ' || echo '?') bytes) + signature ($(wc -c < "$TMP/manifest.json.sig" 2>/dev/null | tr -d ' ' || echo '?') bytes)"
+
+stage trusted-key-lookup
+dbg "trusted keys available: $(find "$TRUSTED_KEYS_DIR" -maxdepth 1 -name '*.pem' 2>/dev/null | wc -l | tr -d ' ' || echo 0) in ${TRUSTED_KEYS_DIR}"
 
 # --- verify + decide (sandboxed; no network, keys+files mounted read-only) ---
 cat > "$TMP/context.json" <<EOF
@@ -384,6 +452,7 @@ cat > "$TMP/context.json" <<EOF
 }
 EOF
 
+stage signature-verify+decide
 DECISION="$(docker run --rm --network none \
   --user "$(id -u):$(id -g)" --security-opt no-new-privileges --cap-drop ALL --read-only --tmpfs /tmp \
   --mount "type=bind,src=${RESOLVER},dst=/work/resolve-update.mjs,readonly" \
@@ -393,7 +462,8 @@ DECISION="$(docker run --rm --network none \
   --mount "type=bind,src=${TRUSTED_KEYS_DIR},dst=/work/keys,readonly" \
   "$NODE_HELPER_IMAGE" node /work/resolve-update.mjs /work/context.json 2>/dev/null || true)"
 
-[ -n "$DECISION" ] || end_incomplete idle "resolver produced no decision (helper failed to run)" 5
+[ -n "$DECISION" ] || end_incomplete idle "resolver produced no decision (helper failed to run — is ${NODE_HELPER_IMAGE} pullable?)" 5
+stage decision
 log "Decision: ${DECISION}"
 
 ACTION="$(json_field "$DECISION" action)"
@@ -501,7 +571,7 @@ RELEASE_RC=$?
 set -e
 printf '%s\n' "$RELEASE_OUTPUT"
 
-STATUS="$(printf '%s\n' "$RELEASE_OUTPUT" | grep -oE '^RELEASE_SUMMARY_STATUS=.*$' | tail -n1 | cut -d= -f2-)"
+STATUS="$(printf '%s\n' "$RELEASE_OUTPUT" | grep -oE '^RELEASE_SUMMARY_STATUS=.*$' | tail -n1 | cut -d= -f2- || true)"
 [ -n "$STATUS" ] || STATUS="UNKNOWN"
 
 clear_pending_apply

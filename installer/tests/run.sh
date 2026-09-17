@@ -2674,6 +2674,50 @@ done
 assert_contains "install_updater_assets ships every db-*.mjs helper" "$FILESYSTEM_SH" "updater/*.mjs"
 
 echo
+echo "=== Regression: updater must not abort with a bare exit on a legacy box ==="
+
+# The exact construct that killed the legacy production updater right after the
+# header line: reading panelDomain out of the NEW installer's state file. On a
+# LEGACY box (set up by the old release.sh) that file does not exist, so `grep`
+# exits 2; under `set -o pipefail` + `set -e` an UNGUARDED command-substitution
+# assignment propagates that 2 and aborts the whole updater before it can log
+# anything (the reported production symptom: header, then exit 2, no message).
+# Prove (a) the unguarded form really does die with exit 2 on a missing file,
+# and (b) the guarded form the updater now uses runs to completion.
+MISSING_STATE_FILE="$TMP_ROOT/no-such-dir/installer-state.json"
+
+UNGUARDED_PANEL_RC=0
+bash -c '
+  set -Eeuo pipefail
+  PANEL_DOMAIN="$(grep -oE "\"panelDomain\"" "'"$MISSING_STATE_FILE"'" 2>/dev/null | sed -E "s/.*\"([^\"]*)\"$/\1/" | head -n1)"
+  printf "reached-end\n"
+' >/dev/null 2>&1 || UNGUARDED_PANEL_RC=$?
+assert_eq "the unguarded panelDomain read aborts with exit 2 on a missing state file (the bug)" "2" "$UNGUARDED_PANEL_RC"
+
+GUARDED_PANEL_RC=0
+GUARDED_PANEL_OUT="$(bash -c '
+  set -Eeuo pipefail
+  INSTALLER_STATE_FILE="'"$MISSING_STATE_FILE"'"
+  PANEL_DOMAIN=""
+  if [ -f "$INSTALLER_STATE_FILE" ]; then
+    PANEL_DOMAIN="$(grep -oE "\"panelDomain\"" "$INSTALLER_STATE_FILE" 2>/dev/null | sed -E "s/.*\"([^\"]*)\"$/\1/" | head -n1 || true)"
+  fi
+  printf "reached-end panel=%s\n" "${PANEL_DOMAIN:-<empty>}"
+' 2>&1)" || GUARDED_PANEL_RC=$?
+assert_eq "the guarded panelDomain read the updater now uses survives a missing state file" "0" "$GUARDED_PANEL_RC"
+assert_contains "the guarded read runs to completion with an empty panel domain" "$GUARDED_PANEL_OUT" "reached-end panel=<empty>"
+
+# The updater template must carry the actual fix + diagnostics, not just pass
+# the behavioural check above by coincidence.
+assert_contains "updater installs an always-on ERR trap so no early abort is silent" "$UPDATE_TMPL" "trap 'on_err"
+assert_contains "the ERR trap logs stage, line, exit code, and failing command" "$UPDATE_TMPL" "updater aborted (exit"
+assert_contains "updater guards the panel-domain read behind a file-existence test" "$UPDATE_TMPL" 'if [ -f "$INSTALLER_STATE_FILE" ]; then'
+assert_contains "updater's panel-domain pipeline is guarded (|| true)" "$UPDATE_TMPL" "| head -n1 || true"
+assert_contains "updater supports a safe --debug staged-tracing mode" "$UPDATE_TMPL" "--debug"
+assert_contains "updater emits named stage markers for tracing" "$UPDATE_TMPL" "stage config-read"
+assert_contains "updater guards current_version against a pipefail abort" "$UPDATE_TMPL" "awk -F: '{print \$NF}' || true"
+
+echo
 echo "=== Production bootstrap: legacy-safe seeding + honest success criteria ==="
 BOOTSTRAP_SH="$(cat "$INSTALLER_DIR/../scripts/bootstrap-production.sh" 2>/dev/null || echo '')"
 if [ -n "$BOOTSTRAP_SH" ]; then

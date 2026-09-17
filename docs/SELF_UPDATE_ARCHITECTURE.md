@@ -586,6 +586,20 @@ to:
    false success) if the chain does not complete. A skipped tick is not
    success.
 
+**Diagnosing a probe that fails.** The updater runs under `set -Eeuo
+pipefail` and installs an always-on `ERR` trap: any early abort logs the
+stage reached, the failing line, the exit code, and the offending command to
+`${INSTALL_ROOT}/logs/update.log`, so a failure can never again surface as
+just the header line. For a full trace of every stage (config-read →
+config-parse → current-version → panel-domain → manifest-url →
+manifest-fetch → signature-fetch → trusted-key-lookup →
+signature-verify+decide → decision), run
+`deployment-platform-update --check-only --debug`; it applies nothing and
+logs no secrets. (Host-side reads that are legitimately optional on a legacy
+box — e.g. the panel domain, which lives only in the *new* installer's state
+file and is needed only for an actual apply — are guarded so a missing file
+or key yields an empty value instead of aborting the tick.)
+
 **Version ordering matters for the *actual* upgrade.** The updater only
 treats a release as an update when its version is strictly greater than the
 installed one. This project's production box runs a **per-box counter**
