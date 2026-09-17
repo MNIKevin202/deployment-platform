@@ -2648,6 +2648,46 @@ bash -n "$INSTALLER_DIR/templates/deployment-platform-update.template" 2>/dev/nu
 assert_eq "the production updater template has valid bash syntax" "0" "$UPDATE_TMPL_SYNTAX"
 
 echo
+echo "=== Legacy-API compatibility: raw-SQL DB access (no getJsonSetting) ==="
+
+# The updater must NOT depend on app-level DB helpers that a legacy API image
+# (e.g. 1.2.6) lacks. It reads/writes platform_settings via raw SQL through
+# the db-*.mjs helpers run inside the container.
+assert_not_contains "updater does NOT import the app DB module" "$UPDATE_TMPL" "createAppDatabase("
+assert_not_contains "updater does NOT call getJsonSetting" "$UPDATE_TMPL" "getJsonSetting("
+assert_not_contains "updater does NOT call setJsonSetting" "$UPDATE_TMPL" "setJsonSetting("
+assert_not_contains "updater does NOT call startUpdateAttempt (app method)" "$UPDATE_TMPL" "startUpdateAttempt("
+assert_contains "updater reads config via the raw-SQL helper" "$UPDATE_TMPL" "db-read-config.mjs"
+assert_contains "updater seeds/writes settings via the raw-SQL helper" "$UPDATE_TMPL" "db-write-setting.mjs"
+assert_contains "updater records history via the raw-SQL helper" "$UPDATE_TMPL" "db-history.mjs"
+
+# check-only must be a hard gate: incomplete chain -> non-zero exit.
+assert_contains "updater has an end_incomplete hard-fail path for check-only" "$UPDATE_TMPL" "end_incomplete"
+assert_contains "updater only passes check-only on a verified decision" "$UPDATE_TMPL" "CHAIN_VERIFIED"
+
+# The raw-SQL helpers exist and are valid.
+for mjs in db-read-config db-seed-config db-write-setting db-history; do
+  MJS_SYNTAX=0
+  node --check "$INSTALLER_DIR/updater/${mjs}.mjs" 2>/dev/null || MJS_SYNTAX=1
+  assert_eq "updater helper ${mjs}.mjs is valid JS" "0" "$MJS_SYNTAX"
+done
+assert_contains "install_updater_assets ships every db-*.mjs helper" "$FILESYSTEM_SH" "updater/*.mjs"
+
+echo
+echo "=== Production bootstrap: legacy-safe seeding + honest success criteria ==="
+BOOTSTRAP_SH="$(cat "$INSTALLER_DIR/../scripts/bootstrap-production.sh" 2>/dev/null || echo '')"
+if [ -n "$BOOTSTRAP_SH" ]; then
+  assert_not_contains "bootstrap does NOT depend on getJsonSetting" "$BOOTSTRAP_SH" "getJsonSetting"
+  assert_not_contains "bootstrap does NOT import the app DB module" "$BOOTSTRAP_SH" "createAppDatabase"
+  assert_contains "bootstrap seeds settings via the raw-SQL helper" "$BOOTSTRAP_SH" "db-seed-config.mjs"
+  assert_contains "bootstrap FAILS (fatal) when the check-only probe does not verify" "$BOOTSTRAP_SH" "Bootstrap verification failed"
+  assert_not_contains "bootstrap no longer prints the old always-PASS message" "$BOOTSTRAP_SH" "discover/verify chain was exercised"
+  BOOTSTRAP_SYNTAX=0
+  bash -n "$INSTALLER_DIR/../scripts/bootstrap-production.sh" 2>/dev/null || BOOTSTRAP_SYNTAX=1
+  assert_eq "bootstrap-production.sh has valid bash syntax" "0" "$BOOTSTRAP_SYNTAX"
+fi
+
+echo
 echo "=== Results ==="
 echo "Passed: $PASS_COUNT"
 echo "Failed: $FAIL_COUNT"

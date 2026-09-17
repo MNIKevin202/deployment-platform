@@ -28,3 +28,6 @@ release.config
 # source art for branding work — not part of the deployed app.
 .claude/
 assets/
+
+# Throwaway bootstrap clones (run the bootstrap from OUTSIDE the repo, e.g. /opt)
+cf-bootstrap/

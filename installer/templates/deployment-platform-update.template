@@ -89,28 +89,30 @@ state_read_field() {
 }
 
 # ============================================================
-# API DB access via docker exec (the same host<->container boundary the
-# platform already uses to read the GitHub token). All reads/writes go
-# through the API image's own compiled DB module — never raw SQL from bash.
+# Platform DB access via docker exec + RAW SQL (node:sqlite), NOT app methods.
+#
+# The updater must work against a LEGACY API image (e.g. 1.2.6) that predates
+# getJsonSetting/the update-history repository. So instead of importing the
+# app's compiled DB module, we run small self-contained scripts
+# (installer/updater/db-*.mjs) inside the API container — they open the same
+# SQLite file the app uses and hit platform_settings (present since migration
+# 018) with plain SQL. This is version-independent: it depends only on node
+# (present in any node:24-alpine-based image) and the table's shape, never on
+# app code. The scripts are piped in on stdin so nothing needs to be mounted
+# or copied into the container. Reads happen while the API is up (before any
+# swap); writes are best-effort and the host state file remains authoritative.
 # ============================================================
 
-api_node() {
-  # Runs a node --input-type=module snippet (on stdin) inside the API
-  # container. Returns non-zero if the container isn't running.
-  docker exec -i "$API_CONTAINER" node --input-type=module 2>/dev/null
+db_script() {
+  # db_script <script-basename> [docker exec -e flags...] — pipes the given
+  # host-side db-*.mjs into `node --input-type=module` in the API container.
+  local script="$1"; shift
+  docker exec -i "$@" "$API_CONTAINER" node --input-type=module < "${UPDATER_DIR}/${script}"
 }
 
+# Prints the combined config JSON: { settings, pending, appliedMax }. Empty on failure.
 read_update_config() {
-  # Emits a single JSON object: { settings, pending } (or nulls). Empty on failure.
-  api_node <<'NODE' || true
-import { createAppDatabase } from "/app/apps/api/dist/database.js";
-const db = createAppDatabase(process.env.DATABASE_PATH || "/data/deployment-platform.sqlite");
-try {
-  const settings = db.getJsonSetting("platform_update_settings");
-  const pending = db.getJsonSetting("platform_update_apply_request");
-  process.stdout.write(JSON.stringify({ settings, pending }));
-} finally { db.close(); }
-NODE
+  db_script db-read-config.mjs 2>/dev/null || true
 }
 
 current_version() {
@@ -118,85 +120,38 @@ current_version() {
   docker inspect --format '{{.Config.Image}}' "$API_CONTAINER" 2>/dev/null | awk -F: '{print $NF}'
 }
 
-applied_max_migration() {
-  api_node <<'NODE' || printf '0'
-import { createAppDatabase } from "/app/apps/api/dist/database.js";
-import { getAppliedMaxVersion } from "/app/apps/api/dist/migrations/index.js";
-const db = createAppDatabase(process.env.DATABASE_PATH || "/data/deployment-platform.sqlite");
-try { process.stdout.write(String(getAppliedMaxVersion(db.db))); } finally { db.close(); }
-NODE
-}
-
 mirror_state_to_db() {
   local state="$1" target="$2" detail="$3"
-  DP_S="$state" DP_T="$target" DP_D="$detail" docker exec -i \
-    -e DP_S -e DP_T -e DP_D "$API_CONTAINER" node --input-type=module >/dev/null 2>&1 <<'NODE' || return 1
-import { createAppDatabase } from "/app/apps/api/dist/database.js";
-const db = createAppDatabase(process.env.DATABASE_PATH || "/data/deployment-platform.sqlite");
-try {
-  db.setJsonSetting("platform_update_state", {
-    state: process.env.DP_S,
-    targetVersion: process.env.DP_T || null,
-    detail: process.env.DP_D || null,
-    updatedAt: new Date().toISOString()
-  });
-} finally { db.close(); }
-NODE
+  local payload
+  payload="$(printf '{"state":"%s","targetVersion":%s,"detail":%s,"updatedAt":"%s"}' \
+    "$state" \
+    "$([ -n "$target" ] && printf '"%s"' "$target" || printf 'null')" \
+    "$([ -n "$detail" ] && printf '"%s"' "$detail" || printf 'null')" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+  DP_KEY="platform_update_state" DP_VALUE_B64="$(printf '%s' "$payload" | base64 | tr -d '\n')" \
+    db_script db-write-setting.mjs -e DP_KEY -e DP_VALUE_B64 >/dev/null 2>&1 || return 1
 }
 
 clear_pending_apply() {
-  api_node >/dev/null 2>&1 <<'NODE' || true
-import { createAppDatabase } from "/app/apps/api/dist/database.js";
-const db = createAppDatabase(process.env.DATABASE_PATH || "/data/deployment-platform.sqlite");
-try { db.deleteSetting("platform_update_apply_request"); } finally { db.close(); }
-NODE
+  # Empty DP_VALUE_B64 deletes the key.
+  DP_KEY="platform_update_apply_request" DP_VALUE_B64="" \
+    db_script db-write-setting.mjs -e DP_KEY -e DP_VALUE_B64 >/dev/null 2>&1 || true
 }
 
-# Records history rows through the API's own repository (never raw SQL).
 history_start() {
   local from="$1" to="$2" channel="$3" policy="$4" trigger="$5"
-  DP_FROM="$from" DP_TO="$to" DP_CH="$channel" DP_POL="$policy" DP_TRIG="$trigger" \
-    docker exec -i -e DP_FROM -e DP_TO -e DP_CH -e DP_POL -e DP_TRIG "$API_CONTAINER" \
-    node --input-type=module 2>/dev/null <<'NODE' || printf ''
-import { createAppDatabase } from "/app/apps/api/dist/database.js";
-const db = createAppDatabase(process.env.DATABASE_PATH || "/data/deployment-platform.sqlite");
-try {
-  const id = db.startUpdateAttempt({
-    fromVersion: process.env.DP_FROM || null,
-    toVersion: process.env.DP_TO,
-    channel: process.env.DP_CH,
-    policy: process.env.DP_POL,
-    trigger: process.env.DP_TRIG,
-    startedAt: new Date().toISOString()
-  });
-  process.stdout.write(String(id));
-} finally { db.close(); }
-NODE
+  DP_OP="start" DP_FROM="$from" DP_TO="$to" DP_CHANNEL="$channel" DP_POLICY="$policy" DP_TRIGGER="$trigger" \
+    db_script db-history.mjs -e DP_OP -e DP_FROM -e DP_TO -e DP_CHANNEL -e DP_POLICY -e DP_TRIGGER \
+    2>/dev/null || printf ''
 }
 
 history_finish() {
   local id="$1" result="$2" stage="$3" health="$4" rb_attempted="$5" rb_result="$6" diag="$7"
   [ -n "$id" ] || return 0
-  DP_ID="$id" DP_RES="$result" DP_STAGE="$stage" DP_HEALTH="$health" \
-    DP_RBA="$rb_attempted" DP_RBR="$rb_result" DP_DIAG="$diag" \
-    docker exec -i -e DP_ID -e DP_RES -e DP_STAGE -e DP_HEALTH -e DP_RBA -e DP_RBR -e DP_DIAG \
-    "$API_CONTAINER" node --input-type=module >/dev/null 2>&1 <<'NODE' || true
-import { createAppDatabase } from "/app/apps/api/dist/database.js";
-const db = createAppDatabase(process.env.DATABASE_PATH || "/data/deployment-platform.sqlite");
-try {
-  db.finishUpdateAttempt({
-    id: Number(process.env.DP_ID),
-    finishedAt: new Date().toISOString(),
-    result: process.env.DP_RES,
-    failureStage: process.env.DP_STAGE || null,
-    healthResult: process.env.DP_HEALTH || null,
-    rollbackAttempted: process.env.DP_RBA === "1",
-    rollbackResult: process.env.DP_RBR || null,
-    diagnostic: process.env.DP_DIAG || null
-  });
-  db.pruneUpdateHistory(Number(process.env.DP_HISTORY_KEEP || "50"));
-} finally { db.close(); }
-NODE
+  DP_OP="finish" DP_ID="$id" DP_RESULT="$result" DP_STAGE="$stage" DP_HEALTH="$health" \
+    DP_RB_ATTEMPTED="$rb_attempted" DP_RB_RESULT="$rb_result" DP_DIAG="$diag" DP_KEEP="$HISTORY_RETENTION" \
+    db_script db-history.mjs -e DP_OP -e DP_ID -e DP_RESULT -e DP_STAGE -e DP_HEALTH \
+      -e DP_RB_ATTEMPTED -e DP_RB_RESULT -e DP_DIAG -e DP_KEEP >/dev/null 2>&1 || true
 }
 
 # ============================================================
@@ -373,22 +328,33 @@ if ! container_running "$API_CONTAINER"; then
   exit 0
 fi
 
+# In --check-only, a failure to COMPLETE the discover/verify/decide chain is a
+# hard error (non-zero exit) so the bootstrap can detect it and NOT print a
+# false PASS. In normal (looped) mode the same condition is a soft skip (exit
+# 0) — a transient network blip must never crash the service.
+end_incomplete() {  # <state> <detail> [exit-code]
+  local st="$1" detail="$2" code="${3:-3}"
+  state_write "$st" "" "$detail"
+  if [ "$CHECK_ONLY" -eq 1 ]; then
+    log "check-only FAILED: ${detail}"
+    exit "$code"
+  fi
+  log "skipping this tick: ${detail}"
+  exit 0
+}
+
 CONFIG_JSON="$(read_update_config)"
-[ -n "$CONFIG_JSON" ] || { log "Could not read update config from the API; skipping this tick."; exit 0; }
+[ -n "$CONFIG_JSON" ] || end_incomplete idle "could not read update config from the platform database" 3
 
 CHANNEL="$(json_field "$(json_field "$CONFIG_JSON" settings)" channel)"; [ -n "$CHANNEL" ] || CHANNEL="stable"
 POLICY="$(json_field "$(json_field "$CONFIG_JSON" settings)" policy)"; [ -n "$POLICY" ] || POLICY="notify_only"
 MANIFEST_BASE="$(json_field "$(json_field "$CONFIG_JSON" settings)" manifestBaseUrl)"
-if [ -z "$MANIFEST_BASE" ]; then
-  log "No manifestBaseUrl configured; nothing to check."
-  state_write idle "" "no manifest base configured"
-  exit 0
-fi
+[ -n "$MANIFEST_BASE" ] || end_incomplete idle "no manifestBaseUrl configured (run the bootstrap to seed update settings)" 3
 MAINT_WINDOW="$(json_field "$(json_field "$CONFIG_JSON" settings)" maintenanceWindow)"
 PENDING="$(json_field "$CONFIG_JSON" pending)"
+APPLIED_MAX="$(json_field "$CONFIG_JSON" appliedMax)"; [ -n "$APPLIED_MAX" ] || APPLIED_MAX=0
 
 CURRENT="$(current_version)"
-APPLIED_MAX="$(applied_max_migration)"
 PANEL_DOMAIN="$(grep -oE '"panelDomain"[[:space:]]*:[[:space:]]*"[^"]*"' "$INSTALLER_STATE_FILE" 2>/dev/null | sed -E 's/.*"([^"]*)"$/\1/' | head -n1)"
 
 MANIFEST_URL="${MANIFEST_BASE%/}/${CHANNEL}-latest/manifest.json"
@@ -397,12 +363,10 @@ SIGNATURE_URL="${MANIFEST_BASE%/}/${CHANNEL}-latest/manifest.json.sig"
 state_write checking "" "checking ${CHANNEL} channel"
 
 # --- fetch (HTTPS only; curl on the host, no secrets) ---
-case "$MANIFEST_URL" in https://*) ;; *) log "Refusing non-HTTPS manifest URL."; state_write failed "" "non-HTTPS manifest URL"; exit 0 ;; esac
+case "$MANIFEST_URL" in https://*) ;; *) end_incomplete failed "refusing non-HTTPS manifest URL" 4 ;; esac
 if ! curl -fsSL --max-time 30 "$MANIFEST_URL" -o "$TMP/manifest.json" \
    || ! curl -fsSL --max-time 30 "$SIGNATURE_URL" -o "$TMP/manifest.json.sig"; then
-  log "Could not fetch the release manifest/signature (endpoint unavailable?)."
-  state_write idle "" "manifest endpoint unavailable"
-  exit 0
+  end_incomplete idle "could not fetch the release manifest/signature (endpoint unavailable?)" 4
 fi
 
 # --- verify + decide (sandboxed; no network, keys+files mounted read-only) ---
@@ -429,13 +393,36 @@ DECISION="$(docker run --rm --network none \
   --mount "type=bind,src=${TRUSTED_KEYS_DIR},dst=/work/keys,readonly" \
   "$NODE_HELPER_IMAGE" node /work/resolve-update.mjs /work/context.json 2>/dev/null || true)"
 
-[ -n "$DECISION" ] || { log "Resolver produced no decision (verification failed?)."; state_write idle "" "resolver produced no decision"; exit 0; }
+[ -n "$DECISION" ] || end_incomplete idle "resolver produced no decision (helper failed to run)" 5
 log "Decision: ${DECISION}"
 
 ACTION="$(json_field "$DECISION" action)"
 REASON="$(json_field "$DECISION" reason)"
 TARGET="$(json_field "$DECISION" targetVersion)"
 
+# Did the chain actually verify the signature and reach a trustworthy decision?
+# "apply"/"notify" are only reachable AFTER signature verification passes; a
+# "none" is trustworthy ONLY when it is "up-to-date" (also post-verification).
+# Every other "none" reason (manifest-unreadable, signature-verification-failed,
+# unknown-signing-key, invalid-*, channel-mismatch, current-version-not-semver)
+# means the chain did NOT complete a verified decision.
+CHAIN_VERIFIED=0
+case "$ACTION" in
+  notify|apply) CHAIN_VERIFIED=1 ;;
+  none) [ "$REASON" = "up-to-date" ] && CHAIN_VERIFIED=1 ;;
+esac
+
+if [ "$CHECK_ONLY" -eq 1 ]; then
+  if [ "$CHAIN_VERIFIED" -eq 1 ]; then
+    state_write "$([ "$ACTION" = "none" ] && echo idle || echo update_available)" "$TARGET" "check-only OK: ${ACTION} (${REASON})"
+    log "check-only PASSED: signature verified, decision=${ACTION} reason=${REASON} target=${TARGET:-none}."
+    printf 'CHECK_RESULT=verified action=%s reason=%s target=%s\n' "$ACTION" "$REASON" "${TARGET:-none}"
+    exit 0
+  fi
+  end_incomplete failed "decision not verified (action=${ACTION}, reason=${REASON})" 5
+fi
+
+# --- normal (looped) mode ---
 case "$ACTION" in
   none)
     state_write idle "" "${REASON}"
@@ -445,17 +432,11 @@ case "$ACTION" in
     log "Update available: ${TARGET} (${REASON}). Not applying automatically."
     exit 0 ;;
   apply)
-    : ;; # fall through
+    : ;; # fall through to APPLY
   *)
     state_write idle "" "unknown action ${ACTION}"
     exit 0 ;;
 esac
-
-if [ "$CHECK_ONLY" -eq 1 ]; then
-  state_write update_available "$TARGET" "check-only: would apply (${REASON})"
-  log "check-only: an update to ${TARGET} would be applied (${REASON}). Not applying."
-  exit 0
-fi
 
 # ============================================================
 # APPLY
@@ -467,8 +448,6 @@ WEB_PULL="$(json_field "$DECISION" webRepository)"
 WEB_DIGEST="$(json_field "$DECISION" webDigest)"
 SOURCE_COMMIT="$(json_field "$DECISION" sourceCommit)"
 
-DP_HISTORY_KEEP="$HISTORY_RETENTION"
-export DP_HISTORY_KEEP
 HISTORY_ID="$(history_start "$CURRENT" "$TARGET" "$CHANNEL" "$POLICY" "$TRIGGER")"
 
 state_write downloading "$TARGET" "preflight + pull"

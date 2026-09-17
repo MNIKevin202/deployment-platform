@@ -155,11 +155,23 @@ It hands that off to the host agent, using the *exact IPC pattern this
 project already relies on for another host↔container boundary*: the
 existing updater already reads the GitHub App token out of the API's own
 SQLite database via `docker exec deployment-platform-api node -e "..."`
-(see `installer/templates/deployment-platform-update.template`). The
-future host agent will read `platform_settings` (update policy, channel,
-and an apply-request record) the same way — no new privilege, no new
-communication mechanism, one boundary-crossing convention for the whole
-project.
+(see `installer/templates/deployment-platform-update.template`).
+
+**The host agent reads and writes `platform_settings` with plain SQL
+(`node:sqlite`), not the app's helper methods.** This is the crucial
+compatibility property: the updater runs `docker exec <api> node
+--input-type=module < installer/updater/db-*.mjs`, which opens the same
+SQLite file the app uses and reads/writes the `platform_settings` table
+directly (present since migration 018). It therefore works against **any**
+API image — including a legacy one (e.g. `1.2.6`) that predates
+`getJsonSetting`/the update-history repository — because it depends only on
+`node` (present in every `node:24-alpine`-based image) and the table's
+shape, never on app code. This is what lets the bootstrap migrate an old
+install: config is seeded and read via raw SQL, so the updater has its
+configuration **before** the new API is ever running. No new privilege, no
+new communication mechanism, one boundary-crossing convention for the whole
+project. (The API side is unchanged — it still uses its own
+`getJsonSetting`/`setJsonSetting` against the same table for the UI.)
 
 ## 5. Release manifest & artifact strategy — IMPLEMENTED (schema, generation,
    verification); Phase 3 wires the consuming side into the live host agent
@@ -555,16 +567,35 @@ to:
 
 1. take a full platform backup and verify it,
 2. install the trusted signing key(s) into `${INSTALL_ROOT}/config/trusted-keys/`,
-3. install the registry updater assets (`resolve-update.mjs`,
-   `release-remote.sh`) into `${INSTALL_ROOT}/updater/`,
+3. install the registry updater assets (`resolve-update.mjs`, the
+   `db-*.mjs` raw-SQL helpers, and `release-remote.sh`) into
+   `${INSTALL_ROOT}/updater/`,
 4. replace `/usr/local/bin/deployment-platform-update` with the registry
    updater and reload the systemd unit,
-5. seed the update settings (channel — `beta` for this project's own box,
-   `stable` for everyone else; policy — a safe default of `notify_only`
-   until you're confident, then `automatic_patch`),
+5. **seed the update settings via raw SQL** (`db-seed-config.mjs` run inside
+   the API container) — channel (`beta` for this project's own box, `stable`
+   for everyone else) and policy (`notify_only` by default). This works
+   against a **legacy** API image that lacks `getJsonSetting`, is idempotent,
+   and preserves any existing settings (see §4). This is what makes the
+   updater's config available **before** the new API is installed.
 6. run `deployment-platform-update --check-only` to prove the whole
    discover → fetch → verify → decide chain works end to end **without
-   applying anything**.
+   applying anything**. `--check-only` **exits non-zero unless it loaded
+   config, fetched the manifest, verified the signature against a trusted
+   key, and produced a decision** — the bootstrap fails (does not print a
+   false success) if the chain does not complete. A skipped tick is not
+   success.
+
+**Version ordering matters for the *actual* upgrade.** The updater only
+treats a release as an update when its version is strictly greater than the
+installed one. This project's production box runs a **per-box counter**
+(e.g. `1.2.6`) from years of `release.sh` releases — which is *higher* than
+an early canonical release like `1.0.0`. So `--check-only` will legitimately
+report `up-to-date` against `1.0.0` (the chain is still verified — that is a
+valid decision and the bootstrap passes). To actually migrate the box onto
+the new self-updating platform, publish a canonical release whose version is
+**greater than the box's current version** (e.g. `1.3.0`), then use
+Settings → Updates → **Update now**.
 
 It never deletes data, never removes a volume, and never force-replaces a
 container. What it changes is limited to the host-side updater wiring and

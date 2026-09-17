@@ -151,46 +151,45 @@ install_update_command       # /usr/local/bin/deployment-platform-update -> regi
 install_update_scheduler     # loop wrapper + systemd unit (or cron fallback)
 
 # ============================================================
-# 4. Seed update settings in the DB (apply only).
+# 4. Seed update settings via RAW SQL (apply only).
+#    Uses db-seed-config.mjs run inside the API container against the SQLite
+#    file directly — NO dependency on app-level JSON-setting helper methods, so it
+#    works against the legacy API image (1.2.6). Idempotent and preserving:
+#    it merges channel/policy and keeps any existing manifestBaseUrl, window,
+#    and unrelated settings; it never recreates the database.
 # ============================================================
 if [ "$MODE" = "apply" ]; then
   log_stage "UPDATE SETTINGS"
-  if DP_CH="$CHANNEL" DP_POL="$POLICY" docker exec -i -e DP_CH -e DP_POL "$API_CONTAINER" \
-      node --input-type=module <<'NODE'
-import { createAppDatabase } from "/app/apps/api/dist/database.js";
-const db = createAppDatabase(process.env.DATABASE_PATH || "/data/deployment-platform.sqlite");
-try {
-  const existing = db.getJsonSetting("platform_update_settings") || {};
-  db.setJsonSetting("platform_update_settings", {
-    channel: process.env.DP_CH,
-    policy: process.env.DP_POL,
-    manifestBaseUrl: existing.manifestBaseUrl || "https://github.com/MNIKevin202/deployment-platform/releases/download",
-    maintenanceWindow: existing.maintenanceWindow || null
-  });
-  db.setJsonSetting("platform_update_state", { state:"idle", targetVersion:null, detail:"bootstrapped onto registry updater", updatedAt:new Date().toISOString() });
-} finally { db.close(); }
-NODE
-  then
-    log_pass "Update settings seeded: channel=${CHANNEL}, policy=${POLICY}."
+  if DP_CHANNEL="$CHANNEL" DP_POLICY="$POLICY" \
+      docker exec -i -e DP_CHANNEL -e DP_POLICY "$API_CONTAINER" \
+      node --input-type=module < "${INSTALL_ROOT}/updater/db-seed-config.mjs"; then
+    log_pass "Update settings seeded via raw SQL: channel=${CHANNEL}, policy=${POLICY} (existing settings preserved)."
   else
-    log_warn "Could not seed update settings via the API container. Set them from Settings -> Updates after the API restarts."
+    fatal "Could not seed update settings into the platform database. Nothing else was changed; investigate and re-run --apply."
   fi
 else
-  log_info "[check] Would seed update settings: channel=${CHANNEL}, policy=${POLICY} (manifest base defaults to this repo's releases)."
+  log_info "[check] Would seed update settings via raw SQL (db-seed-config.mjs): channel=${CHANNEL}, policy=${POLICY}, preserving existing settings."
 fi
 
 # ============================================================
 # 5. Prove the chain end-to-end WITHOUT applying (apply only).
+#    The probe MUST genuinely load config, fetch, verify the signature, and
+#    produce a decision. --check-only exits non-zero if it does not, and this
+#    step fails the bootstrap on that — a skipped tick is NOT success.
 # ============================================================
 if [ "$MODE" = "apply" ]; then
   log_stage "VERIFY (check-only probe)"
-  if [ -x /usr/local/bin/deployment-platform-update ]; then
-    log_info "Running 'deployment-platform-update --check-only' — fetch + verify + decide, applying nothing..."
-    /usr/local/bin/deployment-platform-update --check-only || log_warn "The check-only probe reported an issue (see ${INSTALL_ROOT}/logs/update.log). This is expected if no signed release is published yet."
-    log_pass "Bootstrap complete. The registry updater is installed and the discover/verify chain was exercised."
-    log_info "Next: publish a release (docs §14), then either wait for the updater's schedule or use Settings -> Updates -> Update now."
+  [ -x /usr/local/bin/deployment-platform-update ] || fatal "The updater command was not installed at /usr/local/bin/deployment-platform-update."
+  log_info "Running 'deployment-platform-update --check-only' — load config + fetch + verify + decide, applying nothing..."
+  if /usr/local/bin/deployment-platform-update --check-only; then
+    log_pass "Bootstrap VERIFIED: the updater loaded config, fetched the signed manifest, verified the signature against a trusted key, and produced a decision. Nothing was applied."
+    log_info "Next: for the first real upgrade, publish a release whose version is HIGHER than the currently running version, then use Settings -> Updates -> Update now (or wait for the updater's schedule)."
+  else
+    rc=$?
+    log_fail "The check-only probe did NOT complete the discover/verify/decide chain (exit ${rc}). See ${INSTALL_ROOT}/logs/update.log."
+    fatal "Bootstrap verification failed. The updater is installed but has not proven it can discover and verify a release. Fix the reported issue and re-run --apply."
   fi
 else
-  log_info "[check] Would run 'deployment-platform-update --check-only' to prove the discover/verify/decide chain."
+  log_info "[check] Would run 'deployment-platform-update --check-only' and REQUIRE a verified decision (non-zero exit fails the bootstrap)."
   log_pass "Check complete — nothing was changed. Re-run with --apply to perform the bootstrap."
 fi

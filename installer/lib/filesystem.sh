@@ -90,8 +90,15 @@ install_updater_assets() {
     return 0
   fi
 
-  cp "${DEPLOYMENT_PLATFORM_INSTALLER_ROOT}/updater/resolve-update.mjs" "${INSTALL_ROOT}/updater/resolve-update.mjs"
-  chmod 755 "${INSTALL_ROOT}/updater/resolve-update.mjs"
+  # Ship the resolver and every db-*.mjs raw-SQL helper (these let the updater
+  # read/write config and record history against ANY API version, including a
+  # legacy image predating getJsonSetting — see the updater header comment).
+  local mjs
+  for mjs in "${DEPLOYMENT_PLATFORM_INSTALLER_ROOT}"/updater/*.mjs; do
+    [ -f "$mjs" ] || continue
+    cp "$mjs" "${INSTALL_ROOT}/updater/"
+  done
+  chmod 755 "${INSTALL_ROOT}/updater/"*.mjs 2>/dev/null || true
 
   local release_remote
   release_remote="$(find_release_remote_script)"
