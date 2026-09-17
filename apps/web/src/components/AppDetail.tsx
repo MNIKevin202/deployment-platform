@@ -28,6 +28,7 @@ import ConfirmationDialog from "./ConfirmationDialog";
 import DeploymentFailureModal from "./DeploymentFailureModal";
 import Tabs from "./Tabs";
 import EnvVarTable from "./EnvVarTable";
+import EnvValueCell from "./EnvValueCell";
 import EnvVarDialog from "./EnvVarDialog";
 import BulkEnvVarDialog from "./BulkEnvVarDialog";
 import EnvironmentExportDialog from "./EnvironmentExportDialog";
@@ -1497,17 +1498,12 @@ export default function AppDetail({
                               </span>
                             </td>
                             <td className="env-value-cell">
-                              {variable.isSecret ? (
-                                variable.hasValue ? (
-                                  <span className="masked-value">••••••••</span>
-                                ) : (
-                                  <span className="text-faint">Not set</span>
-                                )
-                              ) : variable.hasValue ? (
-                                <code>{variable.value}</code>
-                              ) : (
-                                <span className="text-faint">Empty</span>
-                              )}
+                              <EnvValueCell
+                                keyName={variable.key}
+                                value={variable.value}
+                                hasValue={variable.hasValue}
+                                isSecret={variable.isSecret}
+                              />
                             </td>
                             <td className="env-actions-cell">
                               <button

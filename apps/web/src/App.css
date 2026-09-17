@@ -1444,6 +1444,168 @@ code {
   color: var(--color-text-muted);
 }
 
+/* ---------- Env var table: search / sort / group / value affordances ---------- */
+
+.env-var-table {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.env-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.env-search {
+  flex: 1 1 240px;
+  min-width: 180px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  color: var(--color-text);
+  background: var(--color-bg);
+  outline: none;
+}
+
+.env-search:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+.env-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.env-count {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.secondary-button.compact.is-active {
+  border-color: var(--color-accent-line);
+  color: var(--color-text);
+  background: var(--color-accent-soft);
+}
+
+.env-sort-btn {
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.env-sort-btn:hover {
+  color: var(--color-text);
+}
+
+.env-group-row td {
+  padding: 0;
+  background: var(--color-surface-raised);
+}
+
+.env-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.8rem;
+  padding: 9px 16px;
+  text-align: left;
+}
+
+.env-group-toggle:hover {
+  background: var(--color-border-soft);
+}
+
+.env-group-chevron {
+  display: inline-block;
+  transition: transform 0.12s ease;
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+}
+
+.env-group-chevron.open {
+  transform: rotate(90deg);
+}
+
+.env-group-name {
+  letter-spacing: 0.03em;
+}
+
+.env-group-count {
+  color: var(--color-text-faint);
+  font-size: 0.72rem;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-soft);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.env-updated-cell {
+  white-space: nowrap;
+}
+
+.env-value {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.env-value-text {
+  display: inline-block;
+  max-width: 44ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.env-value-text.expanded {
+  max-width: none;
+  white-space: normal;
+}
+
+.env-value-actions {
+  display: inline-flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.env-value-action {
+  border: none;
+  background: none;
+  color: var(--color-text-faint);
+  font: inherit;
+  font-size: 0.74rem;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.env-value-action:hover {
+  color: var(--color-accent);
+}
+
 /* A redacted connection string: kept on one line, truncated if very long, so
    the table row stays tidy. */
 .connection-preview {
