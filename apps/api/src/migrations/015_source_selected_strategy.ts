@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration015SourceSelectedStrategy: Migration = {
   version: 15,
   name: "source_selected_strategy",
+  risk: "expand",
   up(db: DatabaseSync): void {
     db.exec(`
       -- Additive only, nullable, defaults to NULL for every existing row

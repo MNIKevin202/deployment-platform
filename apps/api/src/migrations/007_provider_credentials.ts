@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration007ProviderCredentials: Migration = {
   version: 7,
   name: "provider_credentials",
+  risk: "expand",
   up(db: DatabaseSync): void {
     db.exec(`
       CREATE TABLE IF NOT EXISTS provider_credentials (

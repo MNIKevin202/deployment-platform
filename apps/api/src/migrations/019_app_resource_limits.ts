@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration019AppResourceLimits: Migration = {
   version: 19,
   name: "app_resource_limits",
+  risk: "expand",
   up(db: DatabaseSync): void {
     // Optional per-app resource caps, applied to the container's HostConfig
     // on create/redeploy. NULL means "no limit" — the pre-existing behavior —

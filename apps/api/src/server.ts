@@ -104,6 +104,7 @@ import {
   AUTO_BACKUP_LAST_RUN_KEY,
   RETENTION_LAST_RUN_KEY
 } from "./routes/platform-settings.js";
+import { registerPlatformUpdateRoutes } from "./routes/platform-updates.js";
 import type { RecordEventFn } from "./services/deployment-event-service.js";
 import { createAutoDeployScheduler } from "./services/auto-deploy-service.js";
 import {
@@ -516,6 +517,11 @@ await registerPlatformSettingsRoutes(app, {
   runRetentionSweep
 });
 
+await registerPlatformUpdateRoutes(app, {
+  appDatabase,
+  currentVersion: process.env.APP_VERSION ?? "dev"
+});
+
 // Daily safety-net sweep: catches rollback versions left behind when a deploy
 // fails partway through and never runs its own post-deploy cleanup.
 const retentionScheduler = createRetentionScheduler({
@@ -640,7 +646,13 @@ async function inspectManagedContainer(
 app.get("/", async () => {
   return {
     name: "Deployment Platform API",
-    version: "0.4.0",
+    // The single, authoritative running version: baked into the image at
+    // build time (see apps/api/Dockerfile's APP_VERSION build arg), never a
+    // second hardcoded literal here. "dev" for a local build with no
+    // release pipeline behind it — never silently reported as some other
+    // component's stale version number.
+    version: process.env.APP_VERSION ?? "dev",
+    sourceCommit: process.env.SOURCE_COMMIT ?? "unknown",
     status: "running"
   };
 });

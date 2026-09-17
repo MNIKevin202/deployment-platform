@@ -1,134 +1,564 @@
 #!/usr/bin/env bash
+#
+# deployment-platform-update — the production self-updater (one tick).
+#
+# Signed, registry-based, policy-driven. It does NOT clone source and does
+# NOT build images. On each invocation it:
+#   1. reconciles any interrupted update from the durable state file;
+#   2. reads config (channel/policy/window/pending-apply) from the API's DB;
+#   3. fetches the configured channel's signed manifest over HTTPS;
+#   4. verifies the signature + decides (resolve-update.mjs, sandboxed);
+#   5. for an "apply" decision: preflight -> backup -> pull-by-digest ->
+#      release-remote.sh (registry mode, migration-aware rollback) -> record.
+#
+# It runs as a plain host process (looped by deployment-platform-update-loop,
+# a systemd service) precisely so it survives replacing the very containers
+# it updates. See docs/SELF_UPDATE_ARCHITECTURE.md.
+#
+# Flags:
+#   (none)        one normal tick (may apply an update per policy)
+#   --check-only  run discovery + verify + decide, record status, apply
+#                 NOTHING. Safe to run any time, on production, to prove the
+#                 whole chain works.
 set -Eeuo pipefail
 
 INSTALL_ROOT="${INSTALL_ROOT:-/opt/deployment-platform}"
-STATE_FILE="${STATE_FILE:-${INSTALL_ROOT}/state/installer-state.json}"
+INSTALLER_STATE_FILE="${INSTALLER_STATE_FILE:-${INSTALL_ROOT}/state/installer-state.json}"
+UPDATE_STATE_FILE="${UPDATE_STATE_FILE:-${INSTALL_ROOT}/state/update-state.json}"
 LOG_FILE="${LOG_FILE:-${INSTALL_ROOT}/logs/update.log}"
+TRUSTED_KEYS_DIR="${TRUSTED_KEYS_DIR:-${INSTALL_ROOT}/config/trusted-keys}"
+UPDATER_DIR="${UPDATER_DIR:-${INSTALL_ROOT}/updater}"
+RESOLVER="${RESOLVER:-${UPDATER_DIR}/resolve-update.mjs}"
+RELEASE_REMOTE="${RELEASE_REMOTE:-${UPDATER_DIR}/release-remote.sh}"
+NODE_HELPER_IMAGE="${NODE_HELPER_IMAGE:-node:24-alpine}"
+
+API_CONTAINER="${API_CONTAINER:-deployment-platform-api}"
+WEB_CONTAINER="${WEB_CONTAINER:-deployment-platform-web}"
+API_IMAGE_REPO="${API_IMAGE_REPO:-deployment-platform-api}"
+WEB_IMAGE_REPO="${WEB_IMAGE_REPO:-deployment-platform-web}"
+PLATFORM_NETWORK="${PLATFORM_NETWORK:-deployment-platform}"
+APPS_NETWORK="${APPS_NETWORK:-deployment-apps}"
+API_DATA_VOLUME="${API_DATA_VOLUME:-deployment-platform-api-data}"
+DATABASE_PATH_IN_CONTAINER="${DATABASE_PATH_IN_CONTAINER:-/data/deployment-platform.sqlite}"
+HISTORY_RETENTION="${DP_UPDATE_HISTORY_RETENTION:-50}"
+IMAGE_RETENTION_KEEP="${DP_UPDATE_IMAGE_KEEP:-3}"
+
+CHECK_ONLY=0
+[ "${1:-}" = "--check-only" ] && CHECK_ONLY=1
 
 mkdir -p "${INSTALL_ROOT}/logs"
 exec > >(tee -a "$LOG_FILE") 2>&1
-echo "===== $(date -u +%Y-%m-%dT%H:%M:%SZ) deployment-platform update ====="
+echo "===== $(date -u +%Y-%m-%dT%H:%M:%SZ) deployment-platform update (check-only=${CHECK_ONLY}) ====="
 
-json_field() { jq -r --arg f "$1" '.[$f] // empty' "$STATE_FILE"; }
-current_image_tag() { docker inspect --format '{{.Config.Image}}' "$1" 2>/dev/null | awk -F: '{print $NF}'; }
-is_semver() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
-next_version() {
-  local current="$1"
-  if is_semver "$current"; then
-    IFS=. read -r major minor patch <<< "$current"
-    printf '%s.%s.%s' "$major" "$minor" "$((patch + 1))"
-  else
-    printf '0.1.0'
-  fi
-}
-next_available_version() {
-  local repository="$1"
-  local candidate
-  candidate="$(next_version "$2")"
-  while docker image inspect "${repository}:${candidate}" >/dev/null 2>&1; do
-    candidate="$(next_version "$candidate")"
-  done
-  printf '%s' "$candidate"
-}
-
-repo="$(json_field sourceRepository)"
-ref="$(json_field sourceRef)"
-panel_domain="$(json_field panelDomain)"
-current_commit="$(json_field sourceCommit)"
-[ -n "$repo" ] && [ -n "$ref" ] || { echo "No source repository/ref recorded; cannot auto-update."; exit 0; }
-
-tmp="$(mktemp -d /tmp/deployment-platform-update.XXXXXX)"
-cleanup() { rm -rf "$tmp"; }
-trap cleanup EXIT
 umask 077
+TMP="$(mktemp -d /tmp/dp-update.XXXXXX)"
+cleanup() { rm -rf "$TMP"; }
+trap cleanup EXIT
 
-repo_authority="${repo#https://}"
-repo_authority="${repo_authority%%/*}"
-token_file="$tmp/github-token"
-credential_helper=""
-if [ "$repo_authority" = "github.com" ] && docker inspect deployment-platform-api >/dev/null 2>&1; then
-  if docker exec deployment-platform-api node --input-type=module -e '
+log() { printf '%s\n' "$*"; }
+
+# ============================================================
+# Durable update-state file (atomic writes; the always-alive host process
+# owns it, so it is the source of truth for crash recovery). Kept as flat
+# key=value lines so it needs no jq to read here — the DB copy (written via
+# the API) is what the UI reads as JSON.
+# ============================================================
+
+state_write() {
+  local state="$1" target="${2:-}" detail="${3:-}"
+  local tmp
+  tmp="$(mktemp "${INSTALL_ROOT}/state/.update-state.XXXXXX")"
+  chmod 600 "$tmp"
+  {
+    printf 'state=%s\n' "$state"
+    printf 'targetVersion=%s\n' "$target"
+    printf 'updatedAt=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'detail=%s\n' "$detail"
+  } > "$tmp"
+  sync "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$UPDATE_STATE_FILE"
+  # Best-effort mirror into the DB for the UI (fails silently when the API is
+  # mid-swap/down — the host file above is the authority regardless).
+  mirror_state_to_db "$state" "$target" "$detail" || true
+}
+
+state_read_field() {
+  local field="$1"
+  [ -f "$UPDATE_STATE_FILE" ] || { printf ''; return 0; }
+  grep -oE "^${field}=.*$" "$UPDATE_STATE_FILE" 2>/dev/null | head -n1 | cut -d= -f2- || printf ''
+}
+
+# ============================================================
+# API DB access via docker exec (the same host<->container boundary the
+# platform already uses to read the GitHub token). All reads/writes go
+# through the API image's own compiled DB module — never raw SQL from bash.
+# ============================================================
+
+api_node() {
+  # Runs a node --input-type=module snippet (on stdin) inside the API
+  # container. Returns non-zero if the container isn't running.
+  docker exec -i "$API_CONTAINER" node --input-type=module 2>/dev/null
+}
+
+read_update_config() {
+  # Emits a single JSON object: { settings, pending } (or nulls). Empty on failure.
+  api_node <<'NODE' || true
 import { createAppDatabase } from "/app/apps/api/dist/database.js";
-import { loadGithubAppConfig } from "/app/apps/api/dist/services/github-app-config.js";
-import { resolveGithubToken } from "/app/apps/api/dist/services/github-token-service.js";
-const database = createAppDatabase(process.env.DATABASE_PATH || "/data/deployment-platform.sqlite");
+const db = createAppDatabase(process.env.DATABASE_PATH || "/data/deployment-platform.sqlite");
 try {
-  const result = await resolveGithubToken({ appDatabase: database, githubAppConfig: loadGithubAppConfig() });
-  if (!result.success) process.exit(2);
-  process.stdout.write(result.token);
-} finally { database.close(); }
-' > "$token_file" 2>/dev/null && [ -s "$token_file" ]; then
-    credential_helper="$tmp/git-credential-helper.sh"
-    cat > "$credential_helper" <<DP_CREDENTIAL_HELPER
-#!/bin/sh
-if [ "\$1" = "get" ]; then
-  printf 'username=x-access-token\npassword='
-  cat "$token_file"
-  printf '\n'
-fi
-exit 0
-DP_CREDENTIAL_HELPER
-    chmod 700 "$credential_helper"
-  else
-    rm -f "$token_file"
-  fi
-fi
+  const settings = db.getJsonSetting("platform_update_settings");
+  const pending = db.getJsonSetting("platform_update_apply_request");
+  process.stdout.write(JSON.stringify({ settings, pending }));
+} finally { db.close(); }
+NODE
+}
 
-# Cheap pre-check: resolve the remote branch HEAD with ls-remote (no objects
-# transferred) so the continuous updater can poll every few seconds without
-# doing a full clone each time. Only when the remote HEAD has actually moved
-# past the recorded commit do we fall through to the shallow clone + rebuild.
-# If ls-remote fails or returns nothing, remote_head is empty and we proceed
-# to the clone, whose own commit comparison below is the authoritative guard.
-if [ -n "$credential_helper" ]; then
-  remote_head="$(git -c "credential.helper=$credential_helper" ls-remote "$repo" "$ref" 2>/dev/null | awk 'NR==1{print $1}')"
-else
-  remote_head="$(git ls-remote "$repo" "$ref" 2>/dev/null | awk 'NR==1{print $1}')"
-fi
-if [ -n "$remote_head" ] && [ "$remote_head" = "$current_commit" ]; then
-  echo "Already current at $current_commit (remote unchanged)."
+current_version() {
+  # The running API image's tag == the installed platform version.
+  docker inspect --format '{{.Config.Image}}' "$API_CONTAINER" 2>/dev/null | awk -F: '{print $NF}'
+}
+
+applied_max_migration() {
+  api_node <<'NODE' || printf '0'
+import { createAppDatabase } from "/app/apps/api/dist/database.js";
+import { getAppliedMaxVersion } from "/app/apps/api/dist/migrations/index.js";
+const db = createAppDatabase(process.env.DATABASE_PATH || "/data/deployment-platform.sqlite");
+try { process.stdout.write(String(getAppliedMaxVersion(db.db))); } finally { db.close(); }
+NODE
+}
+
+mirror_state_to_db() {
+  local state="$1" target="$2" detail="$3"
+  DP_S="$state" DP_T="$target" DP_D="$detail" docker exec -i \
+    -e DP_S -e DP_T -e DP_D "$API_CONTAINER" node --input-type=module >/dev/null 2>&1 <<'NODE' || return 1
+import { createAppDatabase } from "/app/apps/api/dist/database.js";
+const db = createAppDatabase(process.env.DATABASE_PATH || "/data/deployment-platform.sqlite");
+try {
+  db.setJsonSetting("platform_update_state", {
+    state: process.env.DP_S,
+    targetVersion: process.env.DP_T || null,
+    detail: process.env.DP_D || null,
+    updatedAt: new Date().toISOString()
+  });
+} finally { db.close(); }
+NODE
+}
+
+clear_pending_apply() {
+  api_node >/dev/null 2>&1 <<'NODE' || true
+import { createAppDatabase } from "/app/apps/api/dist/database.js";
+const db = createAppDatabase(process.env.DATABASE_PATH || "/data/deployment-platform.sqlite");
+try { db.deleteSetting("platform_update_apply_request"); } finally { db.close(); }
+NODE
+}
+
+# Records history rows through the API's own repository (never raw SQL).
+history_start() {
+  local from="$1" to="$2" channel="$3" policy="$4" trigger="$5"
+  DP_FROM="$from" DP_TO="$to" DP_CH="$channel" DP_POL="$policy" DP_TRIG="$trigger" \
+    docker exec -i -e DP_FROM -e DP_TO -e DP_CH -e DP_POL -e DP_TRIG "$API_CONTAINER" \
+    node --input-type=module 2>/dev/null <<'NODE' || printf ''
+import { createAppDatabase } from "/app/apps/api/dist/database.js";
+const db = createAppDatabase(process.env.DATABASE_PATH || "/data/deployment-platform.sqlite");
+try {
+  const id = db.startUpdateAttempt({
+    fromVersion: process.env.DP_FROM || null,
+    toVersion: process.env.DP_TO,
+    channel: process.env.DP_CH,
+    policy: process.env.DP_POL,
+    trigger: process.env.DP_TRIG,
+    startedAt: new Date().toISOString()
+  });
+  process.stdout.write(String(id));
+} finally { db.close(); }
+NODE
+}
+
+history_finish() {
+  local id="$1" result="$2" stage="$3" health="$4" rb_attempted="$5" rb_result="$6" diag="$7"
+  [ -n "$id" ] || return 0
+  DP_ID="$id" DP_RES="$result" DP_STAGE="$stage" DP_HEALTH="$health" \
+    DP_RBA="$rb_attempted" DP_RBR="$rb_result" DP_DIAG="$diag" \
+    docker exec -i -e DP_ID -e DP_RES -e DP_STAGE -e DP_HEALTH -e DP_RBA -e DP_RBR -e DP_DIAG \
+    "$API_CONTAINER" node --input-type=module >/dev/null 2>&1 <<'NODE' || true
+import { createAppDatabase } from "/app/apps/api/dist/database.js";
+const db = createAppDatabase(process.env.DATABASE_PATH || "/data/deployment-platform.sqlite");
+try {
+  db.finishUpdateAttempt({
+    id: Number(process.env.DP_ID),
+    finishedAt: new Date().toISOString(),
+    result: process.env.DP_RES,
+    failureStage: process.env.DP_STAGE || null,
+    healthResult: process.env.DP_HEALTH || null,
+    rollbackAttempted: process.env.DP_RBA === "1",
+    rollbackResult: process.env.DP_RBR || null,
+    diagnostic: process.env.DP_DIAG || null
+  });
+  db.pruneUpdateHistory(Number(process.env.DP_HISTORY_KEEP || "50"));
+} finally { db.close(); }
+NODE
+}
+
+# ============================================================
+# JSON field extraction from the resolver's decision (jq if present, else a
+# bounded node fallback via the helper image — no jq dependency required).
+# ============================================================
+json_field() {
+  local json="$1" field="$2"
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$json" | jq -r --arg f "$field" '.[$f] // empty'
+  else
+    printf '%s' "$json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const o=JSON.parse(s);const v=o[process.argv[1]];process.stdout.write(v==null?"":String(v));}catch{process.stdout.write("");}})' "$field"
+  fi
+}
+
+# ============================================================
+# Startup reconciliation: resolve an interrupted update before doing anything.
+# ============================================================
+reconcile_interrupted_update() {
+  local prev
+  prev="$(state_read_field state)"
+  [ -n "$prev" ] || return 0
+  case "$prev" in
+    idle|update_available|successful|rolled_back|failed|manual_intervention_required)
+      return 0 ;;
+    downloading|verifying|preparing)
+      # Pre-cutover: the running version was never touched. Safe to abandon.
+      log "Reconcile: found interrupted pre-cutover state '${prev}'; abandoning it (old version untouched)."
+      state_write idle "" "recovered from interrupted ${prev}"
+      return 0 ;;
+    installing|migrating|health_checking|rolling_back)
+      # Post-cutover: a swap may be half-done. Inspect what is actually
+      # running and whether it's healthy, then settle the state honestly.
+      log "Reconcile: found interrupted post-cutover state '${prev}'; inspecting running containers."
+      if container_running "$API_CONTAINER" && container_running "$WEB_CONTAINER" && api_http_healthy; then
+        local running
+        running="$(current_version)"
+        log "Reconcile: platform is up and healthy at version ${running}."
+        state_write idle "" "recovered: healthy at ${running} after interrupted ${prev}"
+      else
+        log "Reconcile: platform is NOT healthy after an interrupted ${prev}. Flagging manual intervention."
+        state_write manual_intervention_required "$(state_read_field targetVersion)" \
+          "interrupted during ${prev}; platform not healthy on restart — manual recovery required"
+      fi
+      return 0 ;;
+    *)
+      return 0 ;;
+  esac
+}
+
+container_running() {
+  [ "$(docker inspect --format '{{.State.Running}}' "$1" 2>/dev/null || echo false)" = "true" ]
+}
+
+api_http_healthy() {
+  # The API answers its own /health from inside the container (no public
+  # dependency). Bounded, never blocks the loop for long.
+  docker exec "$API_CONTAINER" node -e '
+const http=require("node:http");
+const req=http.request({host:"127.0.0.1",port:Number(process.env.DP_PROBE_PORT||3001),path:"/health",timeout:4000},r=>{process.exit(r.statusCode===200?0:1);});
+req.on("timeout",()=>{req.destroy();process.exit(1);});
+req.on("error",()=>process.exit(1));
+req.end();' >/dev/null 2>&1
+}
+
+# ============================================================
+# Preflight (fail BEFORE disrupting anything).
+# ============================================================
+preflight() {
+  local api_pull="$1" api_digest="$2" web_pull="$3" web_digest="$4"
+
+  command -v docker >/dev/null 2>&1 || { log "Preflight: docker not found."; return 1; }
+  docker info >/dev/null 2>&1 || { log "Preflight: docker daemon not reachable."; return 1; }
+
+  # Disk space: require a comfortable margin on the docker filesystem before
+  # pulling two images and taking a backup.
+  local avail_kb
+  avail_kb="$(df -Pk /var/lib/docker 2>/dev/null | awk 'NR==2{print $4}')"
+  if [ -n "$avail_kb" ] && [ "$avail_kb" -lt "${DP_MIN_DISK_KB:-2097152}" ]; then
+    log "Preflight: insufficient disk space (${avail_kb}KB available, need >= ${DP_MIN_DISK_KB:-2097152}KB)."
+    return 1
+  fi
+
+  # Registry connectivity + pullability, by digest. This is the real "can we
+  # get the images" check and it happens before any container is touched.
+  log "Preflight: pulling ${api_pull}@${api_digest} ..."
+  docker pull "${api_pull}@${api_digest}" >/dev/null 2>&1 || { log "Preflight: API image pull failed."; return 1; }
+  log "Preflight: pulling ${web_pull}@${web_digest} ..."
+  docker pull "${web_pull}@${web_digest}" >/dev/null 2>&1 || { log "Preflight: web image pull failed."; return 1; }
+
+  [ -f "$RELEASE_REMOTE" ] || { log "Preflight: release-remote.sh not found at ${RELEASE_REMOTE}."; return 1; }
+  [ -f "${INSTALL_ROOT}/config/auth.env" ] || { log "Preflight: auth.env missing."; return 1; }
+  [ -f "${INSTALL_ROOT}/config/platform.env" ] || { log "Preflight: platform.env missing."; return 1; }
+  return 0
+}
+
+# Builds the minimal, persistent release directory release-remote.sh needs in
+# registry mode: stub package.json + Dockerfiles (existence-only checks) plus
+# the target image's real migration source (copied out of the pulled image),
+# so the from-source migration-verification step verifies against exactly what
+# this release ships — no host source checkout required.
+prepare_release_dir() {
+  local target="$1" source_commit="$2" api_pull="$3" api_digest="$4"
+  local ts short dir
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  short="${source_commit:0:12}"
+  dir="${INSTALL_ROOT}/source/releases/release-${ts}-${short}"
+  mkdir -p "$dir/apps/api" "$dir/apps/web"
+  printf '{"version":"%s"}\n' "$target" > "$dir/package.json"
+  printf '# registry release %s (stub for existence checks)\n' "$target" > "$dir/apps/api/Dockerfile"
+  printf '# registry release %s (stub for existence checks)\n' "$target" > "$dir/apps/web/Dockerfile"
+
+  # Copy the migration source out of the pulled API image.
+  local cid
+  cid="$(docker create "${api_pull}@${api_digest}")" || return 1
+  if ! docker cp "${cid}:/app/apps/api/src/migrations" "$dir/apps/api/src/migrations" >/dev/null 2>&1; then
+    # Older images without baked migrations: fall back to an empty dir; the
+    # verification step will find nothing expected, which release-remote.sh
+    # treats as "no new migrations to verify".
+    mkdir -p "$dir/apps/api/src/migrations"
+  fi
+  docker rm "$cid" >/dev/null 2>&1 || true
+  printf '%s' "$dir"
+}
+
+# Rollback safety: are all migrations newer than the currently-applied max
+# classified "expand"? Computed from the TARGET image's own compiled list, so
+# it reflects exactly what this update will run. Prints 1 (safe) or 0.
+compute_rollback_safe() {
+  local api_pull="$1" api_digest="$2" applied_max="$3"
+  docker run --rm --network none -e DP_APPLIED="$applied_max" "${api_pull}@${api_digest}" \
+    node --input-type=module -e '
+import { computeRollbackSafety } from "/app/apps/api/dist/migrations/index.js";
+process.stdout.write(computeRollbackSafety(Number(process.env.DP_APPLIED || "0")) ? "1" : "0");
+' 2>/dev/null || printf '0'
+}
+
+# Retention: keep only the newest few local image tags per platform repo, so
+# accumulated pulled images don't fill the disk. Never force-removes: an
+# in-use tag (the live container's, and its preserved rollback) is refused by
+# docker and simply kept. Semver-sorted, newest kept.
+cleanup_old_images() {
+  local repo keep="$IMAGE_RETENTION_KEEP"
+  for repo in "$API_IMAGE_REPO" "$WEB_IMAGE_REPO"; do
+    local tags
+    tags="$(docker images --format '{{.Tag}}' "$repo" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V -r || true)"
+    local i=0 tag
+    while IFS= read -r tag; do
+      [ -n "$tag" ] || continue
+      i=$((i + 1))
+      if [ "$i" -gt "$keep" ]; then
+        docker rmi "${repo}:${tag}" >/dev/null 2>&1 || true
+      fi
+    done <<< "$tags"
+  done
+}
+
+# ============================================================
+# Main
+# ============================================================
+
+reconcile_interrupted_update
+
+# A prior tick that ended in manual_intervention_required must NOT silently
+# start another update. It stays put until an operator clears it (which the
+# API does by resetting state / issuing a manual apply).
+if [ "$(state_read_field state)" = "manual_intervention_required" ] && [ "$CHECK_ONLY" -eq 0 ]; then
+  log "State is manual_intervention_required — refusing to start a new update until an operator clears it."
   exit 0
 fi
 
-if [ -n "$credential_helper" ]; then
-  git -c "credential.helper=$credential_helper" clone --branch "$ref" --depth 1 --single-branch --no-tags -- "$repo" "$tmp/source"
-else
-  git clone --branch "$ref" --depth 1 --single-branch --no-tags -- "$repo" "$tmp/source"
+if ! container_running "$API_CONTAINER"; then
+  log "API container is not running; cannot read config or check for updates this tick."
+  exit 0
 fi
-latest_commit="$(git -C "$tmp/source" rev-parse HEAD)"
-[ "$latest_commit" != "$current_commit" ] || { echo "Already current at $current_commit."; exit 0; }
 
-timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-short_commit="${latest_commit:0:12}"
-release_dir="${INSTALL_ROOT}/source/releases/release-${timestamp}-${short_commit}"
-mkdir -p "$release_dir"
-rsync -a --exclude=.git --exclude=node_modules --exclude='**/dist' "$tmp/source/" "$release_dir/"
+CONFIG_JSON="$(read_update_config)"
+[ -n "$CONFIG_JSON" ] || { log "Could not read update config from the API; skipping this tick."; exit 0; }
 
-previous_api="$(current_image_tag deployment-platform-api)"
-previous_web="$(current_image_tag deployment-platform-web)"
-next_api="$(next_available_version deployment-platform-api "$previous_api")"
-next_web="$(next_available_version deployment-platform-web "$previous_web")"
+CHANNEL="$(json_field "$(json_field "$CONFIG_JSON" settings)" channel)"; [ -n "$CHANNEL" ] || CHANNEL="stable"
+POLICY="$(json_field "$(json_field "$CONFIG_JSON" settings)" policy)"; [ -n "$POLICY" ] || POLICY="notify_only"
+MANIFEST_BASE="$(json_field "$(json_field "$CONFIG_JSON" settings)" manifestBaseUrl)"
+if [ -z "$MANIFEST_BASE" ]; then
+  log "No manifestBaseUrl configured; nothing to check."
+  state_write idle "" "no manifest base configured"
+  exit 0
+fi
+MAINT_WINDOW="$(json_field "$(json_field "$CONFIG_JSON" settings)" maintenanceWindow)"
+PENDING="$(json_field "$CONFIG_JSON" pending)"
 
-bash "$release_dir/scripts/release-remote.sh" \
-  --mode both --source-dir "$release_dir" \
+CURRENT="$(current_version)"
+APPLIED_MAX="$(applied_max_migration)"
+PANEL_DOMAIN="$(grep -oE '"panelDomain"[[:space:]]*:[[:space:]]*"[^"]*"' "$INSTALLER_STATE_FILE" 2>/dev/null | sed -E 's/.*"([^"]*)"$/\1/' | head -n1)"
+
+MANIFEST_URL="${MANIFEST_BASE%/}/${CHANNEL}-latest/manifest.json"
+SIGNATURE_URL="${MANIFEST_BASE%/}/${CHANNEL}-latest/manifest.json.sig"
+
+state_write checking "" "checking ${CHANNEL} channel"
+
+# --- fetch (HTTPS only; curl on the host, no secrets) ---
+case "$MANIFEST_URL" in https://*) ;; *) log "Refusing non-HTTPS manifest URL."; state_write failed "" "non-HTTPS manifest URL"; exit 0 ;; esac
+if ! curl -fsSL --max-time 30 "$MANIFEST_URL" -o "$TMP/manifest.json" \
+   || ! curl -fsSL --max-time 30 "$SIGNATURE_URL" -o "$TMP/manifest.json.sig"; then
+  log "Could not fetch the release manifest/signature (endpoint unavailable?)."
+  state_write idle "" "manifest endpoint unavailable"
+  exit 0
+fi
+
+# --- verify + decide (sandboxed; no network, keys+files mounted read-only) ---
+cat > "$TMP/context.json" <<EOF
+{
+  "currentVersion": $( [ -n "$CURRENT" ] && printf '"%s"' "$CURRENT" || printf 'null' ),
+  "channel": "$CHANNEL",
+  "policy": "$POLICY",
+  "maintenanceWindow": ${MAINT_WINDOW:-null},
+  "appliedMaxMigrationVersion": ${APPLIED_MAX:-0},
+  "manifestPath": "/work/manifest.json",
+  "signaturePath": "/work/manifest.json.sig",
+  "trustedKeysDir": "/work/keys",
+  "pendingApply": ${PENDING:-null}
+}
+EOF
+
+DECISION="$(docker run --rm --network none \
+  --user "$(id -u):$(id -g)" --security-opt no-new-privileges --cap-drop ALL --read-only --tmpfs /tmp \
+  --mount "type=bind,src=${RESOLVER},dst=/work/resolve-update.mjs,readonly" \
+  --mount "type=bind,src=${TMP}/manifest.json,dst=/work/manifest.json,readonly" \
+  --mount "type=bind,src=${TMP}/manifest.json.sig,dst=/work/manifest.json.sig,readonly" \
+  --mount "type=bind,src=${TMP}/context.json,dst=/work/context.json,readonly" \
+  --mount "type=bind,src=${TRUSTED_KEYS_DIR},dst=/work/keys,readonly" \
+  "$NODE_HELPER_IMAGE" node /work/resolve-update.mjs /work/context.json 2>/dev/null || true)"
+
+[ -n "$DECISION" ] || { log "Resolver produced no decision (verification failed?)."; state_write idle "" "resolver produced no decision"; exit 0; }
+log "Decision: ${DECISION}"
+
+ACTION="$(json_field "$DECISION" action)"
+REASON="$(json_field "$DECISION" reason)"
+TARGET="$(json_field "$DECISION" targetVersion)"
+
+case "$ACTION" in
+  none)
+    state_write idle "" "${REASON}"
+    exit 0 ;;
+  notify)
+    state_write update_available "$TARGET" "${REASON}"
+    log "Update available: ${TARGET} (${REASON}). Not applying automatically."
+    exit 0 ;;
+  apply)
+    : ;; # fall through
+  *)
+    state_write idle "" "unknown action ${ACTION}"
+    exit 0 ;;
+esac
+
+if [ "$CHECK_ONLY" -eq 1 ]; then
+  state_write update_available "$TARGET" "check-only: would apply (${REASON})"
+  log "check-only: an update to ${TARGET} would be applied (${REASON}). Not applying."
+  exit 0
+fi
+
+# ============================================================
+# APPLY
+# ============================================================
+TRIGGER="$(json_field "$DECISION" trigger)"; [ -n "$TRIGGER" ] || TRIGGER="automatic"
+API_PULL="$(json_field "$DECISION" apiRepository)"
+API_DIGEST="$(json_field "$DECISION" apiDigest)"
+WEB_PULL="$(json_field "$DECISION" webRepository)"
+WEB_DIGEST="$(json_field "$DECISION" webDigest)"
+SOURCE_COMMIT="$(json_field "$DECISION" sourceCommit)"
+
+DP_HISTORY_KEEP="$HISTORY_RETENTION"
+export DP_HISTORY_KEEP
+HISTORY_ID="$(history_start "$CURRENT" "$TARGET" "$CHANNEL" "$POLICY" "$TRIGGER")"
+
+state_write downloading "$TARGET" "preflight + pull"
+if ! preflight "$API_PULL" "$API_DIGEST" "$WEB_PULL" "$WEB_DIGEST"; then
+  state_write failed "$TARGET" "preflight failed"
+  history_finish "$HISTORY_ID" "failed" "preflight" "" 0 "" "preflight checks failed (see update.log)"
+  exit 1
+fi
+
+state_write verifying "$TARGET" "computing rollback safety"
+ROLLBACK_SAFE="$(compute_rollback_safe "$API_PULL" "$API_DIGEST" "$APPLIED_MAX")"
+log "Rollback safety for this update: ${ROLLBACK_SAFE} (1=safe container swap-back, 0=breaking migration -> DB restore path)."
+
+state_write preparing "$TARGET" "preparing release dir"
+RELEASE_DIR="$(prepare_release_dir "$TARGET" "$SOURCE_COMMIT" "$API_PULL" "$API_DIGEST")"
+[ -n "$RELEASE_DIR" ] && [ -d "$RELEASE_DIR" ] || {
+  state_write failed "$TARGET" "could not prepare release dir"
+  history_finish "$HISTORY_ID" "failed" "prepare" "" 0 "" "could not prepare release directory"
+  exit 1
+}
+
+PREV_API_VERSION="$(current_version)"; [ -n "$PREV_API_VERSION" ] || PREV_API_VERSION="unknown"
+PREV_WEB_VERSION="$(docker inspect --format '{{.Config.Image}}' "$WEB_CONTAINER" 2>/dev/null | awk -F: '{print $NF}')"
+[ -n "$PREV_WEB_VERSION" ] || PREV_WEB_VERSION="unknown"
+
+state_write installing "$TARGET" "swapping containers"
+# release-remote.sh takes the pre-update DB backup (VACUUM INTO), does the
+# three-phase swap, runs migrations (in-container, at start), verifies image/
+# network/migrations/health, and — with --rollback-safe passed — chooses the
+# correct rollback strategy on failure. We reuse it wholesale.
+set +e
+RELEASE_OUTPUT="$(bash "$RELEASE_REMOTE" \
+  --mode both --image-source registry \
+  --source-dir "$RELEASE_DIR" \
   --auth-file "${INSTALL_ROOT}/config/auth.env" \
   --platform-env-file "${INSTALL_ROOT}/config/platform.env" \
   --caddy-routes-dir "${INSTALL_ROOT}/caddy/routes" \
-  --deploy-installer --install-root "$INSTALL_ROOT" \
-  --api-container deployment-platform-api --web-container deployment-platform-web \
-  --api-image-repo deployment-platform-api --web-image-repo deployment-platform-web \
-  --platform-network deployment-platform --apps-network deployment-apps \
-  --api-data-volume deployment-platform-api-data \
-  --api-version "$next_api" --web-version "$next_web" \
-  --source-commit "$latest_commit" \
-  --previous-api-version "$previous_api" --previous-web-version "$previous_web" \
-  --url-panel "https://${panel_domain}" \
-  --current-symlink "${INSTALL_ROOT}/source/current"
+  --api-container "$API_CONTAINER" --web-container "$WEB_CONTAINER" \
+  --api-image-repo "$API_IMAGE_REPO" --web-image-repo "$WEB_IMAGE_REPO" \
+  --api-pull-repository "$API_PULL" --web-pull-repository "$WEB_PULL" \
+  --api-image-digest "$API_DIGEST" --web-image-digest "$WEB_DIGEST" \
+  --platform-network "$PLATFORM_NETWORK" --apps-network "$APPS_NETWORK" \
+  --api-data-volume "$API_DATA_VOLUME" \
+  --api-version "$TARGET" --web-version "$TARGET" \
+  --source-commit "$SOURCE_COMMIT" \
+  --previous-api-version "$PREV_API_VERSION" --previous-web-version "$PREV_WEB_VERSION" \
+  --url-panel "https://${PANEL_DOMAIN}" \
+  --current-symlink "${INSTALL_ROOT}/source/current" \
+  --rollback-safe "$ROLLBACK_SAFE" 2>&1)"
+RELEASE_RC=$?
+set -e
+printf '%s\n' "$RELEASE_OUTPUT"
 
-state_tmp="$(mktemp "${INSTALL_ROOT}/state/installer-state.json.XXXXXX")"
-jq --arg commit "$latest_commit" --arg api "deployment-platform-api:${next_api}" --arg web "deployment-platform-web:${next_web}" \
-  '.sourceCommit = $commit | .apiImage = $api | .webImage = $web' "$STATE_FILE" > "$state_tmp"
-chmod 600 "$state_tmp"
-chown --reference="$STATE_FILE" "$state_tmp"
-mv "$state_tmp" "$STATE_FILE"
-echo "Update complete at ${latest_commit}."
+STATUS="$(printf '%s\n' "$RELEASE_OUTPUT" | grep -oE '^RELEASE_SUMMARY_STATUS=.*$' | tail -n1 | cut -d= -f2-)"
+[ -n "$STATUS" ] || STATUS="UNKNOWN"
+
+clear_pending_apply
+
+case "$STATUS" in
+  PASS|PASS_WITH_WARNINGS)
+    state_write health_checking "$TARGET" "verifying running version"
+    RUNNING="$(current_version)"
+    if [ "$RUNNING" = "$TARGET" ] && api_http_healthy; then
+      state_write successful "$TARGET" "updated and healthy at ${TARGET}"
+      history_finish "$HISTORY_ID" "successful" "" "passed" 0 "" "updated to ${TARGET} (${STATUS})"
+      cleanup_old_images
+      state_write idle "$TARGET" "idle after successful update to ${TARGET}"
+      log "Update to ${TARGET} succeeded."
+    else
+      state_write manual_intervention_required "$TARGET" "post-deploy verification mismatch (running=${RUNNING})"
+      history_finish "$HISTORY_ID" "manual_intervention_required" "post-verify" "failed" 0 "" "running=${RUNNING} expected=${TARGET}"
+    fi
+    ;;
+  ROLLED_BACK)
+    state_write rolled_back "$TARGET" "health failed; rolled back to previous version"
+    history_finish "$HISTORY_ID" "rolled_back" "health_check" "failed" 1 "rolled_back" "auto-rolled back to ${PREV_API_VERSION}"
+    ;;
+  MANUAL_INTERVENTION_REQUIRED)
+    state_write manual_intervention_required "$TARGET" "breaking migration + failure; DB restore required (see update.log)"
+    history_finish "$HISTORY_ID" "manual_intervention_required" "health_check" "failed" 1 "unsafe-not-attempted" "breaking migration ran; automatic rollback unsafe"
+    ;;
+  ROLLBACK_FAILED)
+    state_write manual_intervention_required "$TARGET" "rollback itself failed — active incident"
+    history_finish "$HISTORY_ID" "manual_intervention_required" "rollback" "failed" 1 "rollback_failed" "rollback did not fully succeed"
+    ;;
+  FAILED|*)
+    # Failed before any cutover: the previous version is untouched.
+    state_write failed "$TARGET" "update failed before cutover (rc=${RELEASE_RC}, status=${STATUS})"
+    history_finish "$HISTORY_ID" "failed" "pre-cutover" "" 0 "" "status=${STATUS} rc=${RELEASE_RC}"
+    ;;
+esac
+
+exit 0

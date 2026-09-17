@@ -1,0 +1,206 @@
+name: Publish ClovaForge release
+
+# Triggered by a deliberate version tag push (vX.Y.Z), never by a plain push
+# to main — publishing a release is a distinct, intentional act. See
+# docs/SELF_UPDATE_ARCHITECTURE.md for the full design this feeds.
+#
+# What this workflow does NOT do, on purpose: it never touches any
+# installed ClovaForge server. It builds and publishes an immutable,
+# signed, versioned release artifact. Every installation decides for
+# itself, on its own schedule and its own configured channel/policy,
+# whether and when to fetch and apply it (see the host update agent in
+# docs/SELF_UPDATE_ARCHITECTURE.md, Phase 3). CI publishes; installations
+# pull.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write # to create the GitHub Release and upload assets
+  packages: write # to push images to GHCR
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Derive and validate the release version
+        id: version
+        run: |
+          set -Eeuo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$tag' is not vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          # package.json's "version" is the single authoritative version
+          # source (see docs/SELF_UPDATE_ARCHITECTURE.md "Versioning") — the
+          # tag exists to trigger a deliberate publish, but it must always
+          # agree with what the source itself declares, never be allowed to
+          # silently diverge from it.
+          pkg_version="$(node -p "require('./package.json').version")"
+          if [ "$version" != "$pkg_version" ]; then
+            echo "::error::Tag version ($version) does not match package.json version ($pkg_version). Update package.json first."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test (API)
+        run: npm run test --workspace=@deployment-platform/api
+
+      - name: Test (web)
+        run: npm run test --workspace=@deployment-platform/web
+
+      - name: Compute lowercase image names
+        id: images
+        run: |
+          owner_lower="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "api=ghcr.io/${owner_lower}/clovaforge-api" >> "$GITHUB_OUTPUT"
+          echo "web=ghcr.io/${owner_lower}/clovaforge-web" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Immutable version tag only — deliberately never ":latest". Which
+      # image an installation runs is decided entirely by the signed
+      # manifest's digest, never by a mutable tag a registry push could
+      # silently move later.
+      - name: Build and push API image
+        id: build-api
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.version }}
+            SOURCE_COMMIT=${{ github.sha }}
+          tags: ${{ steps.images.outputs.api }}:${{ steps.version.outputs.version }}
+
+      - name: Build and push web image
+        id: build-web
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.version }}
+            SOURCE_COMMIT=${{ github.sha }}
+          tags: ${{ steps.images.outputs.web }}:${{ steps.version.outputs.version }}
+
+      - name: Determine the minimum supported upgrade version
+        id: min-version
+        run: |
+          # Conservative default: the previous published release tag (one
+          # step back), so a direct jump always spans at most one release's
+          # migrations. Falls back to this release's own version (a
+          # same-version floor, effectively "no older install may jump
+          # here") when there is no earlier tag — e.g. the very first
+          # release ever published.
+          previous_tag="$(git tag --sort=-v:refname --list 'v*.*.*' | grep -v "^${GITHUB_REF_NAME}\$" | head -1 || true)"
+          if [ -n "$previous_tag" ]; then
+            echo "version=${previous_tag#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ steps.version.outputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate and sign the release manifest
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_CHANNEL: stable
+          SOURCE_COMMIT: ${{ github.sha }}
+          API_IMAGE_REPOSITORY: ${{ steps.images.outputs.api }}
+          API_IMAGE_DIGEST: ${{ steps.build-api.outputs.digest }}
+          WEB_IMAGE_REPOSITORY: ${{ steps.images.outputs.web }}
+          WEB_IMAGE_DIGEST: ${{ steps.build-web.outputs.digest }}
+          MINIMUM_UPGRADE_VERSION: ${{ steps.min-version.outputs.version }}
+          NOTES_URL: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+          # See docs/SELF_UPDATE_ARCHITECTURE.md "Signing" for how this key
+          # is generated and rotated. The workflow fails clearly here,
+          # rather than publishing an unsigned/unverifiable release, until
+          # it has actually been provisioned as a repo secret.
+          SIGNING_PRIVATE_KEY_PEM_BASE64: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY }}
+          SIGNING_KEY_ID: ${{ vars.RELEASE_SIGNING_KEY_ID || 'clovaforge-release-1' }}
+        run: |
+          if [ -z "$SIGNING_PRIVATE_KEY_PEM_BASE64" ]; then
+            echo "::error::Repo secret RELEASE_SIGNING_PRIVATE_KEY is not set — see docs/SELF_UPDATE_ARCHITECTURE.md 'Signing' for how to generate and provision it."
+            exit 1
+          fi
+          node scripts/generate-release-manifest.mjs manifest.json manifest.json.sig
+
+      - name: Validate the generated manifest against the schema
+        run: |
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            import { releaseManifestSchema, releaseManifestSignatureSchema } from "./apps/api/dist/schemas/release-manifest.js";
+            const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
+            const signature = JSON.parse(readFileSync("manifest.json.sig", "utf8"));
+            const manifestResult = releaseManifestSchema.safeParse(manifest);
+            if (!manifestResult.success) {
+              console.error(manifestResult.error.message);
+              process.exit(1);
+            }
+            const signatureResult = releaseManifestSignatureSchema.safeParse(signature);
+            if (!signatureResult.success) {
+              console.error(signatureResult.error.message);
+              process.exit(1);
+            }
+            console.log("Manifest and signature both validate against the schema.");
+          '
+
+      - name: Create the GitHub Release for this version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "ClovaForge ${{ steps.version.outputs.version }}" \
+            --generate-notes \
+            manifest.json manifest.json.sig
+
+      # Channel pointers are permanent, pre-existing releases whose two assets
+      # (manifest.json + manifest.json.sig) are overwritten on every publish —
+      # each channel's discovery URL is that pointer's fixed download link, so
+      # installations never need to know a specific version tag to check for
+      # updates. A normal tag publishes to stable AND advances beta, since
+      # stable ⊆ beta (a beta follower always gets at least the newest stable).
+      # See docs/SELF_UPDATE_ARCHITECTURE.md "Channels".
+      - name: Update the channel pointers (stable + beta)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          update_pointer() {
+            local tag="$1" title="$2"
+            if ! gh release view "$tag" >/dev/null 2>&1; then
+              gh release create "$tag" \
+                --title "$title" \
+                --notes "This release's assets always point at the newest release for this channel. Do not download a version from here — the signed manifest names the exact images." \
+                manifest.json manifest.json.sig
+            else
+              gh release upload "$tag" manifest.json manifest.json.sig --clobber
+            fi
+          }
+          update_pointer stable-latest "ClovaForge — stable channel (latest)"
+          update_pointer beta-latest "ClovaForge — beta channel (latest)"

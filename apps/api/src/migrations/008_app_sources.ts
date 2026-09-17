@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration008AppSources: Migration = {
   version: 8,
   name: "app_sources",
+  risk: "expand",
   up(db: DatabaseSync): void {
     db.exec(`
       -- One row per app (app_id is the primary key) enforces "one source

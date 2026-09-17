@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration024DatabaseConnections: Migration = {
   version: 24,
   name: "database_connections",
+  risk: "expand",
   up(db: DatabaseSync): void {
     // A registry of connection strings for databases hosted *elsewhere* —
     // MongoDB Atlas, a managed Postgres, an external Redis, and so on. Unlike

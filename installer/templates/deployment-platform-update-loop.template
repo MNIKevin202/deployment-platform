@@ -2,13 +2,15 @@
 #
 # Continuous updater loop. Runs the one-shot deployment-platform-update
 # command over and over with a short pause between checks, so every install
-# converges on the latest source almost immediately after it is pushed —
-# rather than only when an operator runs an update by hand.
+# discovers and applies a newly published signed release according to its
+# configured channel and update policy — without an operator running an
+# update by hand.
 #
-# Each iteration is cheap when nothing changed: the update command resolves
-# the remote branch HEAD with `git ls-remote` and exits early unless it has
-# moved, so a short interval does not mean a clone (let alone a rebuild)
-# every time. A rebuild only happens when there is genuinely new source.
+# Each iteration is cheap when nothing changed: the update command fetches a
+# small signed manifest, verifies it, compares versions, and exits early
+# unless there is a newer release its policy permits applying. A pull + swap
+# only happens when there is genuinely a new release to install (see
+# deployment-platform-update and docs/SELF_UPDATE_ARCHITECTURE.md).
 #
 # The interval is DP_UPDATE_INTERVAL seconds (default 30). A single check is
 # never allowed to run concurrently with the next tick: flock holds an
@@ -16,7 +18,7 @@
 # delays the following iteration instead of stacking a second one on top.
 set -Eeuo pipefail
 
-INTERVAL="${DP_UPDATE_INTERVAL:-30}"
+INTERVAL="${DP_UPDATE_INTERVAL:-900}"
 UPDATE_CMD="${DP_UPDATE_CMD:-/usr/local/bin/deployment-platform-update}"
 LOCK_FILE="${DP_UPDATE_LOCK:-/run/lock/deployment-platform-update.lock}"
 

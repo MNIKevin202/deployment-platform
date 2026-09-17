@@ -2612,6 +2612,42 @@ done
 assert_eq "every installer script has valid bash syntax" "0" "$SYNTAX_FAILURES"
 
 echo
+echo "=== Self-updater (registry-based) provisioning + legacy removal ==="
+
+FILESYSTEM_SH="$(cat "$INSTALLER_DIR/lib/filesystem.sh")"
+assert_contains "filesystem creates the trusted-keys directory" "$FILESYSTEM_SH" "config/trusted-keys"
+assert_contains "filesystem creates the updater directory" "$FILESYSTEM_SH" '"$INSTALL_ROOT/updater"'
+assert_contains "install_updater_assets is wired into setup_filesystem" "$FILESYSTEM_SH" "install_updater_assets"
+assert_contains "updater assets install the resolver" "$FILESYSTEM_SH" "resolve-update.mjs"
+assert_contains "updater assets install the deploy engine" "$FILESYSTEM_SH" "release-remote.sh"
+assert_contains "trusted keys are installed mode 600" "$FILESYSTEM_SH" 'chmod 600 "${INSTALL_ROOT}/config/trusted-keys/"'
+
+UPDATE_TMPL="$(cat "$INSTALLER_DIR/templates/deployment-platform-update.template")"
+# The production updater must be registry-based: no git clone, no docker build.
+assert_not_contains "production updater does NOT git clone" "$UPDATE_TMPL" "git clone"
+assert_not_contains "production updater does NOT build images" "$UPDATE_TMPL" "docker build"
+assert_contains "production updater verifies via the sandboxed resolver" "$UPDATE_TMPL" "resolve-update.mjs"
+assert_contains "production updater pulls by digest" "$UPDATE_TMPL" '${api_pull}@${api_digest}'
+assert_contains "production updater passes the API image digest to the deploy engine" "$UPDATE_TMPL" "--api-image-digest"
+assert_contains "production updater uses registry mode" "$UPDATE_TMPL" "--image-source registry"
+assert_contains "production updater passes migration-aware rollback safety" "$UPDATE_TMPL" "--rollback-safe"
+assert_contains "production updater supports a safe check-only mode" "$UPDATE_TMPL" "check-only"
+assert_contains "production updater has a durable state file" "$UPDATE_TMPL" "update-state.json"
+assert_contains "production updater reconciles interrupted updates" "$UPDATE_TMPL" "reconcile_interrupted_update"
+assert_contains "production updater records manual_intervention_required" "$UPDATE_TMPL" "manual_intervention_required"
+
+LEGACY_TMPL="$(cat "$INSTALLER_DIR/templates/deployment-platform-update-legacy-source.template")"
+assert_contains "the legacy source-build updater is clearly marked legacy" "$LEGACY_TMPL" "LEGACY / DEVELOPMENT ONLY"
+
+# The scheduler installs the production (registry) updater, not the legacy one.
+assert_contains "install_update_command installs the production updater template" \
+  "$(cat "$INSTALLER_DIR/lib/filesystem.sh")" "deployment-platform-update.template"
+
+UPDATE_TMPL_SYNTAX=0
+bash -n "$INSTALLER_DIR/templates/deployment-platform-update.template" 2>/dev/null || UPDATE_TMPL_SYNTAX=1
+assert_eq "the production updater template has valid bash syntax" "0" "$UPDATE_TMPL_SYNTAX"
+
+echo
 echo "=== Results ==="
 echo "Passed: $PASS_COUNT"
 echo "Failed: $FAIL_COUNT"

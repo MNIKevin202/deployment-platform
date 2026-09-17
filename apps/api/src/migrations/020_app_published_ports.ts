@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration020AppPublishedPorts: Migration = {
   version: 20,
   name: "app_published_ports",
+  risk: "expand",
   up(db: DatabaseSync): void {
     // Optional raw TCP/UDP host-port publishing, applied to the container's
     // HostConfig.PortBindings on create/redeploy. This is what lets non-HTTP

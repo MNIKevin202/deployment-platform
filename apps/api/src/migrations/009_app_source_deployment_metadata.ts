@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration009AppSourceDeploymentMetadata: Migration = {
   version: 9,
   name: "app_source_deployment_metadata",
+  risk: "expand",
   up(db: DatabaseSync): void {
     db.exec(`
       -- Additive only: existing rows keep their current validation-only

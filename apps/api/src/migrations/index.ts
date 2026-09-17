@@ -26,6 +26,7 @@ import { migration024DatabaseConnections } from "./024_database_connections.js";
 import { migration025DeploymentDuration } from "./025_deployment_duration.js";
 import { migration026DeploymentStatus } from "./026_deployment_status.js";
 import { migration027AutoDeployBlock } from "./027_auto_deploy_block.js";
+import { migration028PlatformUpdateHistory } from "./028_platform_update_history.js";
 import type { Migration } from "./types.js";
 
 export type { Migration } from "./types.js";
@@ -57,11 +58,48 @@ const migrations: Migration[] = [
   migration024DatabaseConnections,
   migration025DeploymentDuration,
   migration026DeploymentStatus,
-  migration027AutoDeployBlock
+  migration027AutoDeployBlock,
+  migration028PlatformUpdateHistory
 ];
 
 interface SchemaMigrationRow {
   version: number;
+}
+
+/**
+ * Whether rolling the running image back to whatever it was at
+ * `previousMaxVersion` (the highest migration version already applied
+ * before an upgrade) would leave the database in a shape that version can
+ * still understand. True only if every migration strictly newer than
+ * `previousMaxVersion` is classified "expand" — see MigrationRisk in
+ * types.ts. A migration this platform doesn't know about at all (should
+ * never happen: the full list is baked into the image) is treated the
+ * same as "breaking", never silently ignored.
+ *
+ * This is the authority release-remote.sh's automatic rollback consults
+ * (via the API's /platform/updates status) rather than a hand-maintained
+ * list in a release manifest — the actual migrations that will run for a
+ * given installation depend on that installation's current version, which
+ * only the installation itself (via its own schema_migrations table)
+ * actually knows.
+ */
+export function computeRollbackSafety(previousMaxVersion: number): boolean {
+  return migrations
+    .filter((migration) => migration.version > previousMaxVersion)
+    .every((migration) => migration.risk === "expand");
+}
+
+/** The full, ordered migration list — exposed read-only for verification/reporting (e.g. computeRollbackSafety, release-remote.sh's from-source check). */
+export function listMigrations(): ReadonlyArray<Migration> {
+  return [...migrations].sort((a, b) => a.version - b.version);
+}
+
+/** The highest migration version already applied to this database, or 0 if none have run yet. */
+export function getAppliedMaxVersion(db: DatabaseSync): number {
+  const row = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as unknown as
+    | { v: number | null }
+    | undefined;
+  return row?.v ?? 0;
 }
 
 export function runMigrations(db: DatabaseSync): void {

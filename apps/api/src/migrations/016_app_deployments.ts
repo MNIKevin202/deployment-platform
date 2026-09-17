@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration016AppDeployments: Migration = {
   version: 16,
   name: "app_deployments",
+  risk: "expand",
   up(db: DatabaseSync): void {
     // A per-app deployment ledger: one row per released version, in the
     // CapRover mould. Distinct from app_deployment_events (a noisy,

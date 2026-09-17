@@ -1,5 +1,14 @@
 # Release Automation
 
+> **This remains the accurate description of how this project's own
+> production server is deployed today.** A separate, CI-published,
+> self-updating release model for distributing ClovaForge to *other*
+> installations is being built alongside it — see
+> [SELF_UPDATE_ARCHITECTURE.md](SELF_UPDATE_ARCHITECTURE.md) for the design,
+> what's implemented so far, and the plan to eventually migrate this
+> project's own server onto it. This document will be marked legacy once
+> that migration (its Phase 6) actually happens — not before.
+
 `release.sh` automates the Deployment Platform's verify → commit → sync →
 build → deploy → verify workflow. It is designed to be run by an operator
 sitting at the keyboard, not by CI, and it stops and asks before every

@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration011PerformanceDiagnostics: Migration = {
   version: 11,
   name: "performance_diagnostics",
+  risk: "expand",
   up(db: DatabaseSync): void {
     db.exec(`
       -- One row per "Run Performance Test" click. Browser timing is

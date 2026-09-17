@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration025DeploymentDuration: Migration = {
   version: 25,
   name: "deployment_duration",
+  risk: "expand",
   up(db: DatabaseSync): void {
     db.exec(`
       ALTER TABLE app_deployments

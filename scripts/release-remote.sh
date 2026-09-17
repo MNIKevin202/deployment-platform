@@ -47,6 +47,36 @@ URL_PANEL=""
 URL_WIZARD_TEST=""
 URL_SQLITE_TEST=""
 CURRENT_SYMLINK=""
+# "build" (default, unchanged behavior): build the image locally from
+# SOURCE_DIR, exactly as this script always has. "registry": skip the local
+# build entirely and pull a pre-built image by its immutable digest instead
+# — the platform self-update path (see docs/SELF_UPDATE_ARCHITECTURE.md)
+# uses this to install a signed, CI-published release without ever running
+# `docker build` on the target host. Every later stage (env/mount capture,
+# container swap, migration verification, rollback) is unaffected either
+# way — they only ever reference "${API_IMAGE_REPO}:${API_VERSION}" once it
+# exists locally, never how it got there.
+IMAGE_SOURCE="build"
+API_IMAGE_DIGEST=""
+WEB_IMAGE_DIGEST=""
+# In registry mode the image is PULLED from a (typically GHCR) repository but
+# TAGGED locally as ${API_IMAGE_REPO}:${version} so the rest of the platform
+# keeps referring to it by its stable local name. These default to the local
+# repo when unset, so the historical single-repo behavior and the existing
+# validation tests are unaffected.
+API_PULL_REPOSITORY=""
+WEB_PULL_REPOSITORY=""
+# Whether an automatic rollback (swapping the previous container image back)
+# would leave the database in a shape the previous version can still run
+# against. 1 (default, and the value for every historical/manual release)
+# preserves the existing behavior exactly. 0 is passed by the self-updater
+# when a *breaking* migration ran during this update: swapping the old image
+# back onto the migrated schema would be old code against a database it can't
+# understand, so on failure this script must NOT do that — it stops, preserves
+# the pre-update backup and the rolled-away container, and reports
+# MANUAL_INTERVENTION_REQUIRED rather than a false ROLLED_BACK. See
+# docs/SELF_UPDATE_ARCHITECTURE.md "Migration safety".
+ROLLBACK_SAFE=1
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -77,6 +107,12 @@ while [ "$#" -gt 0 ]; do
     --url-wizard-test) URL_WIZARD_TEST="$2"; shift 2 ;;
     --url-sqlite-test) URL_SQLITE_TEST="$2"; shift 2 ;;
     --current-symlink) CURRENT_SYMLINK="$2"; shift 2 ;;
+    --image-source) IMAGE_SOURCE="$2"; shift 2 ;;
+    --api-image-digest) API_IMAGE_DIGEST="$2"; shift 2 ;;
+    --web-image-digest) WEB_IMAGE_DIGEST="$2"; shift 2 ;;
+    --rollback-safe) ROLLBACK_SAFE="$2"; shift 2 ;;
+    --api-pull-repository) API_PULL_REPOSITORY="$2"; shift 2 ;;
+    --web-pull-repository) WEB_PULL_REPOSITORY="$2"; shift 2 ;;
     *)
       printf 'Unknown argument: %s\n' "$1" >&2
       exit 1
@@ -171,6 +207,34 @@ fi
 
 if [ "${MODE}" = "web" ] || [ "${MODE}" = "both" ]; then
   is_valid_semver "${WEB_VERSION}" || { printf 'ERROR: --web-version invalid: %s\n' "${WEB_VERSION}" >&2; exit 1; }
+fi
+
+case "${IMAGE_SOURCE}" in
+  build|registry) ;;
+  *)
+    printf 'ERROR: --image-source must be "build" or "registry" (got: %s)\n' "${IMAGE_SOURCE}" >&2
+    exit 1
+    ;;
+esac
+
+case "${ROLLBACK_SAFE}" in
+  0|1) ;;
+  *)
+    printf 'ERROR: --rollback-safe must be 0 or 1 (got: %s)\n' "${ROLLBACK_SAFE}" >&2
+    exit 1
+    ;;
+esac
+
+if [ "${IMAGE_SOURCE}" = "registry" ]; then
+  IMAGE_DIGEST_PATTERN='^sha256:[0-9a-f]{64}$'
+  if [ "${MODE}" = "api" ] || [ "${MODE}" = "both" ]; then
+    [[ "${API_IMAGE_DIGEST}" =~ ${IMAGE_DIGEST_PATTERN} ]] \
+      || { printf 'ERROR: --image-source registry requires a valid --api-image-digest (sha256:<64 hex>), got: %s\n' "${API_IMAGE_DIGEST}" >&2; exit 1; }
+  fi
+  if [ "${MODE}" = "web" ] || [ "${MODE}" = "both" ]; then
+    [[ "${WEB_IMAGE_DIGEST}" =~ ${IMAGE_DIGEST_PATTERN} ]] \
+      || { printf 'ERROR: --image-source registry requires a valid --web-image-digest (sha256:<64 hex>), got: %s\n' "${WEB_IMAGE_DIGEST}" >&2; exit 1; }
+  fi
 fi
 
 RELEASE_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -457,6 +521,40 @@ trigger_rollback() {
     restore_installer_on_failure
   fi
 
+  # Migration-unsafe rollback: a breaking migration ran during this update, so
+  # the previous image can no longer run against the migrated database.
+  # Restoring the old container here would be old code on a schema it can't
+  # understand — actively worse than leaving service down. Instead: stop the
+  # failed new container (kept, not removed, so its logs can be inspected),
+  # leave the previous container preserved under its rollback name, keep the
+  # pre-update backup, and report MANUAL_INTERVENTION_REQUIRED. The operator
+  # recovers by restoring the backup and the preserved container deliberately.
+  if [ "${ROLLBACK_SAFE}" -eq 0 ] && [ "${ANY_SWAP_PERFORMED}" -eq 1 ]; then
+    info "MANUAL INTERVENTION REQUIRED: a breaking migration ran, so automatic rollback to the previous image is NOT safe (it cannot run against the migrated database)."
+    if [ "${API_NEW_STARTED}" -eq 1 ] || [ "${API_NEW_CREATED}" -eq 1 ]; then
+      docker stop "${API_CONTAINER}" >/dev/null 2>&1 || true
+    fi
+    if [ "${WEB_NEW_STARTED}" -eq 1 ] || [ "${WEB_NEW_CREATED}" -eq 1 ]; then
+      docker stop "${WEB_CONTAINER}" >/dev/null 2>&1 || true
+    fi
+    local preserved_names=""
+    [ -n "${API_ROLLBACK_NAME}" ] && preserved_names="${preserved_names}${API_ROLLBACK_NAME} "
+    [ -n "${WEB_ROLLBACK_NAME}" ] && preserved_names="${preserved_names}${WEB_ROLLBACK_NAME} "
+    info "Previous container(s) preserved (stopped) under: ${preserved_names}"
+    info "The failed new container(s) were stopped but kept for inspection (docker logs ${API_CONTAINER})."
+    if [ -n "${BACKUP_PATH}" ]; then
+      info "Pre-update database backup preserved at: ${BACKUP_PATH}"
+      info "To recover: restore that backup into the ${API_DATA_VOLUME} volume, then rename a preserved container back to its live name and start it. See docs/SELF_UPDATE_ARCHITECTURE.md 'Emergency manual recovery'."
+    fi
+    info "Release directory preserved for inspection: ${SOURCE_DIR}"
+    print_header "RELEASE COMPLETE"
+    emit_summary "n/a" "n/a" "${BACKUP_PATH}" "${preserved_names}" "not reached" "not reached" "not reached" \
+      "MANUAL_INTERVENTION_REQUIRED" "UNKNOWN — breaking migration ran; previous image not safe to restore automatically" \
+      "UNKNOWN — see above" "preserved (stopped) under the rollback name(s) above; manual recovery required" \
+      "unchanged (rollback occurred before any pointer update)"
+    return
+  fi
+
   local api_rollback_ok=1
   local web_rollback_ok=1
 
@@ -633,29 +731,74 @@ info "Pre-flight checks passed."
 
 print_header "IMAGE BUILD"
 
-if [ "${MODE}" = "api" ] || [ "${MODE}" = "both" ]; then
-  info "Building ${API_IMAGE_REPO}:${API_VERSION}..."
-  if ! docker build -f "${SOURCE_DIR}/apps/api/Dockerfile" -t "${API_IMAGE_REPO}:${API_VERSION}" "${SOURCE_DIR}"; then
-    fail "API image build failed."
+
+# Pulls a pre-built, CI-published image by its immutable digest and tags it
+# locally as "${repo}:${version}" — the exact same local reference a local
+# `docker build` would have produced, so every later stage (env capture,
+# container swap, migration verification, rollback) needs no knowledge of
+# which path was taken. Pulling by digest (never by a mutable tag like
+# "latest") means Docker itself refuses the pull if the registry doesn't
+# serve exactly those bytes — this IS the artifact-integrity check; nothing
+# else in this script re-verifies image content.
+pull_and_tag_image() {
+  local pull_repo="$1"
+  local digest="$2"
+  local local_repo="$3"
+  local version="$4"
+  local label="$5"
+
+  info "Pulling ${pull_repo}@${digest}..."
+  if ! docker pull "${pull_repo}@${digest}"; then
+    fail "${label} image pull failed: ${pull_repo}@${digest}"
   fi
+  if ! docker tag "${pull_repo}@${digest}" "${local_repo}:${version}"; then
+    fail "${label} image tag failed: ${pull_repo}@${digest} -> ${local_repo}:${version}"
+  fi
+  info "${label} image ready: ${local_repo}:${version} (pulled ${pull_repo}@${digest})"
+}
+
+if [ "${MODE}" = "api" ] || [ "${MODE}" = "both" ]; then
+  if [ "${IMAGE_SOURCE}" = "registry" ]; then
+    pull_and_tag_image "${API_PULL_REPOSITORY:-${API_IMAGE_REPO}}" "${API_IMAGE_DIGEST}" "${API_IMAGE_REPO}" "${API_VERSION}" "API"
+  else
+    info "Building ${API_IMAGE_REPO}:${API_VERSION}..."
+    # Same APP_VERSION/SOURCE_COMMIT build-args as the web image below, so
+    # `GET /` reports the exact version this release actually built — never a
+    # hardcoded literal baked in at some earlier point in the source.
+    API_COMMIT_SHORT="${SOURCE_COMMIT:0:12}"
+    if ! docker build \
+        --build-arg "APP_VERSION=${API_VERSION}" \
+        --build-arg "SOURCE_COMMIT=${API_COMMIT_SHORT}" \
+        -f "${SOURCE_DIR}/apps/api/Dockerfile" -t "${API_IMAGE_REPO}:${API_VERSION}" "${SOURCE_DIR}"; then
+      fail "API image build failed."
+    fi
+    info "API image built: ${API_IMAGE_REPO}:${API_VERSION}"
+  fi
+  # Set for both build and pull: this run is what made this local tag exist
+  # either way, so a failed release's cleanup (discard_image_built_here)
+  # must remove it either way — otherwise a retry at the same version can
+  # never overwrite it (the immutable-tag pre-flight check above refuses).
   API_IMAGE_BUILT_HERE=1
-  info "API image built: ${API_IMAGE_REPO}:${API_VERSION}"
 fi
 
 if [ "${MODE}" = "web" ] || [ "${MODE}" = "both" ]; then
-  info "Building ${WEB_IMAGE_REPO}:${WEB_VERSION}..."
-  # APP_VERSION (per-box version) and SOURCE_COMMIT (cross-install identity)
-  # are baked into the bundle so the Updates screen can show both. The commit
-  # is trimmed to 12 chars for display.
-  WEB_COMMIT_SHORT="${SOURCE_COMMIT:0:12}"
-  if ! docker build \
-      --build-arg "APP_VERSION=${WEB_VERSION}" \
-      --build-arg "SOURCE_COMMIT=${WEB_COMMIT_SHORT}" \
-      -f "${SOURCE_DIR}/apps/web/Dockerfile" -t "${WEB_IMAGE_REPO}:${WEB_VERSION}" "${SOURCE_DIR}"; then
-    fail "Web image build failed."
+  if [ "${IMAGE_SOURCE}" = "registry" ]; then
+    pull_and_tag_image "${WEB_PULL_REPOSITORY:-${WEB_IMAGE_REPO}}" "${WEB_IMAGE_DIGEST}" "${WEB_IMAGE_REPO}" "${WEB_VERSION}" "Web"
+  else
+    info "Building ${WEB_IMAGE_REPO}:${WEB_VERSION}..."
+    # APP_VERSION (per-box version) and SOURCE_COMMIT (cross-install identity)
+    # are baked into the bundle so the Updates screen can show both. The commit
+    # is trimmed to 12 chars for display.
+    WEB_COMMIT_SHORT="${SOURCE_COMMIT:0:12}"
+    if ! docker build \
+        --build-arg "APP_VERSION=${WEB_VERSION}" \
+        --build-arg "SOURCE_COMMIT=${WEB_COMMIT_SHORT}" \
+        -f "${SOURCE_DIR}/apps/web/Dockerfile" -t "${WEB_IMAGE_REPO}:${WEB_VERSION}" "${SOURCE_DIR}"; then
+      fail "Web image build failed."
+    fi
+    info "Web image built: ${WEB_IMAGE_REPO}:${WEB_VERSION}"
   fi
   WEB_IMAGE_BUILT_HERE=1
-  info "Web image built: ${WEB_IMAGE_REPO}:${WEB_VERSION}"
 fi
 
 # ============================================================

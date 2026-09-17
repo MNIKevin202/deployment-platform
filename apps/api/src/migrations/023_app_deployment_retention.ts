@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration023AppDeploymentRetention: Migration = {
   version: 23,
   name: "app_deployment_retention",
+  risk: "expand",
   up(db: DatabaseSync): void {
     // Optional per-app override for how many recent rollback versions to keep.
     // NULL (the default for every existing and new app) means "use the global

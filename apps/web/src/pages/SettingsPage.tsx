@@ -7,6 +7,7 @@ import SpeedtestSettings from "../components/SpeedtestSettings";
 import NotificationSettings from "../components/NotificationSettings";
 import BackupScheduleSettings from "../components/BackupScheduleSettings";
 import UpdatesSettings from "../components/UpdatesSettings";
+import PlatformUpdatesPanel from "../components/PlatformUpdatesPanel";
 import type { ApiError } from "../types/api";
 
 interface RestoreResponse {
@@ -106,7 +107,12 @@ export default function SettingsPage({ tab: controlledTab, hideTabs = false }: S
 
       {tab === "maintenance" && <DiskSettings />}
 
-      {tab === "updates" && <UpdatesSettings />}
+      {tab === "updates" && (
+        <>
+          <PlatformUpdatesPanel />
+          <UpdatesSettings />
+        </>
+      )}
 
       {tab === "backups" && (
         <>

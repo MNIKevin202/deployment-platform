@@ -101,8 +101,9 @@ run_uninstall() {
     exit 0
   fi
 
-  # Stop the continuous auto-updater FIRST — otherwise it could pull a new
-  # release and rebuild the containers we are about to remove, mid-uninstall.
+  # Stop the continuous auto-updater FIRST — otherwise it could pull and
+  # install a new release onto the containers we are about to remove,
+  # mid-uninstall.
   if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemctl disable --now deployment-platform-update.service >/dev/null 2>&1 || true
     rm -f /etc/systemd/system/deployment-platform-update.service
@@ -110,6 +111,7 @@ run_uninstall() {
   fi
   rm -f /etc/cron.d/deployment-platform-update
   rm -f /usr/local/bin/deployment-platform-update-loop
+  rm -f /usr/local/bin/deployment-platform-update
   log_pass "Stopped and removed the continuous auto-updater."
 
   _remove_container_if_exists "$CADDY_CONTAINER_NAME"

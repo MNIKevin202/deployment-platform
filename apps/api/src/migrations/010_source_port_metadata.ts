@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration010SourcePortMetadata: Migration = {
   version: 10,
   name: "source_port_metadata",
+  risk: "expand",
   up(db: DatabaseSync): void {
     db.exec(`
       -- Additive only. container_port (migration 009) already stores the

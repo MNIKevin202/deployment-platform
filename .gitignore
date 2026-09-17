@@ -1,5 +1,6 @@
 node_modules
 dist
+*.tsbuildinfo
 .env
 .env.*
 !.env.example
@@ -7,6 +8,13 @@ dist
 .DS_Store
 coverage
 data
+
+# Release-signing PRIVATE keys must never be committed. Public keys
+# (installer/trusted-keys/*.pem) are intentionally tracked; a private key
+# would end in one of these patterns — belt and braces so one never slips in.
+*.private.pem
+*-private.pem
+release-signing-*.key
 
 generate-auth.sh
 

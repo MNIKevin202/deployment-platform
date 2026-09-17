@@ -28,6 +28,7 @@ const columnsToAdd: Array<[name: string, definition: string]> = [
 export const migration002ExpandAppsColumns: Migration = {
   version: 2,
   name: "expand_apps_columns",
+  risk: "breaking",
   up(db: DatabaseSync): void {
     for (const [name, definition] of columnsToAdd) {
       if (!columnExists(db, "apps", name)) {

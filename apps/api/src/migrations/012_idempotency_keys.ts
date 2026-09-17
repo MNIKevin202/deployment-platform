@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration012IdempotencyKeys: Migration = {
   version: 12,
   name: "idempotency_keys",
+  risk: "expand",
   up(db: DatabaseSync): void {
     db.exec(`
       -- Tracks browser-generated Idempotency-Key values for mutating

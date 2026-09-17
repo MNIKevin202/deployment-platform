@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration022CronJobRuns: Migration = {
   version: 22,
   name: "cron_job_runs",
+  risk: "expand",
   up(db: DatabaseSync): void {
     // A full run history for each cron job. The cron_jobs table keeps the
     // most-recent result inline (for the list view without a join); this

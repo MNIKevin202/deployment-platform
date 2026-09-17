@@ -18,6 +18,7 @@ import type { Migration } from "./types.js";
 export const migration014GithubAppInstallations: Migration = {
   version: 14,
   name: "github_app_installations",
+  risk: "expand",
   up(db: DatabaseSync): void {
     db.exec(`
       CREATE TABLE IF NOT EXISTS github_app_installations (

@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration005AppHealthChecks: Migration = {
   version: 5,
   name: "app_health_checks",
+  risk: "expand",
   up(db: DatabaseSync): void {
     db.exec(`
       CREATE TABLE IF NOT EXISTS app_health_checks (

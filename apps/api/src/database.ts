@@ -16,6 +16,7 @@ import { createIdempotencyRepository } from "./idempotency-database.js";
 import { createInstallationRepository } from "./installation-database.js";
 import { createCronJobRepository } from "./cron-job-database.js";
 import { createConnectionRepository } from "./connection-database.js";
+import { createUpdateHistoryRepository } from "./update-history-database.js";
 
 export type { StoredGithubAppInstallation, UpsertGithubAppInstallationInput } from "./installation-database.js";
 
@@ -463,6 +464,7 @@ export function createAppDatabase(databasePath: string) {
   const installationRepository = createInstallationRepository(db);
   const cronJobRepository = createCronJobRepository(db);
   const connectionRepository = createConnectionRepository(db);
+  const updateHistoryRepository = createUpdateHistoryRepository(db);
 
   return {
     db,
@@ -498,7 +500,8 @@ export function createAppDatabase(databasePath: string) {
     ...idempotencyRepository,
     ...installationRepository,
     ...cronJobRepository,
-    ...connectionRepository
+    ...connectionRepository,
+    ...updateHistoryRepository
   };
 }
 

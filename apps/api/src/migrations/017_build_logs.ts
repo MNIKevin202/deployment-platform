@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration017BuildLogs: Migration = {
   version: 17,
   name: "build_logs",
+  risk: "expand",
   up(db: DatabaseSync): void {
     // Capture the output of the most recent image build per GitHub-sourced
     // app so the panel's Logs tab can show *build* logs (what happened while

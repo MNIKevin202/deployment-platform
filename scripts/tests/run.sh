@@ -644,6 +644,176 @@ REMOTE_UNCHANGED_WEB="$(
 assert_not_contains "an unchanged component's bootstrap tag is not validated in api-only mode" \
   "$REMOTE_UNCHANGED_WEB" "--web-version invalid"
 
+echo "=== release-remote.sh --image-source (self-update registry pull mode) ==="
+# The self-update path builds nothing locally: it pulls a CI-published,
+# digest-pinned image instead (see docs/SELF_UPDATE_ARCHITECTURE.md). These
+# are pure argument-validation checks — no Docker, no network — proving the
+# script refuses an unusable combination before it would ever touch Docker.
+
+REMOTE_BAD_IMAGE_SOURCE="$(
+  bash "$REMOTE_SH" \
+    --mode api \
+    --source-dir /nonexistent/release-dir \
+    --auth-file /nonexistent/auth.env \
+    --platform-env-file /nonexistent/platform.env \
+    --caddy-routes-dir /nonexistent/routes \
+    --api-container deployment-platform-api \
+    --web-container deployment-platform-web \
+    --api-image-repo deployment-platform-api \
+    --web-image-repo deployment-platform-web \
+    --platform-network deployment-platform \
+    --apps-network deployment-apps \
+    --api-data-volume deployment-platform-api-data \
+    --api-version 0.1.0 \
+    --web-version 0.1.0 \
+    --url-panel https://panel.devminted.com \
+    --current-symlink /nonexistent/current \
+    --image-source not-a-real-source 2>&1 || true
+)"
+assert_contains "an unrecognized --image-source value is rejected" "$REMOTE_BAD_IMAGE_SOURCE" \
+  'must be "build" or "registry"'
+
+REMOTE_REGISTRY_NO_DIGEST="$(
+  bash "$REMOTE_SH" \
+    --mode api \
+    --source-dir /nonexistent/release-dir \
+    --auth-file /nonexistent/auth.env \
+    --platform-env-file /nonexistent/platform.env \
+    --caddy-routes-dir /nonexistent/routes \
+    --api-container deployment-platform-api \
+    --web-container deployment-platform-web \
+    --api-image-repo deployment-platform-api \
+    --web-image-repo deployment-platform-web \
+    --platform-network deployment-platform \
+    --apps-network deployment-apps \
+    --api-data-volume deployment-platform-api-data \
+    --api-version 0.1.0 \
+    --web-version 0.1.0 \
+    --url-panel https://panel.devminted.com \
+    --current-symlink /nonexistent/current \
+    --image-source registry 2>&1 || true
+)"
+assert_contains "registry mode with no digest at all is rejected" "$REMOTE_REGISTRY_NO_DIGEST" \
+  "requires a valid --api-image-digest"
+
+REMOTE_REGISTRY_BAD_DIGEST="$(
+  bash "$REMOTE_SH" \
+    --mode api \
+    --source-dir /nonexistent/release-dir \
+    --auth-file /nonexistent/auth.env \
+    --platform-env-file /nonexistent/platform.env \
+    --caddy-routes-dir /nonexistent/routes \
+    --api-container deployment-platform-api \
+    --web-container deployment-platform-web \
+    --api-image-repo deployment-platform-api \
+    --web-image-repo deployment-platform-web \
+    --platform-network deployment-platform \
+    --apps-network deployment-apps \
+    --api-data-volume deployment-platform-api-data \
+    --api-version 0.1.0 \
+    --web-version 0.1.0 \
+    --url-panel https://panel.devminted.com \
+    --current-symlink /nonexistent/current \
+    --image-source registry \
+    --api-image-digest "not-a-real-digest" 2>&1 || true
+)"
+assert_contains "a malformed (non sha256:<64-hex>) digest is rejected" "$REMOTE_REGISTRY_BAD_DIGEST" \
+  "requires a valid --api-image-digest"
+
+REMOTE_REGISTRY_VALID_DIGEST_PAST_VALIDATION="$(
+  bash "$REMOTE_SH" \
+    --mode api \
+    --source-dir /nonexistent/release-dir \
+    --auth-file /nonexistent/auth.env \
+    --platform-env-file /nonexistent/platform.env \
+    --caddy-routes-dir /nonexistent/routes \
+    --api-container deployment-platform-api \
+    --web-container deployment-platform-web \
+    --api-image-repo deployment-platform-api \
+    --web-image-repo deployment-platform-web \
+    --platform-network deployment-platform \
+    --apps-network deployment-apps \
+    --api-data-volume deployment-platform-api-data \
+    --api-version 0.1.0 \
+    --web-version 0.1.0 \
+    --url-panel https://panel.devminted.com \
+    --current-symlink /nonexistent/current \
+    --image-source registry \
+    --api-image-digest "sha256:$(printf 'a%.0s' {1..64})" 2>&1 || true
+)"
+assert_not_contains "a valid sha256 digest passes validation (fails later for unrelated reasons: no Docker/source)" \
+  "$REMOTE_REGISTRY_VALID_DIGEST_PAST_VALIDATION" "requires a valid --api-image-digest"
+assert_not_contains "a valid sha256 digest is never rejected as unrecognized --image-source" \
+  "$REMOTE_REGISTRY_VALID_DIGEST_PAST_VALIDATION" 'must be "build" or "registry"'
+
+# Default (--image-source omitted) must remain exactly today's build
+# behavior — no digest required, existing production releases unaffected.
+REMOTE_DEFAULT_IMAGE_SOURCE="$(
+  bash "$REMOTE_SH" \
+    --mode api \
+    --source-dir /nonexistent/release-dir \
+    --auth-file /nonexistent/auth.env \
+    --platform-env-file /nonexistent/platform.env \
+    --caddy-routes-dir /nonexistent/routes \
+    --api-container deployment-platform-api \
+    --web-container deployment-platform-web \
+    --api-image-repo deployment-platform-api \
+    --web-image-repo deployment-platform-web \
+    --platform-network deployment-platform \
+    --apps-network deployment-apps \
+    --api-data-volume deployment-platform-api-data \
+    --api-version 0.1.0 \
+    --web-version 0.1.0 \
+    --url-panel https://panel.devminted.com \
+    --current-symlink /nonexistent/current 2>&1 || true
+)"
+assert_not_contains "omitting --image-source never demands a digest" \
+  "$REMOTE_DEFAULT_IMAGE_SOURCE" "requires a valid --api-image-digest"
+
+echo "=== release-remote.sh --rollback-safe (migration-aware rollback) ==="
+# The self-updater passes --rollback-safe 0 when a breaking migration ran, so
+# a failed update must not falsely "roll back" onto an incompatible schema.
+# Validation-only checks here (no Docker): the flag must reject bad values and
+# the default must remain today's behavior.
+
+REMOTE_BAD_ROLLBACK_SAFE="$(
+  bash "$REMOTE_SH" \
+    --mode api --source-dir /nonexistent/release-dir \
+    --auth-file /nonexistent/auth.env --platform-env-file /nonexistent/platform.env \
+    --caddy-routes-dir /nonexistent/routes \
+    --api-container deployment-platform-api --web-container deployment-platform-web \
+    --api-image-repo deployment-platform-api --web-image-repo deployment-platform-web \
+    --platform-network deployment-platform --apps-network deployment-apps \
+    --api-data-volume deployment-platform-api-data \
+    --api-version 0.1.0 --web-version 0.1.0 \
+    --url-panel https://panel.devminted.com --current-symlink /nonexistent/current \
+    --rollback-safe maybe 2>&1 || true
+)"
+assert_contains "an invalid --rollback-safe value is rejected" "$REMOTE_BAD_ROLLBACK_SAFE" \
+  "--rollback-safe must be 0 or 1"
+
+REMOTE_ROLLBACK_SAFE_ZERO="$(
+  bash "$REMOTE_SH" \
+    --mode api --source-dir /nonexistent/release-dir \
+    --auth-file /nonexistent/auth.env --platform-env-file /nonexistent/platform.env \
+    --caddy-routes-dir /nonexistent/routes \
+    --api-container deployment-platform-api --web-container deployment-platform-web \
+    --api-image-repo deployment-platform-api --web-image-repo deployment-platform-web \
+    --platform-network deployment-platform --apps-network deployment-apps \
+    --api-data-volume deployment-platform-api-data \
+    --api-version 0.1.0 --web-version 0.1.0 \
+    --url-panel https://panel.devminted.com --current-symlink /nonexistent/current \
+    --rollback-safe 0 2>&1 || true
+)"
+assert_not_contains "--rollback-safe 0 passes validation" "$REMOTE_ROLLBACK_SAFE_ZERO" \
+  "--rollback-safe must be 0 or 1"
+
+# The migration-unsafe rollback branch and its MANUAL_INTERVENTION_REQUIRED
+# status must actually be present in the script.
+assert_contains "release-remote.sh emits MANUAL_INTERVENTION_REQUIRED for an unsafe rollback" \
+  "$(cat "$REMOTE_SH")" "MANUAL_INTERVENTION_REQUIRED"
+assert_contains "the unsafe-rollback branch is gated on ROLLBACK_SAFE and a real swap" \
+  "$(cat "$REMOTE_SH")" 'if [ "${ROLLBACK_SAFE}" -eq 0 ] && [ "${ANY_SWAP_PERFORMED}" -eq 1 ]'
 
 echo "=== Remote argv integrity (fake ssh + real remote bash fixture) ==="
 # ssh does not transport an argv array: it joins its command arguments

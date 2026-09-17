@@ -41,6 +41,7 @@ function columnExists(
 export const migration013InternalOnlyApps: Migration = {
   version: 13,
   name: "internal_only_apps",
+  risk: "expand",
   up(db: DatabaseSync): void {
     if (!columnExists(db, "apps", "internal_only")) {
       db.exec(

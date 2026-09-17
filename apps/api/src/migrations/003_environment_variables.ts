@@ -20,6 +20,7 @@ function columnExists(
 export const migration003EnvironmentVariables: Migration = {
   version: 3,
   name: "environment_variables",
+  risk: "expand",
   up(db: DatabaseSync): void {
     db.exec(`
       CREATE TABLE IF NOT EXISTS global_environment_variables (

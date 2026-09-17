@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration027AutoDeployBlock: Migration = {
   version: 27,
   name: "auto_deploy_block",
+  risk: "expand",
   up(db: DatabaseSync): void {
     // Support an operator-controlled, persistent pause on auto-redeploying a
     // specific failed commit (distinct from the in-memory circuit breaker):

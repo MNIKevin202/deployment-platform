@@ -4,6 +4,7 @@ import type { Migration } from "./types.js";
 export const migration021CronJobs: Migration = {
   version: 21,
   name: "cron_jobs",
+  risk: "expand",
   up(db: DatabaseSync): void {
     // Scheduled shell commands run inside a managed app's own container via
     // `docker exec`. Bound to an app (ON DELETE CASCADE) so removing the app

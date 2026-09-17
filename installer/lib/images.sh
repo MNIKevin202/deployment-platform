@@ -167,10 +167,12 @@ build_platform_images() {
 
   # Direct calls, not $(...): a subshell would discard BUILT_IMAGE_REF and
   # neuter build_platform_image's own fatal().
-  build_platform_image "$API_IMAGE_REPO" "$release_dir/apps/api/Dockerfile" "$release_dir" "$commit_sha"
+  # Bake the image tag (version) and source commit into both images the same
+  # way, so `GET /` (API) and the web Updates panel always agree on what's
+  # actually running; the commit is trimmed to 12 chars.
+  build_platform_image "$API_IMAGE_REPO" "$release_dir/apps/api/Dockerfile" "$release_dir" "$commit_sha" \
+    "APP_VERSION=${tag}" "SOURCE_COMMIT=${commit_sha:0:12}"
   BUILT_API_IMAGE="$BUILT_IMAGE_REF"
-  # Bake the image tag (version) and source commit into the web bundle so the
-  # Updates screen can show both; the commit is trimmed to 12 chars.
   build_platform_image "$WEB_IMAGE_REPO" "$release_dir/apps/web/Dockerfile" "$release_dir" "$commit_sha" \
     "APP_VERSION=${tag}" "SOURCE_COMMIT=${commit_sha:0:12}"
   BUILT_WEB_IMAGE="$BUILT_IMAGE_REF"

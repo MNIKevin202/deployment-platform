@@ -9,7 +9,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-Environment=DP_UPDATE_INTERVAL=30
+# Manifest polling interval (seconds). 15 minutes is a sensible default for a
+# signed-release check: responsive enough for platform updates, gentle on the
+# release endpoint even across many installations. A manual "Update Now" from
+# the UI is picked up on the next tick regardless.
+Environment=DP_UPDATE_INTERVAL=900
 ExecStart=/usr/local/bin/deployment-platform-update-loop
 # The loop is meant to run forever; if it ever exits (crash, killed), bring it
 # straight back so the install never silently stops tracking upstream.
