@@ -102,6 +102,22 @@ export async function registerEnvironmentRoutes(
     };
   });
 
+  // The one endpoint that returns a global variable's value in the clear —
+  // reached only by an explicit "Show" action in the UI, never by the list
+  // view. Inherits the platform's global admin session gate (auth.ts
+  // onRequest), exactly like /connections/:id/reveal.
+  fastify.get<{ Params: AppIdParams }>("/environment/global/:id/reveal", async (request, reply) => {
+    const parsedParams = idParamSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      return reply.code(400).send({ success: false, message: "Invalid variable id" });
+    }
+    const existing = appDatabase.getGlobalEnvVarById(parsedParams.data.id);
+    if (!existing) {
+      return reply.code(404).send({ success: false, message: "Global variable not found" });
+    }
+    return { success: true, value: existing.value };
+  });
+
   fastify.post(
     "/environment/global/export",
     {
@@ -467,6 +483,27 @@ export async function registerEnvironmentRoutes(
         updated,
         variables: appDatabase.listAppEnvVars(app.id).map(maskAppVar)
       });
+    }
+  );
+
+  // Returns one app variable's value in the clear — explicit "Show" only, never
+  // the list view. Same admin session gate as the rest of this router.
+  fastify.get<{ Params: AppVariableParams }>(
+    "/apps/:id/environment/:variableId/reveal",
+    async (request, reply) => {
+      const parsedParams = nestedIdParamSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        return reply.code(400).send({ success: false, message: "Invalid app or variable id" });
+      }
+      const app = appDatabase.getAppById(parsedParams.data.id);
+      if (!app) {
+        return reply.code(404).send({ success: false, message: "App not found" });
+      }
+      const existing = appDatabase.getAppEnvVarById(parsedParams.data.variableId);
+      if (!existing || existing.appId !== app.id) {
+        return reply.code(404).send({ success: false, message: "Variable not found" });
+      }
+      return { success: true, value: existing.value };
     }
   );
 

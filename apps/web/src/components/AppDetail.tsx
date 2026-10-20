@@ -29,6 +29,7 @@ import DeploymentFailureModal from "./DeploymentFailureModal";
 import Tabs from "./Tabs";
 import EnvVarTable from "./EnvVarTable";
 import EnvValueCell from "./EnvValueCell";
+import { revealEnvValue } from "../lib/revealEnvValue";
 import EnvVarDialog from "./EnvVarDialog";
 import BulkEnvVarDialog from "./BulkEnvVarDialog";
 import EnvironmentExportDialog from "./EnvironmentExportDialog";
@@ -1503,6 +1504,14 @@ export default function AppDetail({
                                 value={variable.value}
                                 hasValue={variable.hasValue}
                                 isSecret={variable.isSecret}
+                                onReveal={() => {
+                                  // inheritedGlobals are EffectiveEnvVars (key only);
+                                  // map the key to the real global variable id.
+                                  const match = globalVars.find((g) => g.key === variable.key);
+                                  return match
+                                    ? revealEnvValue(`/api/environment/global/${match.id}/reveal`)
+                                    : Promise.reject(new Error("Unknown global variable"));
+                                }}
                               />
                             </td>
                             <td className="env-actions-cell">
@@ -1577,6 +1586,9 @@ export default function AppDetail({
 
                 <EnvVarTable
                   variables={appVars}
+                  reveal={(variable) =>
+                    revealEnvValue(`/api/apps/${appId}/environment/${variable.id}/reveal`)
+                  }
                   emptyMessage="No app-specific variables yet. Add one, or override a global variable above."
                   onEdit={(variable) =>
                     openEditEnvDialog(variable as MaskedAppEnvVar)

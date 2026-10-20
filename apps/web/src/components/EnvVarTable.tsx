@@ -11,6 +11,12 @@ interface EnvVarTableProps {
   busyId?: number | null;
   /** Optional extra per-row action, shown before Edit (e.g. "Move to global"). */
   extraAction?: { label: string; onClick: (variable: MaskedGlobalEnvVar) => void };
+  /**
+   * Fetches one variable's plaintext on demand (for revealing a withheld
+   * secret). The caller supplies the scope-correct reveal endpoint (global vs
+   * per-app). When absent, flagged secrets stay masked with no "Show".
+   */
+  reveal?: (variable: MaskedGlobalEnvVar) => Promise<string>;
   /** When provided, renders a leading checkbox column for bulk selection. */
   selection?: {
     selectedKeys: ReadonlySet<string>;
@@ -80,7 +86,8 @@ export default function EnvVarTable({
   onDelete,
   busyId,
   extraAction,
-  selection
+  selection,
+  reveal
 }: EnvVarTableProps) {
   const [query, setQuery] = useState("");
   const [sortColumn, setSortColumn] = useState<SortColumn>("key");
@@ -227,6 +234,7 @@ export default function EnvVarTable({
           value={variable.value}
           hasValue={variable.hasValue}
           isSecret={variable.isSecret}
+          onReveal={reveal ? () => reveal(variable) : undefined}
         />
       </td>
       <td>

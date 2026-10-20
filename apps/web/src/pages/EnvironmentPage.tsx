@@ -3,6 +3,7 @@ import EnvVarDialog from "../components/EnvVarDialog";
 import EnvVarTable from "../components/EnvVarTable";
 import ConfirmationDialog from "../components/ConfirmationDialog";
 import EnvironmentExportDialog from "../components/EnvironmentExportDialog";
+import { revealEnvValue } from "../lib/revealEnvValue";
 import type { ApiError, EnvVarFormValues, MaskedGlobalEnvVar } from "../types/api";
 
 interface GlobalEnvVarsResponse {
@@ -225,6 +226,7 @@ export default function EnvironmentPage({ refreshKey = 0 }: EnvironmentPageProps
             emptyMessage="No global variables yet. Add one to share it across every managed app."
             onEdit={openEditDialog}
             onDelete={(variable) => setDeleteTarget(variable)}
+            reveal={(variable) => revealEnvValue(`/api/environment/global/${variable.id}/reveal`)}
           />
         )}
       </section>
