@@ -291,7 +291,7 @@ _migrate_run_tool() {
   local -a docker_args=(
     run --rm --pull never
     --network none
-    --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m
+    --read-only --tmpfs "/tmp:rw,noexec,nosuid,size=64m"
     --cap-drop ALL --security-opt no-new-privileges
     --label "com.deployment-platform.migration-tool=${kind}"
   )
