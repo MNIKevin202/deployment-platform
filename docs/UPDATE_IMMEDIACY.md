@@ -96,5 +96,17 @@ The two halves of the bridge and their blast radius:
 
 Rollback: `systemctl disable --now deployment-platform-update-trigger.socket; rm -f /etc/systemd/system/deployment-platform-update-trigger.socket /etc/systemd/system/deployment-platform-update-trigger@.service /etc/tmpfiles.d/deployment-platform-update.conf; systemctl daemon-reload`.
 
+### Fully standalone enablement (no repo / no git pull)
+
+If the server's git checkout is dirty/old (so `git pull` and the installer libs
+are unavailable), use **`scripts/install-update-bridge-standalone.sh`** — it
+bundles the socket/service/tmpfiles content inline and depends on nothing in the
+repo. Copy that one file to the server and run `--check` / `--apply` / `--verify`.
+It validates the updater executable exists, shares the scheduled timer's flock
+(so a triggered tick never overlaps a scheduled one), and `--verify` connects
+from inside the API container to prove the full path works. It never recreates a
+container; the API mount still arrives via the next normal update (or a separate,
+deliberate API-only recreate) exactly as described above.
+
 Automatic scheduled checks remain as the fallback; manual check and manual apply
 operate independently of that schedule. No continuous aggressive polling was added.
