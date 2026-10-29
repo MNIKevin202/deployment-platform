@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import SectionHeader from "./SectionHeader";
+import Icon from "./Icon";
 import UpdateConfirmModal from "./UpdateConfirmModal";
 
 /**
@@ -335,12 +337,7 @@ export default function PlatformUpdatesPanel() {
       </section>
 
       <section className="page-section">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Configuration</p>
-            <h2>Channel &amp; policy</h2>
-          </div>
-        </div>
+      <SectionHeader eyebrow="Configuration" title="Channel & policy" icon={<Icon name="settings" />} />
 
         <div className="settings-form">
           <label className="field-label" htmlFor="update-channel">
@@ -430,12 +427,7 @@ export default function PlatformUpdatesPanel() {
       </section>
 
       <section className="page-section">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">History</p>
-            <h2>Update history</h2>
-          </div>
-        </div>
+      <SectionHeader eyebrow="History" title="Update history" icon={<Icon name="clock" />} />
 
         {history.length === 0 ? (
           <div className="empty-state">No platform updates have run yet.</div>

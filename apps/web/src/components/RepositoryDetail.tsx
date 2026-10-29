@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import SectionHeader from "./SectionHeader";
+import Icon from "./Icon";
 import type {
   ApiError,
   AppSourceInfo,
@@ -217,12 +219,7 @@ export default function RepositoryDetail({ owner, name, onBack }: RepositoryDeta
           </section>
 
           <section className="page-section">
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">Branch</p>
-                <h2>Recent Branches &amp; Commits</h2>
-              </div>
-            </div>
+      <SectionHeader eyebrow="Branch" title="Recent Branches & Commits" icon={<Icon name="git" />} />
 
             {branchesError && <div className="error-banner">{branchesError}</div>}
 
@@ -287,12 +284,7 @@ export default function RepositoryDetail({ owner, name, onBack }: RepositoryDeta
           </section>
 
           <section className="page-section">
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">Usage</p>
-                <h2>Linked Applications</h2>
-              </div>
-            </div>
+      <SectionHeader eyebrow="Usage" title="Linked Applications" icon={<Icon name="apps" />} />
 
             {linkedAppsLoading ? (
               <div className="empty-state">Checking linked applications...</div>
