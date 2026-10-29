@@ -369,9 +369,46 @@ GitHub" (or `https://github.com/settings/installations`) instead.
   does not manage its lifecycle beyond reading and then never
   persisting its plaintext contents.
 
-## Migration roadmap (not implemented in this milestone)
+## Migration tooling (inspection and export today; import not yet)
 
-This installer deliberately organizes state so a *future* migration
+Moving an installation, or one application, to another server is being built in
+phases. **Read-only inspection and encrypted export exist so far; import does
+not.** See
+[docs/MIGRATION_DESIGN.md](../docs/MIGRATION_DESIGN.md) for the design and
+[docs/MIGRATION_BUNDLE_FORMAT.md](../docs/MIGRATION_BUNDLE_FORMAT.md) for the
+encryption and key-management model.
+
+```bash
+sudo deployment-platform migrate describe     # this server, as JSON (give it to a source server)
+sudo deployment-platform migrate preflight    # is this installation ready to be exported?
+sudo deployment-platform migrate verify-bundle --bundle DIR --passphrase-file FILE --deep
+sudo deployment-platform migrate help
+```
+
+Those commands change nothing: they run in a short-lived, network-less, read-only
+container started from the platform's own image, and never stop, restart or
+reconfigure a running service. A passphrase is only ever accepted as a mode-600
+file, never as an argument.
+
+```bash
+sudo deployment-platform migrate signing-key generate --output-dir /root/keys
+sudo deployment-platform migrate export --output-dir /var/backups/cf --passphrase-file /root/pass \
+     --signing-key-file /root/keys/migration-signing-key.pem                  # whole server
+sudo deployment-platform migrate export --scope application --app web --with db --mode cutover ...
+sudo deployment-platform migrate recover                                     # only if an export was killed
+```
+
+`export` writes one new **fully encrypted** bundle and changes nothing else. To take a consistent
+snapshot it may briefly stop or pause an application, and it always restarts it: on any failure it
+restores everything and deletes the half-written bundle; if it is killed outright, `recover` (also run
+automatically by the launcher and by the next export) puts things right. A cutover-grade export of a
+database requires real evidence of consistency (a verified dump, or a verified clean shutdown) or an
+explicit `--accept-risk`; stopping a container is never treated as proof. The tooling is part of the API image, so a release
+published before it existed reports that it is not available yet.
+
+## Migration roadmap
+
+This installer deliberately organizes state so a migration
 command can move a full installation from one VPS to another without
 reinventing where things live:
 
@@ -385,9 +422,9 @@ reinventing where things live:
 | App-source metadata | Inside the SQLite database (`app_sources` table) |
 | Provider credentials | Encrypted in the database, decryptable only with the *same* `CREDENTIAL_ENCRYPTION_KEY` — this is why the key is never silently rotated |
 
-Two subcommands are reserved but intentionally **not implemented** —
-running them prints a clear "not available yet" message rather than
-attempting anything that could risk data loss:
+Two subcommands are intentionally **not implemented yet** —
+running them prints a clear "not available yet" message and makes no
+`docker` calls, rather than attempting anything that could risk data loss:
 
 ```
 deployment-platform migrate export

@@ -2958,6 +2958,328 @@ if [ -n "$BOOTSTRAP_SH" ]; then
 fi
 
 echo
+echo "=== Migration tooling (Phase 0): read-only host launcher ==="
+MIGRATE_SH="$(cat "$INSTALLER_DIR/lib/migrate.sh")"
+MIGRATE_SYNTAX=0
+bash -n "$INSTALLER_DIR/lib/migrate.sh" 2>/dev/null || MIGRATE_SYNTAX=1
+assert_eq "migrate.sh has valid bash syntax" "0" "$MIGRATE_SYNTAX"
+CLI_SYNTAX=0
+bash -n "$INSTALLER_DIR/templates/deployment-platform-cli.template" 2>/dev/null || CLI_SYNTAX=1
+assert_eq "the CLI template still has valid bash syntax" "0" "$CLI_SYNTAX"
+assert_contains "the CLI exposes migrate" "$CLI_SRC" "migrate)"
+assert_contains "migrate requires root" "$CLI_SRC" "require_root_for migrate"
+assert_contains "migrate sources the launcher from the installed installer copy" "$CLI_SRC" 'source "${INSTALLER_DIR}/lib/migrate.sh"'
+assert_contains "the CLI usage mentions migrate" "$CLI_SRC" "migrate <command>"
+
+# A fake docker that records every invocation and answers only the few read-only
+# questions the launcher asks. No real daemon is ever contacted.
+MIG_BIN="$TMP_ROOT/migrate-bin"
+MIG_LOG="$TMP_ROOT/migrate-docker.log"
+MIG_ERR_FILE="$TMP_ROOT/migrate-stderr.txt"
+MIG_AUTH="$TMP_ROOT/migrate-auth.env"
+mkdir -p "$MIG_BIN"
+cat > "$MIG_BIN/docker" <<'FAKEMIGRATEDOCKER'
+#!/usr/bin/env bash
+{
+  printf 'CALL\n'
+  printf 'ARGV: %s\n' "$*"
+  printf 'KEYENV=%s\n' "${CREDENTIAL_ENCRYPTION_KEY:-}"
+} >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  inspect)
+    case "$*" in
+      *"{{.Image}}"*) echo "sha256:fakeimageid" ;;
+      *"range .Config.Env"*) echo "APP_VERSION=9.9.9" ;;
+    esac
+    exit 0
+    ;;
+  volume)
+    if [ "${FAKE_DOCKER_HAS_VOLUME:-1}" = "1" ]; then exit 0; fi
+    exit 1
+    ;;
+  run)
+    case "$*" in
+      *"--entrypoint test"*) exit "${FAKE_DOCKER_TOOL_MISSING:-0}" ;;
+    esac
+    echo "FAKE-TOOL-OUTPUT"
+    exit "${FAKE_DOCKER_TOOL_EXIT:-10}"
+    ;;
+esac
+exit 0
+FAKEMIGRATEDOCKER
+chmod +x "$MIG_BIN/docker"
+printf 'ADMIN_USERNAME=admin\nCREDENTIAL_ENCRYPTION_KEY=FAKE-KEY-VALUE-xyz123\n' > "$MIG_AUTH"
+export FAKE_DOCKER_LOG="$MIG_LOG"
+
+MIG_RC=0
+MIG_OUT=""
+MIG_ERR=""
+migrate_invoke() {
+  : > "$MIG_LOG"
+  MIG_RC=0
+  MIG_OUT="$(PATH="$MIG_BIN:$PATH" MIGRATE_AUTH_ENV="${MIG_AUTH_OVERRIDE:-$MIG_AUTH}" \
+    bash -c 'source "$1"; shift; migrate_main "$@"' _ "$INSTALLER_DIR/lib/migrate.sh" "$@" 2>"$MIG_ERR_FILE")" || MIG_RC=$?
+  MIG_ERR="$(cat "$MIG_ERR_FILE")"
+}
+# Every docker invocation, with the credential-key environment line removed (it is
+# deliberately present in the docker PROCESS ENVIRONMENT, but must never be in argv).
+mig_argv() { grep '^ARGV:' "$MIG_LOG" || true; }
+mig_tool_run() { grep '^ARGV: run .*--entrypoint node' "$MIG_LOG" || true; }
+mig_subcommands() { grep -A1 '^CALL$' "$MIG_LOG" | grep '^ARGV:' | awk '{print $2}' | sort -u | tr '\n' ' '; }
+
+# Sourcing the launcher defines functions only.
+: > "$MIG_LOG"
+(PATH="$MIG_BIN:$PATH"; source "$INSTALLER_DIR/lib/migrate.sh"; declare -F migrate_main >/dev/null)
+assert_eq "sourcing the launcher runs nothing" "0" "$(wc -c < "$MIG_LOG" | tr -d '[:space:]')"
+
+# Exit codes pass straight through from the tool.
+for rc in 0 10 20; do
+  export FAKE_DOCKER_TOOL_EXIT="$rc"
+  migrate_invoke describe
+  assert_eq "migrate describe passes exit code $rc through" "$rc" "$MIG_RC"
+done
+assert_contains "the tool's output reaches stdout" "$MIG_OUT" "FAKE-TOOL-OUTPUT"
+export FAKE_DOCKER_TOOL_EXIT=10
+
+# The disposable container is locked down.
+migrate_invoke preflight
+TOOL_RUN="$(mig_tool_run)"
+assert_contains "runs the platform's own image" "$TOOL_RUN" "sha256:fakeimageid"
+assert_contains "disposable container" "$TOOL_RUN" "run --rm"
+assert_contains "never pulls an image" "$TOOL_RUN" "--pull never"
+assert_contains "no network" "$TOOL_RUN" "--network none"
+assert_contains "read-only container filesystem" "$TOOL_RUN" "--read-only"
+assert_contains "drops every capability" "$TOOL_RUN" "--cap-drop ALL"
+assert_contains "cannot gain privileges" "$TOOL_RUN" "--security-opt no-new-privileges"
+assert_contains "runs the migration CLI" "$TOOL_RUN" "--entrypoint node"
+assert_contains "runs the migration CLI script" "$TOOL_RUN" "/app/apps/api/dist/migration/cli.js preflight"
+assert_contains "mounts the existing data volume" "$TOOL_RUN" "-v deployment-platform-api-data:/data"
+assert_contains "reports the running version" "$TOOL_RUN" "APP_VERSION=9.9.9"
+for forbidden in "--privileged" "--network host" "--pid" "--publish" " -p " "--volumes-from" "--cap-add" "--device"; do
+  assert_not_contains "never uses $forbidden" "$TOOL_RUN" "$forbidden"
+done
+
+# It issues only read-only docker subcommands: never stop/rm/kill/restart/exec/create/start/cp/build/pull.
+assert_eq "only inspect, volume and run are ever called" "inspect run volume " "$(mig_subcommands)"
+ALL_ARGV="$(mig_argv)"
+assert_not_contains "never touches update scheduling" "$ALL_ARGV" "update"
+
+# A volume that does not exist is NOT mounted (docker would silently create it).
+export FAKE_DOCKER_HAS_VOLUME=0
+migrate_invoke describe
+assert_not_contains "a missing data volume is not mounted (so docker cannot create it)" "$(mig_tool_run)" "-v deployment-platform-api-data"
+export FAKE_DOCKER_HAS_VOLUME=1
+
+# The credential key travels by name in the environment, never on a command line.
+migrate_invoke preflight
+assert_contains "the key is handed over by name" "$(mig_tool_run)" "-e CREDENTIAL_ENCRYPTION_KEY"
+assert_not_contains "the key value is never in docker's arguments" "$(mig_argv)" "FAKE-KEY-VALUE-xyz123"
+assert_contains "the key reaches docker through its environment" "$(cat "$MIG_LOG")" "KEYENV=FAKE-KEY-VALUE-xyz123"
+MIG_AUTH_OVERRIDE="$TMP_ROOT/does-not-exist.env" migrate_invoke describe
+assert_not_contains "no key available means none is passed" "$(mig_tool_run)" "CREDENTIAL_ENCRYPTION_KEY"
+MIG_AUTH_OVERRIDE=""
+
+# Host paths become read-only mounts with fixed in-container paths.
+MIG_BUNDLE="$TMP_ROOT/mig-bundle"
+mkdir -p "$MIG_BUNDLE"
+printf 'a passphrase of enough length\n' > "$TMP_ROOT/mig-pass"
+chmod 600 "$TMP_ROOT/mig-pass"
+printf '{}' > "$TMP_ROOT/mig-descriptor.json"
+MIG_OUTDIR="$TMP_ROOT/mig-out"
+mkdir -p "$MIG_OUTDIR"
+migrate_invoke preflight --role destination --bundle "$MIG_BUNDLE" --passphrase-file "$TMP_ROOT/mig-pass" \
+  --destination-descriptor "$TMP_ROOT/mig-descriptor.json" --output-dir "$MIG_OUTDIR" --deep
+TOOL_RUN="$(mig_tool_run)"
+assert_contains "the bundle is mounted read-only" "$TOOL_RUN" "/mig-bundle:/migration/bundle:ro"
+assert_contains "the passphrase file is mounted read-only" "$TOOL_RUN" "/mig-pass:/run/secrets/migration-passphrase:ro"
+assert_contains "the descriptor is mounted read-only" "$TOOL_RUN" "/mig-descriptor.json:/migration/destination.json:ro"
+assert_contains "the tool is told the in-container bundle path" "$TOOL_RUN" "--bundle /migration/bundle"
+assert_contains "the tool is told the in-container passphrase path" "$TOOL_RUN" "--passphrase-file /run/secrets/migration-passphrase"
+assert_contains "other options pass straight through" "$TOOL_RUN" "--role destination"
+assert_contains "--deep passes through" "$TOOL_RUN" "--deep"
+assert_contains "free space is measured on the host and passed as a number" "$TOOL_RUN" "--output-free-bytes "
+assert_not_contains "the host output directory is not forwarded" "$TOOL_RUN" "--output-dir"
+
+# Refusals happen before anything reaches docker.
+migrate_invoke preflight --bundle="$MIG_BUNDLE"
+assert_eq "--opt=value form is refused" "2" "$MIG_RC"
+assert_eq "...and no tool container was started" "" "$(mig_tool_run)"
+
+for flag in --passphrase --password --passphrase-value; do
+  migrate_invoke verify-bundle --bundle "$MIG_BUNDLE" "$flag" "supersecretpassphrase"
+  assert_eq "$flag is refused" "2" "$MIG_RC"
+  assert_contains "$flag explains why" "$MIG_ERR" "never accepted as an argument"
+  assert_not_contains "$flag value never reaches docker" "$(cat "$MIG_LOG")" "supersecretpassphrase"
+done
+
+migrate_invoke verify-bundle --bundle "$TMP_ROOT/not-a-directory" --passphrase-file "$TMP_ROOT/mig-pass"
+assert_eq "a missing bundle directory is refused" "2" "$MIG_RC"
+migrate_invoke verify-bundle --bundle "$MIG_BUNDLE" --passphrase-file "$TMP_ROOT/no-such-file"
+assert_eq "a missing passphrase file is refused" "2" "$MIG_RC"
+
+if [ "$(uname -s)" = "Linux" ]; then
+  printf 'a passphrase of enough length\n' > "$TMP_ROOT/mig-pass-open"
+  chmod 644 "$TMP_ROOT/mig-pass-open"
+  migrate_invoke verify-bundle --bundle "$MIG_BUNDLE" --passphrase-file "$TMP_ROOT/mig-pass-open"
+  assert_eq "a passphrase file readable by others is refused" "2" "$MIG_RC"
+  assert_contains "...with the fix" "$MIG_ERR" "chmod 600"
+  mkdir -p "$TMP_ROOT/colon:dir"
+  migrate_invoke verify-bundle --bundle "$TMP_ROOT/colon:dir" --passphrase-file "$TMP_ROOT/mig-pass"
+  assert_eq "a path with a colon cannot corrupt the mount spec" "2" "$MIG_RC"
+fi
+
+# import does not exist yet and must not pretend to.
+migrate_invoke import --anything
+assert_eq "migrate import is refused" "2" "$MIG_RC"
+assert_contains "migrate import says it is not available yet" "$MIG_ERR" "not available yet"
+assert_eq "migrate import makes no docker calls at all" "0" "$(wc -c < "$MIG_LOG" | tr -d '[:space:]')"
+migrate_invoke frobnicate
+assert_eq "an unknown subcommand is a usage error" "2" "$MIG_RC"
+migrate_invoke help
+assert_eq "help succeeds" "0" "$MIG_RC"
+assert_contains "help documents the read-only scope" "$MIG_OUT" "change nothing"
+assert_contains "help documents the passphrase rule" "$MIG_OUT" "never accepted as an argument"
+
+# An image that predates the tooling is reported clearly, not run.
+export FAKE_DOCKER_TOOL_MISSING=1
+migrate_invoke describe
+assert_eq "an image without the tooling exits 3" "3" "$MIG_RC"
+assert_contains "...and says what to do" "$MIG_ERR" "does not include the migration tooling yet"
+assert_eq "...and runs nothing else" "" "$(mig_tool_run)"
+export FAKE_DOCKER_TOOL_MISSING=0
+
+# An explicit image can be supplied, and a malformed one is rejected.
+DP_MIGRATE_IMAGE="registry.example.test/clovaforge-api:test" migrate_invoke describe
+assert_contains "DP_MIGRATE_IMAGE selects the image" "$(mig_tool_run)" "registry.example.test/clovaforge-api:test"
+DP_MIGRATE_IMAGE="--privileged" migrate_invoke describe
+assert_eq "an option-shaped image name is rejected" "3" "$MIG_RC"
+unset FAKE_DOCKER_TOOL_EXIT FAKE_DOCKER_HAS_VOLUME FAKE_DOCKER_TOOL_MISSING
+
+echo
+echo "=== Migration export: host launcher ==="
+export FAKE_DOCKER_HAS_VOLUME=1 FAKE_DOCKER_TOOL_EXIT=0 FAKE_DOCKER_TOOL_MISSING=0
+MIG_EXPORT_OUT="$TMP_ROOT/mig-export-out"
+mkdir -p "$MIG_EXPORT_OUT" "$INSTALL_ROOT/config" "$INSTALL_ROOT/caddy/routes"
+printf 'KEY=synthetic-signing-key\n' > "$TMP_ROOT/mig-signing.pem"
+chmod 600 "$TMP_ROOT/mig-signing.pem"
+printf '{}' > "$TMP_ROOT/mig-hooks.json"
+mig_node_runs() { grep -c -- '--entrypoint node' "$MIG_LOG" || true; }
+mig_recover_runs() { grep -c 'cli.js recover' "$MIG_LOG" || true; }
+
+migrate_invoke export --output-dir "$MIG_EXPORT_OUT" --passphrase-file "$TMP_ROOT/mig-pass" \
+  --signing-key-file "$TMP_ROOT/mig-signing.pem" --hooks-file "$TMP_ROOT/mig-hooks.json" \
+  --scope application --app web --with db --mode rehearsal --bundle-name nightly-1
+EXPORT_RUN="$(mig_tool_run)"
+assert_eq "a clean export passes its exit code through" "0" "$MIG_RC"
+assert_contains "the export tool is the CLI's export command" "$EXPORT_RUN" "cli.js export"
+assert_contains "the output directory is mounted writable, at a fixed path" "$EXPORT_RUN" "/mig-export-out:/migration/output:rw"
+assert_contains "the tool is told the in-container output path" "$EXPORT_RUN" "--output-dir /migration/output"
+assert_not_contains "the host output path is not forwarded" "$EXPORT_RUN" "--output-dir $MIG_EXPORT_OUT"
+assert_contains "the configuration (secrets) is mounted READ-ONLY" "$EXPORT_RUN" "/config:/migration/host/config:ro"
+assert_contains "the proxy routes are mounted READ-ONLY" "$EXPORT_RUN" "/caddy/routes:/migration/host/caddy-routes:ro"
+assert_contains "the recovery journal lives on the host" "$EXPORT_RUN" "/state/migration:/migration/state:rw"
+assert_contains "the passphrase is mounted read-only" "$EXPORT_RUN" "/mig-pass:/run/secrets/migration-passphrase:ro"
+assert_contains "the signing key is mounted read-only" "$EXPORT_RUN" "/mig-signing.pem:/run/secrets/migration-signing-key:ro"
+assert_contains "the hooks file is mounted read-only" "$EXPORT_RUN" "/mig-hooks.json:/migration/hooks.json:ro"
+assert_contains "the helper image is the platform's own" "$EXPORT_RUN" "DP_MIGRATE_HELPER_IMAGE=sha256:fakeimageid"
+assert_contains "signals reach the exporter (init)" "$EXPORT_RUN" "--init"
+assert_contains "root can write into any output directory" "$EXPORT_RUN" "--cap-add DAC_OVERRIDE"
+assert_contains "a second export at once is refused by Docker (named container)" "$EXPORT_RUN" "--name cfmig-export-"
+assert_contains "still no network" "$EXPORT_RUN" "--network none"
+assert_contains "still no other capabilities" "$EXPORT_RUN" "--cap-drop ALL"
+assert_contains "still a read-only container filesystem" "$EXPORT_RUN" "--read-only"
+assert_contains "the bundle name passes through" "$EXPORT_RUN" "--bundle-name nightly-1"
+assert_contains "the credential key is handed over by name" "$EXPORT_RUN" "-e CREDENTIAL_ENCRYPTION_KEY"
+assert_not_contains "the key value is never in docker's arguments" "$(mig_argv)" "FAKE-KEY-VALUE-xyz123"
+for forbidden in "--privileged" "--network host" "--pid" "--publish" " -p " "--volumes-from" "--device"; do
+  assert_not_contains "an export never uses $forbidden" "$EXPORT_RUN" "$forbidden"
+done
+assert_eq "an export still only uses inspect, volume and run" "inspect run volume " "$(mig_subcommands)"
+assert_eq "a clean export does not trigger recovery" "0" "$(mig_recover_runs)"
+
+# Exit codes: clean outcomes are passed through and never trigger a recovery run.
+for rc in 10 20 4 5 2; do
+  export FAKE_DOCKER_TOOL_EXIT="$rc"
+  migrate_invoke export --output-dir "$MIG_EXPORT_OUT" --passphrase-file "$TMP_ROOT/mig-pass"
+  assert_eq "export exit code $rc passes through" "$rc" "$MIG_RC"
+  assert_eq "exit $rc (the engine already handled it) runs no extra recovery" "0" "$(mig_recover_runs)"
+done
+
+# An ABNORMAL end (killed, out of memory) leaves no chance to clean up: the launcher recovers.
+for rc in 137 143 1; do
+  export FAKE_DOCKER_TOOL_EXIT="$rc"
+  migrate_invoke export --output-dir "$MIG_EXPORT_OUT" --passphrase-file "$TMP_ROOT/mig-pass"
+  assert_eq "export exit code $rc is still passed through" "$rc" "$MIG_RC"
+  assert_eq "exit $rc triggers an automatic recovery run" "1" "$(mig_recover_runs)"
+  assert_contains "...which is told the export has exited (--force)" "$(grep 'cli.js recover' "$MIG_LOG")" "cli.js recover --force"
+  assert_contains "...and says why" "$MIG_ERR" "ended abnormally"
+done
+export FAKE_DOCKER_TOOL_EXIT=0
+
+# Refusals happen before anything reaches docker.
+for bad in "../escape" ".hidden" "a/b" "-x" "has space" ""; do
+  migrate_invoke export --output-dir "$MIG_EXPORT_OUT" --passphrase-file "$TMP_ROOT/mig-pass" --bundle-name "$bad"
+  assert_eq "bundle name '$bad' is refused" "2" "$MIG_RC"
+  assert_eq "...before any tool container starts" "0" "$(mig_node_runs)"
+done
+migrate_invoke export --output-dir "$MIG_EXPORT_OUT" --passphrase-file "$TMP_ROOT/mig-pass" --helper-image evil:latest
+assert_eq "the helper image cannot be overridden" "2" "$MIG_RC"
+migrate_invoke export --output-dir "$TMP_ROOT/does-not-exist" --passphrase-file "$TMP_ROOT/mig-pass"
+assert_eq "a missing output directory is refused" "2" "$MIG_RC"
+migrate_invoke export --output-dir="$MIG_EXPORT_OUT" --passphrase-file "$TMP_ROOT/mig-pass"
+assert_eq "--output-dir=value is refused" "2" "$MIG_RC"
+migrate_invoke export --output-dir "$MIG_EXPORT_OUT" --passphrase hunter2hunter2
+assert_eq "a passphrase argument is refused for export too" "2" "$MIG_RC"
+assert_not_contains "...and never reaches docker" "$(cat "$MIG_LOG")" "hunter2hunter2"
+export FAKE_DOCKER_HAS_VOLUME=0
+migrate_invoke export --output-dir "$MIG_EXPORT_OUT" --passphrase-file "$TMP_ROOT/mig-pass"
+assert_eq "export refuses when the platform data volume does not exist" "3" "$MIG_RC"
+assert_eq "...without starting the tool" "0" "$(mig_node_runs)"
+export FAKE_DOCKER_HAS_VOLUME=1
+if [ "$(uname -s)" = "Linux" ]; then
+  cp "$TMP_ROOT/mig-signing.pem" "$TMP_ROOT/mig-signing-open.pem"
+  chmod 644 "$TMP_ROOT/mig-signing-open.pem"
+  migrate_invoke export --output-dir "$MIG_EXPORT_OUT" --passphrase-file "$TMP_ROOT/mig-pass" --signing-key-file "$TMP_ROOT/mig-signing-open.pem"
+  assert_eq "a signing key readable by others is refused" "2" "$MIG_RC"
+fi
+
+# recover: the journal directory and the socket, nothing else.
+migrate_invoke recover --force
+RECOVER_RUN="$(mig_tool_run)"
+assert_contains "recover runs the CLI's recover command" "$RECOVER_RUN" "cli.js recover --force"
+assert_contains "recover sees the journal" "$RECOVER_RUN" "/state/migration:/migration/state:rw"
+assert_not_contains "recover does not mount the configuration" "$RECOVER_RUN" "/migration/host/config"
+assert_not_contains "recover does not mount any output directory" "$RECOVER_RUN" "/migration/output"
+assert_contains "recover is a labelled, init'd, network-less container" "$RECOVER_RUN" "--init"
+assert_contains "recover has no network either" "$RECOVER_RUN" "--network none"
+
+# signing-key: needs neither Docker nor the platform's data.
+KEYGEN_DIR="$TMP_ROOT/mig-keygen"
+mkdir -p "$KEYGEN_DIR"
+migrate_invoke signing-key generate --output-dir "$KEYGEN_DIR"
+KEYGEN_RUN="$(mig_tool_run)"
+assert_contains "key generation runs the signing-key command" "$KEYGEN_RUN" "cli.js signing-key generate"
+assert_contains "it can write only into the directory it was given" "$KEYGEN_RUN" "/mig-keygen:/migration/output:rw"
+assert_not_contains "it gets NO Docker socket" "$KEYGEN_RUN" "docker.sock"
+assert_not_contains "it gets NO platform data" "$KEYGEN_RUN" "deployment-platform-api-data"
+assert_not_contains "it gets NO credential key" "$KEYGEN_RUN" "CREDENTIAL_ENCRYPTION_KEY"
+assert_contains "it has no network" "$KEYGEN_RUN" "--network none"
+
+# Phase 0's read-only commands are unchanged: no init, no extra capability, no writable mount, no journal.
+migrate_invoke preflight
+READONLY_RUN="$(mig_tool_run)"
+assert_not_contains "preflight is still not given --init" "$READONLY_RUN" "--init"
+assert_not_contains "preflight is still not given any capability" "$READONLY_RUN" "--cap-add"
+assert_not_contains "preflight never sees the journal" "$READONLY_RUN" "/migration/state"
+assert_not_contains "preflight never sees the host configuration" "$READONLY_RUN" "/migration/host"
+assert_not_contains "preflight has no writable output mount" "$READONLY_RUN" "/migration/output"
+assert_not_contains "preflight is not a named container" "$READONLY_RUN" "--name"
+migrate_invoke help
+assert_contains "help documents export" "$MIG_OUT" "ENCRYPTED bundle"
+assert_contains "help documents recovery" "$MIG_OUT" "recover"
+unset FAKE_DOCKER_TOOL_EXIT FAKE_DOCKER_HAS_VOLUME FAKE_DOCKER_TOOL_MISSING
+
+echo
 echo "=== Results ==="
 echo "Passed: $PASS_COUNT"
 echo "Failed: $FAIL_COUNT"

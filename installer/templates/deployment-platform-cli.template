@@ -29,6 +29,8 @@ Usage: deployment-platform <command>
   configure-github         Save and validate a GitHub token from a mode-600 file
   github-status             Show token-free GitHub connection status
   uninstall-preview       Show what an uninstall would remove, without changing anything
+  migrate <command>       Migration tooling: describe | preflight | verify-bundle | export | recover |
+                          signing-key (import is not available yet). See: deployment-platform migrate help
 
 reset-admin-password:
   Prompts for a new administrator password (hidden, confirmed, minimum 12
@@ -161,6 +163,14 @@ case "$cmd" in
   uninstall-preview)
     require_root_for uninstall-preview
     exec "${INSTALLER_DIR}/install.sh" --uninstall-preview
+    ;;
+  migrate)
+    # Inspection (read-only) and export. Runs the tooling in a disposable, network-less container.
+    # Inspection never changes a service; export may briefly stop/pause an app and always restarts it.
+    require_root_for migrate
+    # shellcheck source=/dev/null
+    source "${INSTALLER_DIR}/lib/migrate.sh"
+    migrate_main "$@" || exit $?
     ;;
   ""|help|--help|-h)
     usage
