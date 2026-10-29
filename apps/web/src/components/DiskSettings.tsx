@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import SectionHeader from "./SectionHeader";
+import Icon from "./Icon";
 import type { ApiError, RetentionInfo, RetentionLastCleanup, RetentionRunResult, RetentionSummary } from "../types/api";
 import StatCard from "./StatCard";
 
@@ -226,12 +228,7 @@ export default function DiskSettings() {
 
   return (
     <section className="page-section">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Disk &amp; images</p>
-          <h2>Rollback retention</h2>
-        </div>
-      </div>
+      <SectionHeader eyebrow="Disk & images" title="Rollback retention" icon={<Icon name="box" />} />
 
       <p className="text-faint">
         Every GitHub deploy keeps a revertable rollback point (its image + version). Only the most

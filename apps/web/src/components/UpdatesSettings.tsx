@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import SectionHeader from "./SectionHeader";
+import Icon from "./Icon";
 import { checkForUpdate, type UpdateStatus } from "../lib/updateCheck";
 
 export default function UpdatesSettings() {
@@ -27,12 +29,7 @@ export default function UpdatesSettings() {
 
   return (
     <section className="page-section">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Updates</p>
-          <h2>Check for updates</h2>
-        </div>
-      </div>
+      <SectionHeader eyebrow="Updates" title="Check for updates" icon={<Icon name="refresh" />} />
 
       <p className="text-faint">
         Checks whether this browser tab matches the panel currently installed on this server.

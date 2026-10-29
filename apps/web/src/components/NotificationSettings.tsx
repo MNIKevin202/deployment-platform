@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import SectionHeader from "./SectionHeader";
+import Icon from "./Icon";
 import type { ApiError, NotificationConfig, NotificationResponse, NotificationType } from "../types/api";
 
 export default function NotificationSettings() {
@@ -76,12 +78,7 @@ export default function NotificationSettings() {
 
   return (
     <section className="page-section">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Notifications</p>
-          <h2>Deploy notifications</h2>
-        </div>
-      </div>
+      <SectionHeader eyebrow="Notifications" title="Deploy notifications" icon={<Icon name="bell" />} />
 
       <p className="text-faint">
         Get a message in Discord, Slack, or any webhook when a deploy succeeds, fails, or rolls back —

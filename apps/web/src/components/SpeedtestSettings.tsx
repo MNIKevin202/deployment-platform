@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import SectionHeader from "./SectionHeader";
+import Icon from "./Icon";
 import type { ApiError, SpeedtestConnection, SpeedtestLatestResponse } from "../types/api";
 import { useSpeedtest } from "../hooks/useSpeedtest";
 import SpeedtestRunningBar from "./SpeedtestRunningBar";
@@ -98,12 +100,7 @@ export default function SpeedtestSettings() {
 
   return (
     <section className="page-section">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Integrations</p>
-          <h2>Internet speed</h2>
-        </div>
-      </div>
+      <SectionHeader eyebrow="Integrations" title="Internet speed" icon={<Icon name="gauge" />} />
 
       <p className="text-faint">
         Connect a{" "}

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import SectionHeader from "./SectionHeader";
+import Icon from "./Icon";
 import type { ApiError } from "../types/api";
 
 export default function AccountSettings() {
@@ -49,12 +51,7 @@ export default function AccountSettings() {
 
   return (
     <section className="page-section">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Account</p>
-          <h2>Change password</h2>
-        </div>
-      </div>
+      <SectionHeader eyebrow="Account" title="Change password" icon={<Icon name="lock" />} />
 
       <p className="text-faint">
         Update the owner password used to sign in. You'll use the new password the next time you log

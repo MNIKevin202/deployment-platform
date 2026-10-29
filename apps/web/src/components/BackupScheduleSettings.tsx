@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import SectionHeader from "./SectionHeader";
+import Icon from "./Icon";
 import type { ApiError, AutoBackupConfig, AutoBackupResponse } from "../types/api";
 
 function formatDate(ms: number | null): string {
@@ -85,12 +87,7 @@ export default function BackupScheduleSettings() {
 
   return (
     <section className="page-section">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Backup</p>
-          <h2>Automatic backups</h2>
-        </div>
-      </div>
+      <SectionHeader eyebrow="Backup" title="Automatic backups" icon={<Icon name="clock" />} />
 
       <p className="text-faint">
         Periodically snapshot the platform database to <code>/data/backups</code> and keep the most
