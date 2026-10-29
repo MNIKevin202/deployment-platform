@@ -52,15 +52,49 @@ These are **host assets**, provisioned by the installer/bootstrap — they are N
 shipped inside the application image, so installing a new app version cannot by
 itself enable the bridge on a box where it was never provisioned.
 
-**One-time host enablement** (run once on the server, then every future
-"Update Now" is immediate):
+### Blast radius of `bootstrap-production.sh --apply`
+
+`--apply` is explicitly non-destructive to containers: it takes a verified DB
+backup, provisions the host updater runtime dirs, installs the updater assets
+(`resolve-update.mjs`, `release-remote.sh`, trusted keys), the updater command,
+and the scheduler (timer + oneshot service + **the socket bridge**), seeds the
+update channel/policy (merged, existing settings preserved), and runs a
+`--check-only` probe. It does **not** recreate/stop/restart any container
+(platform or managed app), change Docker config, networking, or volumes, or
+touch your applications. The only systemd restarts are of the updater *timer*
+and *socket* units — not containers. It is idempotent.
+
+Because it does not recreate the API container, bootstrap by itself does not add
+the `/run/deployment-platform` mount to the **running** API container either — it
+refreshes the host so the **next** image update injects that mount.
+
+### Minimal, scoped enablement (socket bridge only)
+
+To enable **only** the socket bridge (no updater reprovisioning, no settings
+changes), use the narrow, idempotent script — it installs the 3 systemd files +
+tmpfiles rule and nothing else, and reports whether the container mount is
+present:
 
 ```bash
-cd /opt/deployment-platform && sudo git pull && sudo bash scripts/bootstrap-production.sh --apply
+cd /opt/deployment-platform && sudo git pull
+sudo bash scripts/enable-update-bridge.sh --check   # inspect only, changes nothing
+sudo bash scripts/enable-update-bridge.sh --apply   # install the socket bridge (no container touched)
 ```
 
-(`--apply` is an idempotent host refresh — no cutover. It installs/enables the
-trigger socket bridge and recreates the API container with the socket mount.)
+The two halves of the bridge and their blast radius:
+- **Socket units** — zero impact: no container is touched; only the root-owned
+  socket (mode 0660; connecting runs exactly one updater tick, no payload, no
+  arbitrary command) is enabled.
+- **API container mount** (`/run/deployment-platform`) — needed for the API to
+  reach the socket. Added only at container-create time, so a running API
+  container gets it when recreated. If `enable-update-bridge.sh` reports the
+  mount is already present, the bridge works immediately after installing the
+  units. If not, the next signed image update injects it (then every later
+  "Update now" is immediate); `bootstrap --apply` refreshes the host so that
+  injection is reliable. **Managed app containers are never recreated or
+  restarted by any of this.**
+
+Rollback: `systemctl disable --now deployment-platform-update-trigger.socket; rm -f /etc/systemd/system/deployment-platform-update-trigger.socket /etc/systemd/system/deployment-platform-update-trigger@.service /etc/tmpfiles.d/deployment-platform-update.conf; systemctl daemon-reload`.
 
 Automatic scheduled checks remain as the fallback; manual check and manual apply
 operate independently of that schedule. No continuous aggressive polling was added.
