@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import AppCard from "../components/AppCard";
 import MissingAppCard from "../components/MissingAppCard";
 import AppTable from "../components/AppTable";
+import SectionHeader from "../components/SectionHeader";
+import Icon from "../components/Icon";
 import { useAppsView } from "../hooks/useAppsView";
 import { useFavoriteApps } from "../hooks/useFavoriteApps";
 import {
@@ -282,56 +284,56 @@ export default function AppsPage({
   return (
     <div className="page">
       <section className="page-section">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">{eyebrow}</p>
-            <h2>{title}</h2>
-          </div>
+        <SectionHeader
+          eyebrow={eyebrow}
+          title={title}
+          icon={<Icon name="apps" />}
+          actions={
+            <>
+              {hasAnyApp && (
+                <div className="view-toggle" role="group" aria-label="Layout">
+                  <button
+                    type="button"
+                    className={view === "grid" ? "active" : ""}
+                    aria-pressed={view === "grid"}
+                    onClick={() => setView("grid")}
+                  >
+                    ▦ Grid
+                  </button>
+                  <button
+                    type="button"
+                    className={view === "table" ? "active" : ""}
+                    aria-pressed={view === "table"}
+                    onClick={() => setView("table")}
+                  >
+                    ▤ Table
+                  </button>
+                </div>
+              )}
 
-          <div className="section-heading-actions">
-            {hasAnyApp && (
-              <div className="view-toggle" role="group" aria-label="Layout">
-                <button
-                  type="button"
-                  className={view === "grid" ? "active" : ""}
-                  aria-pressed={view === "grid"}
-                  onClick={() => setView("grid")}
-                >
-                  ▦ Grid
+              {onBrowseTemplates && (
+                <button className="secondary-button compact" type="button" onClick={onBrowseTemplates}>
+                  Templates
                 </button>
+              )}
+
+              {onUpdateAll && updatesAvailableCount > 0 && (
                 <button
+                  className="secondary-button compact"
                   type="button"
-                  className={view === "table" ? "active" : ""}
-                  aria-pressed={view === "table"}
-                  onClick={() => setView("table")}
+                  onClick={() => onUpdateAll(typedManaged)}
+                  disabled={updateAllLoading}
                 >
-                  ▤ Table
+                  {updateAllLoading ? "Updating..." : `Update All (${updatesAvailableCount})`}
                 </button>
-              </div>
-            )}
+              )}
 
-            {onBrowseTemplates && (
-              <button className="secondary-button compact" type="button" onClick={onBrowseTemplates}>
-                Templates
+              <button className="primary-button compact" type="button" onClick={onCreateApp}>
+                Create App
               </button>
-            )}
-
-            {onUpdateAll && updatesAvailableCount > 0 && (
-              <button
-                className="secondary-button compact"
-                type="button"
-                onClick={() => onUpdateAll(typedManaged)}
-                disabled={updateAllLoading}
-              >
-                {updateAllLoading ? "Updating..." : `Update All (${updatesAvailableCount})`}
-              </button>
-            )}
-
-            <button className="primary-button compact" type="button" onClick={onCreateApp}>
-              Create App
-            </button>
-          </div>
-        </div>
+            </>
+          }
+        />
 
         {hasAnyApp && (
           <>

@@ -156,7 +156,10 @@ export default function AppCard({
           {container.isManagedApp &&
             (() => {
               const health = summarizeHealth(isRunning, storedApp?.health ?? undefined);
-              if (!health) {
+              // A neutral "Health Unknown" badge appears on every app without a
+              // configured check — pure noise. Only surface health when it
+              // carries a real signal (healthy / unhealthy / error).
+              if (!health || health.tone === "neutral") {
                 return null;
               }
 
