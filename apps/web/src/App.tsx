@@ -15,6 +15,7 @@ import AppDetail from "./components/AppDetail";
 import CreateAppWizard from "./components/CreateAppWizard";
 import TemplateGallery from "./components/TemplateGallery";
 import DeploymentProgressOverlay from "./components/DeploymentProgressOverlay";
+import { useConfirm } from "./hooks/useConfirm";
 import type { AppTemplate } from "./lib/appTemplates";
 import OverviewPage from "./pages/OverviewPage";
 import AppsPage from "./pages/AppsPage";
@@ -65,6 +66,7 @@ function platformTabFor(section: Section): "system" | SettingsTab {
 
 function App() {
   const { username, logout } = useAuth();
+  const [confirm, confirmDialog] = useConfirm();
 
   // The GitHub App callback (routes/github-app.ts) redirects the browser
   // back to a real page load at /?section=repositories&github=... — a plain
@@ -224,9 +226,22 @@ function App() {
         return;
       }
 
-      const confirmed = window.confirm(
-        `Redeploy ${appsToUpdate.length} app${appsToUpdate.length === 1 ? "" : "s"} to pick up ${appsToUpdate.length === 1 ? "its" : "their"} newer image${appsToUpdate.length === 1 ? "" : "s"}?\n\n${appsToUpdate.map((storedApp) => storedApp.name).join(", ")}`
-      );
+      const confirmed = await confirm({
+        title: `Update ${appsToUpdate.length === 1 ? "app" : "apps"}`,
+        message: (
+          <>
+            <p>
+              Redeploy {appsToUpdate.length} app{appsToUpdate.length === 1 ? "" : "s"} to pick up{" "}
+              {appsToUpdate.length === 1 ? "its" : "their"} newer image
+              {appsToUpdate.length === 1 ? "" : "s"}?
+            </p>
+            <p className="confirm-modal-detail">
+              {appsToUpdate.map((storedApp) => storedApp.name).join(", ")}
+            </p>
+          </>
+        ),
+        confirmLabel: "Update"
+      });
       if (!confirmed) {
         return;
       }
@@ -259,7 +274,7 @@ function App() {
         setError(`Redeployed ${succeeded}, but failed for: ${failed.join(", ")}.`);
       }
     },
-    [storedAppsByName, loadDashboard]
+    [storedAppsByName, loadDashboard, confirm]
   );
 
   const checkForImageUpdates = useCallback(async () => {
@@ -451,9 +466,21 @@ function App() {
     const containerName =
       container.names[0] ?? container.shortId;
 
-    const confirmed = window.confirm(
-      `Delete ${containerName}?\n\nThe container and its anonymous volumes will be removed.`
-    );
+    const confirmed = await confirm({
+      title: "Delete app",
+      message: (
+        <>
+          <p>
+            Delete <strong>{containerName}</strong>?
+          </p>
+          <p className="confirm-modal-detail">
+            The container and its anonymous volumes will be removed.
+          </p>
+        </>
+      ),
+      confirmLabel: "Delete",
+      danger: true
+    });
 
     if (!confirmed) {
       return;
@@ -490,9 +517,21 @@ function App() {
   // Delete for an app whose container is missing: resolved by app id (there
   // is no live container id to target), tolerating an already-gone runtime.
   const deleteMissingApp = async (storedApp: StoredApp) => {
-    const confirmed = window.confirm(
-      `Delete ${storedApp.containerName ?? storedApp.name}?\n\nThis removes the app's configuration. Its container is already missing.`
-    );
+    const confirmed = await confirm({
+      title: "Delete app",
+      message: (
+        <>
+          <p>
+            Delete <strong>{storedApp.containerName ?? storedApp.name}</strong>?
+          </p>
+          <p className="confirm-modal-detail">
+            This removes the app's configuration. Its container is already missing.
+          </p>
+        </>
+      ),
+      confirmLabel: "Delete",
+      danger: true
+    });
 
     if (!confirmed) {
       return;
@@ -533,9 +572,23 @@ function App() {
       ...selectedMissingApps.map((app) => app.name)
     ];
 
-    const confirmed = window.confirm(
-      `Delete ${names.length} selected app${names.length === 1 ? "" : "s"}?\n\n${names.join(", ")}\n\nTheir containers, anonymous volumes, and saved app configuration will be removed.`
-    );
+    const confirmed = await confirm({
+      title: `Delete ${names.length === 1 ? "app" : "apps"}`,
+      message: (
+        <>
+          <p>
+            Delete {names.length} selected app{names.length === 1 ? "" : "s"}?
+          </p>
+          <p className="confirm-modal-detail">{names.join(", ")}</p>
+          <p>
+            Their containers, anonymous volumes, and saved app configuration will be
+            removed.
+          </p>
+        </>
+      ),
+      confirmLabel: "Delete",
+      danger: true
+    });
     if (!confirmed) {
       return false;
     }
@@ -653,6 +706,7 @@ function App() {
           onAppChanged={() => void loadDashboard()}
           onGoToGlobalEnvironment={() => goToSection("environment")}
         />
+        {confirmDialog}
       </AppShell>
     );
   }
@@ -809,6 +863,7 @@ function App() {
           }
         }}
       />
+      {confirmDialog}
     </AppShell>
   );
 }
