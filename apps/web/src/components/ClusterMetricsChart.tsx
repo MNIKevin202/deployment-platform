@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DockerInfo, MetricsSummaryResponse } from "../types/api";
 import MetricsSparkline from "./MetricsSparkline";
+import SectionHeader from "./SectionHeader";
+import Icon from "./Icon";
 
 interface ClusterMetricsChartProps {
   dockerInfo: DockerInfo | null;
@@ -125,12 +127,7 @@ export default function ClusterMetricsChart({ dockerInfo }: ClusterMetricsChartP
 
   return (
     <section className="page-section">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Live</p>
-          <h2>Host Resource Usage</h2>
-        </div>
-      </div>
+      <SectionHeader eyebrow="Live" title="Host Resource Usage" icon={<Icon name="cpu" />} />
 
       <div className="metrics-chart-grid">
         <div className="metric-chart-card">

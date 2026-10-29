@@ -261,7 +261,7 @@ export default function OverviewPage({
   const healthTone = PLATFORM_HEALTH_TONE[visibleHealthStatus];
   const healthSub =
     visibleAttentionItems.length > 0
-      ? `${visibleAttentionItems.length} item${visibleAttentionItems.length === 1 ? "" : "s"} need attention`
+      ? `${visibleAttentionItems.length} item${visibleAttentionItems.length === 1 ? " needs" : "s need"} attention`
       : "All systems normal";
   const activityApps = [...storedAppsByName.values()];
 
