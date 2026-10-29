@@ -1,5 +1,7 @@
 import { useRef, useState } from "react";
 import ConfirmationDialog from "../components/ConfirmationDialog";
+import SectionHeader from "../components/SectionHeader";
+import Icon from "../components/Icon";
 import Tabs from "../components/Tabs";
 import AccountSettings from "../components/AccountSettings";
 import DiskSettings from "../components/DiskSettings";
@@ -126,12 +128,7 @@ export default function SettingsPage({ tab: controlledTab, hideTabs = false }: S
           )}
 
           <section className="page-section">
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">Backup</p>
-                <h2>Download a backup</h2>
-              </div>
-            </div>
+            <SectionHeader eyebrow="Backup" title="Download a backup" icon={<Icon name="download" />} />
 
             <p className="text-faint">
               Downloads a single archive of your entire platform configuration — every app, GitHub
@@ -147,12 +144,7 @@ export default function SettingsPage({ tab: controlledTab, hideTabs = false }: S
           </section>
 
           <section className="page-section">
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">Restore</p>
-                <h2>Restore from a backup</h2>
-              </div>
-            </div>
+            <SectionHeader eyebrow="Restore" title="Restore from a backup" icon={<Icon name="upload" />} />
 
             <p className="text-faint">
               Upload a backup archive to replace the platform's current configuration. This{" "}

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import GitHubSettingsPanel from "../components/GitHubSettingsPanel";
 import GithubAppConnectPanel from "../components/GithubAppConnectPanel";
+import SectionHeader from "../components/SectionHeader";
+import Icon from "../components/Icon";
 import { useGithubRepositories } from "../hooks/useGithubRepositories";
 import type { GithubAppInstallation, GithubConnectionInfo } from "../types/api";
 
@@ -219,25 +221,26 @@ export default function RepositoriesPage({ onSelectRepository }: RepositoriesPag
 
       {(connectedViaApp || connectedViaPat) && (
         <section className="page-section">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Repositories</p>
-              <h2>Accessible GitHub Repositories</h2>
-              {complete && repos.length > 0 && (
-                <p className="text-faint">
-                  {repos.length} repositor{repos.length === 1 ? "y" : "ies"} loaded
-                </p>
-              )}
-            </div>
-            <button
-              className="secondary-button compact"
-              type="button"
-              onClick={refreshRepos}
-              disabled={loading}
-            >
-              Refresh
-            </button>
-          </div>
+          <SectionHeader
+            eyebrow="Repositories"
+            title="Accessible GitHub Repositories"
+            icon={<Icon name="git" />}
+            description={
+              complete && repos.length > 0
+                ? `${repos.length} repositor${repos.length === 1 ? "y" : "ies"} loaded`
+                : undefined
+            }
+            actions={
+              <button
+                className="secondary-button compact"
+                type="button"
+                onClick={refreshRepos}
+                disabled={loading}
+              >
+                Refresh
+              </button>
+            }
+          />
 
           <div className="repo-filter-row">
             <input

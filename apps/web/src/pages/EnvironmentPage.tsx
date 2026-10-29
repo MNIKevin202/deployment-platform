@@ -3,6 +3,8 @@ import EnvVarDialog from "../components/EnvVarDialog";
 import EnvVarTable from "../components/EnvVarTable";
 import ConfirmationDialog from "../components/ConfirmationDialog";
 import EnvironmentExportDialog from "../components/EnvironmentExportDialog";
+import SectionHeader from "../components/SectionHeader";
+import Icon from "../components/Icon";
 import { revealEnvValue } from "../lib/revealEnvValue";
 import type { ApiError, EnvVarFormValues, MaskedGlobalEnvVar } from "../types/api";
 
@@ -195,25 +197,22 @@ export default function EnvironmentPage({ refreshKey = 0 }: EnvironmentPageProps
   return (
     <div className="page">
       <section className="page-section">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Environment</p>
-            <h2>Global Variables</h2>
-            <p className="section-description">
-              Global variables are inherited by every managed app unless an
-              app defines its own variable with the same key.
-            </p>
-          </div>
-
-          <div className="section-heading-actions">
-            <button className="secondary-button compact" type="button" onClick={() => { setExportError(""); setShowExportDialog(true); }}>
-              Copy All
-            </button>
-            <button className="primary-button compact" type="button" onClick={openCreateDialog}>
-              Add Variable
-            </button>
-          </div>
-        </div>
+        <SectionHeader
+          eyebrow="Environment"
+          title="Global Variables"
+          icon={<Icon name="key" />}
+          description="Global variables are inherited by every managed app unless an app defines its own variable with the same key."
+          actions={
+            <>
+              <button className="secondary-button compact" type="button" onClick={() => { setExportError(""); setShowExportDialog(true); }}>
+                Copy All
+              </button>
+              <button className="primary-button compact" type="button" onClick={openCreateDialog}>
+                Add Variable
+              </button>
+            </>
+          }
+        />
 
         {notice && <div className="notice-banner">{notice}</div>}
         {loadError && <div className="error-banner">{loadError}</div>}

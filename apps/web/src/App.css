@@ -5053,12 +5053,23 @@ code {
 
 /* ---- Section headers (icon + eyebrow + title + actions) ---- */
 .section-heading-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
+/* When the header carries a description the text block is taller, so top-align
+   the icon with the eyebrow rather than floating it mid-block. */
+.section-heading-main:has(.section-heading-desc) { align-items: flex-start; }
 .section-heading-icon {
   display: grid; place-items: center; flex: none;
   width: 34px; height: 34px; border-radius: 10px;
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border-soft);
   color: var(--color-accent-2);
+}
+.section-heading-text { min-width: 0; }
+.section-heading-desc {
+  margin: 6px 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+  max-width: 580px;
 }
 
 /* ---- Recent activity list ---- */

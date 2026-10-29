@@ -1,4 +1,6 @@
 import AppCard from "../components/AppCard";
+import SectionHeader from "../components/SectionHeader";
+import Icon from "../components/Icon";
 import { useSpeedtest } from "../hooks/useSpeedtest";
 import SpeedtestRunningBar from "../components/SpeedtestRunningBar";
 import type { ContainerAction, ContainerSummary, DockerInfo } from "../types/api";
@@ -31,20 +33,21 @@ function InternetSection() {
 
   return (
     <section className="page-section">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Host</p>
-          <h2>Internet Connection</h2>
-        </div>
-        <button
-          className="secondary-button compact"
-          type="button"
-          onClick={() => void runTest()}
-          disabled={running}
-        >
-          {running ? "Running…" : "Run test now"}
-        </button>
-      </div>
+      <SectionHeader
+        eyebrow="Host"
+        title="Internet Connection"
+        icon={<Icon name="globe" />}
+        actions={
+          <button
+            className="secondary-button compact"
+            type="button"
+            onClick={() => void runTest()}
+            disabled={running}
+          >
+            {running ? "Running…" : "Run test now"}
+          </button>
+        }
+      />
 
       {runError && <div className="error-banner">{runError}</div>}
       {runTimedOut && (
@@ -118,12 +121,7 @@ export default function SystemPage({
       <InternetSection />
 
       <section className="page-section">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Host</p>
-            <h2>Docker Daemon</h2>
-          </div>
-        </div>
+        <SectionHeader eyebrow="Host" title="Docker Daemon" icon={<Icon name="docker" />} />
 
         <div className="server-card">
           <div>
@@ -159,16 +157,16 @@ export default function SystemPage({
       </section>
 
       <section className="page-section">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Core Infrastructure</p>
-            <h2>Platform Services</h2>
-          </div>
-
-          <span className="container-count">
-            {systemContainers.length} protected
-          </span>
-        </div>
+        <SectionHeader
+          eyebrow="Core Infrastructure"
+          title="Platform Services"
+          icon={<Icon name="server" />}
+          actions={
+            <span className="container-count">
+              {systemContainers.length} protected
+            </span>
+          }
+        />
 
         {systemContainers.length === 0 ? (
           <div className="empty-state">

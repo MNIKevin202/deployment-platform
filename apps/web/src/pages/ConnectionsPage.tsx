@@ -3,6 +3,8 @@ import ConnectionDialog, {
   CONNECTION_KIND_OPTIONS
 } from "../components/ConnectionDialog";
 import ConfirmationDialog from "../components/ConfirmationDialog";
+import SectionHeader from "../components/SectionHeader";
+import Icon from "../components/Icon";
 import type {
   ApiError,
   ConnectionFormValues,
@@ -302,22 +304,17 @@ export default function ConnectionsPage({ refreshKey = 0 }: ConnectionsPageProps
   return (
     <div className="page">
       <section className="page-section">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Connections</p>
-            <h2>Database Connections</h2>
-            <p className="section-description">
-              Keep the connection strings for databases you host elsewhere —
-              MongoDB Atlas, a managed Postgres, an external Redis — in one
-              place. Copy them on demand, or share one with every app as a
-              secret environment variable.
-            </p>
-          </div>
-
-          <button className="primary-button compact" type="button" onClick={openCreateDialog}>
-            Add Connection
-          </button>
-        </div>
+        <SectionHeader
+          eyebrow="Connections"
+          title="Database Connections"
+          icon={<Icon name="database" />}
+          description="Keep the connection strings for databases you host elsewhere — MongoDB Atlas, a managed Postgres, an external Redis — in one place. Copy them on demand, or share one with every app as a secret environment variable."
+          actions={
+            <button className="primary-button compact" type="button" onClick={openCreateDialog}>
+              Add Connection
+            </button>
+          }
+        />
 
         {notice && <div className="notice-banner">{notice}</div>}
         {loadError && <div className="error-banner">{loadError}</div>}

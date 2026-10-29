@@ -11,6 +11,8 @@ import type {
 import ConfirmationDialog from "../components/ConfirmationDialog";
 import CopyButton from "../components/CopyButton";
 import StatCard from "../components/StatCard";
+import SectionHeader from "../components/SectionHeader";
+import Icon from "../components/Icon";
 
 interface CronPageProps {
   /** Apps the operator can target — the command runs in the app's container. */
@@ -351,19 +353,17 @@ export default function CronPage({ apps }: CronPageProps) {
   return (
     <div className="page">
       <section className="page-section">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Scheduling</p>
-            <h2>Cron Jobs</h2>
-            <p className="section-description">
-              Run a command inside one of your apps' containers on a schedule — database
-              cleanups, maintenance tasks, anything you'd normally put in a crontab.
-            </p>
-          </div>
-          <button className="primary-button" type="button" onClick={openCreate} disabled={apps.length === 0}>
-            New Cron Job
-          </button>
-        </div>
+        <SectionHeader
+          eyebrow="Scheduling"
+          title="Cron Jobs"
+          icon={<Icon name="clock" />}
+          description="Run a command inside one of your apps' containers on a schedule — database cleanups, maintenance tasks, anything you'd normally put in a crontab."
+          actions={
+            <button className="primary-button" type="button" onClick={openCreate} disabled={apps.length === 0}>
+              New Cron Job
+            </button>
+          }
+        />
 
         {!loading && jobs.length > 0 && (
           <section className="stats-grid cron-stats">
