@@ -4,6 +4,9 @@ import AppCard from "../components/AppCard";
 import AppTable from "../components/AppTable";
 import AttentionPanel from "../components/AttentionPanel";
 import PlatformUpdateBanner from "../components/PlatformUpdateBanner";
+import SectionHeader from "../components/SectionHeader";
+import RecentActivity from "../components/RecentActivity";
+import Icon from "../components/Icon";
 import { useSpeedtest } from "../hooks/useSpeedtest";
 
 // Pulls in recharts (a large dependency) only once Overview actually
@@ -255,40 +258,56 @@ export default function OverviewPage({
     }
   };
 
+  const healthTone = PLATFORM_HEALTH_TONE[visibleHealthStatus];
+  const healthSub =
+    visibleAttentionItems.length > 0
+      ? `${visibleAttentionItems.length} item${visibleAttentionItems.length === 1 ? "" : "s"} need attention`
+      : "All systems normal";
+  const activityApps = [...storedAppsByName.values()];
+
   return (
-    <div className="page">
+    <div className="page overview">
       <PlatformUpdateBanner />
-      <section className="stats-grid platform-health-grid">
-        <StatCard
-          label="Platform Health"
-          value={PLATFORM_HEALTH_LABEL[visibleHealthStatus]}
-          tone={PLATFORM_HEALTH_TONE[visibleHealthStatus]}
-          hint={
-            visibleAttentionItems.length > 0
-              ? `${visibleAttentionItems.length} item${visibleAttentionItems.length === 1 ? "" : "s"} need attention`
-              : "All systems normal"
-          }
-        />
+
+      {/* Health hero — the command center's at-a-glance status + primary actions. */}
+      <section className={`health-hero tone-${healthTone}`} aria-label="Platform health">
+        <span className="health-hero-mark" aria-hidden="true">
+          <Icon name="pulse" size={22} />
+        </span>
+        <div className="health-hero-text">
+          <p className="eyebrow">Platform Health</p>
+          <strong className="health-hero-value">{PLATFORM_HEALTH_LABEL[visibleHealthStatus]}</strong>
+          <p className="health-hero-sub">{healthSub}</p>
+        </div>
+        <div className="health-hero-actions">
+          {onBrowseTemplates && (
+            <button className="secondary-button" type="button" onClick={onBrowseTemplates}>
+              <Icon name="template" size={15} /> Templates
+            </button>
+          )}
+          <button className="primary-button" type="button" onClick={onCreateApp}>
+            <Icon name="plus" size={15} /> Create App
+          </button>
+        </div>
+        <span className="sr-only">{`Platform status: ${PLATFORM_HEALTH_LABEL[visibleHealthStatus]}. ${healthSub}.`}</span>
       </section>
 
-      <AttentionPanel
-        items={visibleAttentionItems}
-        onViewApp={onViewApp}
-        onQuickAction={runAttentionAction}
-        getQuickActionLabel={getAttentionActionLabel}
-        isQuickActionLoading={isAttentionActionLoading}
-        onDismissItem={dismissAttentionItem}
-      />
-
-      <section className="stats-grid">
-        <StatCard label="Apps" value={String(serviceApps.length)} />
-        <StatCard label="Databases" value={String(databaseApps.length)} />
-        <StatCard label="Running" value={String(runningCount)} tone="positive" />
-        <StatCard label="Stopped" value={String(stoppedCount)} tone={stoppedCount > 0 ? "warning" : "neutral"} />
+      {/* Infrastructure summary — compact metric cards. */}
+      <section className="stats-grid metrics-grid" aria-label="Infrastructure summary">
+        <StatCard label="Apps" value={String(serviceApps.length)} icon={<Icon name="apps" />} />
+        <StatCard label="Databases" value={String(databaseApps.length)} icon={<Icon name="database" />} />
+        <StatCard label="Running" value={String(runningCount)} tone="positive" icon={<Icon name="play" />} />
+        <StatCard
+          label="Stopped"
+          value={String(stoppedCount)}
+          tone={stoppedCount > 0 ? "warning" : "neutral"}
+          icon={<Icon name="stop" />}
+        />
         <StatCard
           label="Routing"
           value={routingHealth.label}
           tone={routingHealth.tone}
+          icon={<Icon name="route" />}
           hint={
             routingStatus?.routedAppCount
               ? `${routingStatus.routedAppCount} route${routingStatus.routedAppCount === 1 ? "" : "s"}`
@@ -299,11 +318,13 @@ export default function OverviewPage({
           label="Docker"
           value={dockerInfo?.status === "connected" ? "Connected" : "Unavailable"}
           tone={dockerInfo?.status === "connected" ? "positive" : "negative"}
+          icon={<Icon name="docker" />}
           hint={dockerInfo?.dockerVersion}
         />
         <StatCard
           label="Host Resources"
           value={dockerInfo ? `${dockerInfo.cpuCount} cores` : "—"}
+          icon={<Icon name="cpu" />}
           hint={dockerInfo ? formatMemory(dockerInfo.memoryTotalBytes) : undefined}
         />
         {/* Only rendered once a Speedtest Tracker is connected — an
@@ -311,6 +332,7 @@ export default function OverviewPage({
         {speedtest.data?.configured && speedtest.data.reading && (
           <StatCard
             label="Internet Speed"
+            icon={<Icon name="gauge" />}
             // A failed run has a timestamp but no numbers, so it says so
             // outright rather than showing a dash that reads as "loading".
             value={
@@ -339,18 +361,39 @@ export default function OverviewPage({
         )}
       </section>
 
+      {/* Attention + Recent activity, side by side. */}
+      <section className="overview-cols">
+        <div className="overview-col">
+          <SectionHeader eyebrow="Monitoring" title="Needs attention" icon={<Icon name="activity" />} />
+          <AttentionPanel
+            items={visibleAttentionItems}
+            onViewApp={onViewApp}
+            onQuickAction={runAttentionAction}
+            getQuickActionLabel={getAttentionActionLabel}
+            isQuickActionLoading={isAttentionActionLoading}
+            onDismissItem={dismissAttentionItem}
+          />
+        </div>
+        <div className="overview-col">
+          <SectionHeader eyebrow="Monitoring" title="Recent activity" icon={<Icon name="pulse" />} />
+          <div className="panel overview-activity-panel">
+            <RecentActivity apps={activityApps} onViewApp={onViewApp} />
+          </div>
+        </div>
+      </section>
+
+      {/* System resource monitoring. */}
       <Suspense fallback={null}>
         <ClusterMetricsChart dockerInfo={dockerInfo} />
       </Suspense>
 
       <section className="page-section">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Applications</p>
-            <h2>Apps</h2>
-          </div>
-
-          <div className="section-heading-actions">
+        <SectionHeader
+          eyebrow="Applications"
+          title="Apps"
+          icon={<Icon name="apps" />}
+          actions={
+            <>
             {serviceApps.length > 0 && (
               <div className="view-toggle" role="group" aria-label="Layout">
                 <button
@@ -381,8 +424,9 @@ export default function OverviewPage({
             <button className="primary-button compact" type="button" onClick={onCreateApp}>
               Create App
             </button>
-          </div>
-        </div>
+            </>
+          }
+        />
 
         {serviceApps.length === 0 ? (
           <div className="empty-state app-empty-state">

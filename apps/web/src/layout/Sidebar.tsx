@@ -34,6 +34,9 @@ interface SidebarProps {
   active: Section | null;
   onSelect: (section: Section) => void;
   username?: string;
+  /** When true the sidebar is narrowed to icons only. */
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 /** SVG glyph (path data) per area, drawn in a small tile beside the label. */
@@ -106,7 +109,13 @@ export function parseSection(value: string | null): Section | null {
   return SECTIONS.includes(value as Section) ? (value as Section) : null;
 }
 
-export default function Sidebar({ active, onSelect, username }: SidebarProps) {
+export default function Sidebar({
+  active,
+  onSelect,
+  username,
+  collapsed = false,
+  onToggleCollapse
+}: SidebarProps) {
   const activePrimary = active ? primaryOf(active) : null;
   const labelOf = (key: PrimarySection) =>
     NAV_ITEMS.find((item) => item.key === key)?.label ?? key;
@@ -118,10 +127,24 @@ export default function Sidebar({ active, onSelect, username }: SidebarProps) {
     <div className="sidebar-inner">
       <div className="sidebar-brand">
         <BrandMark className="sidebar-mark" />
-        <div>
+        <div className="sidebar-brand-text">
           <p className="sidebar-brand-name">ClovaForge</p>
           <p className="sidebar-brand-sub">Deploy Console</p>
         </div>
+        {onToggleCollapse && (
+          <button
+            type="button"
+            className="sidebar-collapse-toggle"
+            onClick={onToggleCollapse}
+            aria-pressed={collapsed}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d={collapsed ? "M9 6l6 6-6 6" : "M15 6l-6 6 6 6"} />
+            </svg>
+          </button>
+        )}
       </div>
 
       <div className="sidebar-server" title={host}>
@@ -142,6 +165,8 @@ export default function Sidebar({ active, onSelect, username }: SidebarProps) {
                   type="button"
                   className={`sidebar-nav-item ${isActive ? "active" : ""}`}
                   aria-current={isActive ? "page" : undefined}
+                  aria-label={labelOf(key)}
+                  title={collapsed ? labelOf(key) : undefined}
                   onClick={() => onSelect(key)}
                 >
                   <span className="sidebar-nav-glyph" aria-hidden="true">
@@ -149,7 +174,7 @@ export default function Sidebar({ active, onSelect, username }: SidebarProps) {
                       <path d={NAV_ICONS[key]} />
                     </svg>
                   </span>
-                  {labelOf(key)}
+                  <span className="sidebar-nav-label-text">{labelOf(key)}</span>
                 </button>
               );
             })}

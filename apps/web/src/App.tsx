@@ -88,6 +88,26 @@ function App() {
     () => new URLSearchParams(window.location.search).get("github") === "connected"
   );
   const [selectedAppId, setSelectedAppId] = useState<number | null>(null);
+  // Sidebar collapse — a per-browser preference so the icon-only rail persists.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem("clovaforge:sidebar-collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem("clovaforge:sidebar-collapsed", next ? "1" : "0");
+      } catch {
+        /* non-fatal */
+      }
+      return next;
+    });
+  }, []);
+  const shellClass = sidebarCollapsed ? "app-shell--collapsed" : undefined;
 
   const [dockerInfo, setDockerInfo] = useState<DockerInfo | null>(null);
   const [routingStatus, setRoutingStatus] = useState<RoutingStatus | null>(null);
@@ -601,7 +621,16 @@ function App() {
   if (selectedAppId !== null) {
     return (
       <AppShell
-        sidebar={<Sidebar active={null} onSelect={goToSection} username={username} />}
+        className={shellClass}
+        sidebar={
+          <Sidebar
+            active={null}
+            onSelect={goToSection}
+            username={username}
+            collapsed={sidebarCollapsed}
+            onToggleCollapse={toggleSidebar}
+          />
+        }
         header={
           <Header
             title="App Detail"
@@ -657,7 +686,16 @@ function App() {
 
   return (
     <AppShell
-      sidebar={<Sidebar active={section} onSelect={goToSection} username={username} />}
+      className={shellClass}
+      sidebar={
+        <Sidebar
+          active={section}
+          onSelect={goToSection}
+          username={username}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={toggleSidebar}
+        />
+      }
       header={
         <Header
           title={AREA_TITLES[primaryOf(section)]}
