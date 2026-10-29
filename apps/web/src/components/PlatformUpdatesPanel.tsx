@@ -239,6 +239,26 @@ export default function PlatformUpdatesPanel() {
     state
   );
 
+  // The status badge must never contradict what the page shows below it. The
+  // installer state machine reports "idle" whenever it isn't actively working —
+  // even when a fresh check has found a newer release — so on its own it would
+  // read "Up to date" next to a "Latest available X" line and an Update button.
+  // Reconcile the two: while actively checking or mid-install, the machine's
+  // live state wins; otherwise, if discovery found an update, say so.
+  const terminalOrBusy =
+    inFlight ||
+    state === "successful" ||
+    state === "failed" ||
+    state === "rolled_back" ||
+    state === "manual_intervention_required";
+  const displayState: UpdateState = checking
+    ? "checking"
+    : terminalOrBusy
+      ? state
+      : updateAvailable
+        ? "update_available"
+        : state;
+
   const patchSettings = (patch: Partial<UpdateSettings>) => {
     void saveSettings({ ...settings, ...patch });
   };
@@ -252,7 +272,7 @@ export default function PlatformUpdatesPanel() {
             <h2>ClovaForge {status.currentVersion}</h2>
           </div>
           <div className="section-heading-actions">
-            <span className={`status-badge ${stateTone(state)}`}>{STATE_LABELS[state]}</span>
+            <span className={`status-badge ${stateTone(displayState)}`}>{STATE_LABELS[displayState]}</span>
           </div>
         </div>
 

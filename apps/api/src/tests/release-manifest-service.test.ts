@@ -6,8 +6,10 @@ import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
 import type { ReleaseManifest } from "../schemas/release-manifest.js";
 import {
+  defaultFetch,
   evaluateUpdateAvailability,
   fetchAndVerifyManifest,
+  NO_CACHE_HEADERS,
   verifyManifestSignature,
   type ManifestFetchImpl
 } from "../services/release-manifest-service.js";
@@ -321,3 +323,29 @@ describe("release compatibility: the real production fleet floor (0.1.31)", () =
 // computeRollbackSafety — it depends on this installation's own applied
 // migration state, not on anything the manifest carries. See that file's
 // "computeRollbackSafety" describe block.
+
+describe("defaultFetch — never serves a stale manifest", () => {
+  test("requests with no-store and revalidation headers so a manual check sees new releases immediately", async () => {
+    const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return { ok: true, status: 200, text: async () => "{}" } as unknown as Response;
+    }) as typeof fetch;
+
+    try {
+      await defaultFetch("https://releases.example.com/beta-latest/manifest.json");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    assert.equal(calls.length, 1);
+    // No cache-busting query param (GitHub release URLs can 404 on unexpected
+    // query strings) — the URL is passed through untouched.
+    assert.equal(calls[0].url, "https://releases.example.com/beta-latest/manifest.json");
+    assert.equal(calls[0].init?.cache, "no-store");
+    const headers = (calls[0].init?.headers ?? {}) as Record<string, string>;
+    assert.equal(headers["Cache-Control"], NO_CACHE_HEADERS["Cache-Control"]);
+    assert.equal(headers["Pragma"], "no-cache");
+  });
+});

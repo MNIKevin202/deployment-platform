@@ -53,6 +53,30 @@ describe("PlatformUpdatesPanel", () => {
     expect(screen.getByText(/latest release for the stable channel/i)).toBeInTheDocument();
   });
 
+  test("badge says 'Update available' (never 'Up to date') when a check found a newer release while the installer is idle", async () => {
+    // The installer state machine reports "idle" whenever it isn't actively
+    // working — even right after a check discovers an update. The badge must
+    // reflect discovery, not contradict the "Latest available" line below it.
+    mountFetch({
+      "/api/platform/updates/settings": () => jsonResponse(SETTINGS),
+      "/api/platform/updates/status": () =>
+        jsonResponse(
+          statusBody({
+            status: {
+              lastCheckedAt: "2026-09-16T10:00:00.000Z",
+              result: { outcome: "update-available", latestVersion: "1.3.0", requiresIncrementalUpgrade: false, rollbackSafe: true }
+            },
+            state: { state: "idle", targetVersion: null, detail: null, updatedAt: "x" }
+          })
+        ),
+      "/api/platform/updates/history": () => jsonResponse({ success: true, history: [] })
+    });
+    render(<PlatformUpdatesPanel />);
+    await screen.findByText("ClovaForge 1.2.0");
+    expect(screen.getByText("Update available")).toBeInTheDocument();
+    expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
+  });
+
   test("offers 'Update now' only for a directly-installable update", async () => {
     mountFetch({
       "/api/platform/updates/settings": () => jsonResponse(SETTINGS),

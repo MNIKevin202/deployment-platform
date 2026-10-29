@@ -24,8 +24,26 @@ export type ManifestFetchImpl = (url: string) => Promise<{
   text(): Promise<string>;
 }>;
 
-const defaultFetch: ManifestFetchImpl = (url) =>
-  fetch(url) as unknown as ReturnType<ManifestFetchImpl>;
+/**
+ * Manifest/signature requests must never be served from a stale cache — a
+ * manual "Check for updates" has to see a release the instant it is published.
+ * So the default fetch opts out of any HTTP cache (`no-store`) and asks every
+ * intermediary (CDN, proxy) to revalidate rather than serve a cached copy.
+ * (A query-param cache-buster is deliberately NOT used: the default pointer
+ * host is GitHub release downloads, which can 404 on unexpected query params,
+ * and replacing a pointer asset already yields fresh content by object id.)
+ */
+export const NO_CACHE_HEADERS: Readonly<Record<string, string>> = {
+  "Cache-Control": "no-cache, no-store, max-age=0",
+  Pragma: "no-cache"
+};
+
+export const defaultFetch: ManifestFetchImpl = (url) =>
+  fetch(url, {
+    cache: "no-store",
+    headers: NO_CACHE_HEADERS,
+    redirect: "follow"
+  }) as unknown as ReturnType<ManifestFetchImpl>;
 
 /**
  * The project's known Ed25519 public signing keys, by keyId — loaded from
