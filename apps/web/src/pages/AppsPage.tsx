@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import AppCard from "../components/AppCard";
+import AppTile from "../components/AppTile";
 import MissingAppCard from "../components/MissingAppCard";
 import AppTable from "../components/AppTable";
-import SectionHeader from "../components/SectionHeader";
 import Icon from "../components/Icon";
 import { useAppsView } from "../hooks/useAppsView";
 import { useFavoriteApps } from "../hooks/useFavoriteApps";
@@ -284,68 +283,97 @@ export default function AppsPage({
   return (
     <div className="page">
       <section className="page-section">
-        <SectionHeader
-          eyebrow={eyebrow}
-          title={title}
-          icon={<Icon name="apps" />}
-          actions={
-            <>
+        <header className="apps-hero">
+          <div className="apps-hero-left">
+            <span className="apps-hero-icon" aria-hidden="true">
+              <Icon name="apps" size={24} />
+            </span>
+            <div className="apps-hero-headings">
+              <p className="eyebrow">{eyebrow}</p>
+              <h2 className="apps-hero-title">{title}</h2>
               {hasAnyApp && (
-                <div className="view-toggle" role="group" aria-label="Layout">
-                  <button
-                    type="button"
-                    className={view === "grid" ? "active" : ""}
-                    aria-pressed={view === "grid"}
-                    onClick={() => setView("grid")}
-                  >
-                    ▦ Grid
-                  </button>
-                  <button
-                    type="button"
-                    className={view === "table" ? "active" : ""}
-                    aria-pressed={view === "table"}
-                    onClick={() => setView("table")}
-                  >
-                    ▤ Table
-                  </button>
-                </div>
+                <p className="apps-hero-sub">
+                  <strong>{allEntries.length}</strong>{" "}
+                  {allEntries.length === 1 ? "app" : "apps"}
+                  <span className="apps-hero-sep" aria-hidden="true">
+                    •
+                  </span>
+                  <span className="apps-hero-stat running">
+                    {filterCounts.get("running") ?? 0} running
+                  </span>
+                  <span className="apps-hero-sep" aria-hidden="true">
+                    •
+                  </span>
+                  <span className="apps-hero-stat stopped">
+                    {filterCounts.get("stopped") ?? 0} stopped
+                  </span>
+                </p>
               )}
+            </div>
+          </div>
 
-              {onBrowseTemplates && (
-                <button className="secondary-button compact" type="button" onClick={onBrowseTemplates}>
-                  Templates
-                </button>
-              )}
-
-              {onUpdateAll && updatesAvailableCount > 0 && (
+          <div className="apps-hero-actions">
+            {hasAnyApp && (
+              <div className="view-toggle" role="group" aria-label="Layout">
                 <button
-                  className="secondary-button compact"
                   type="button"
-                  onClick={() => onUpdateAll(typedManaged)}
-                  disabled={updateAllLoading}
+                  className={view === "grid" ? "active" : ""}
+                  aria-pressed={view === "grid"}
+                  onClick={() => setView("grid")}
+                  title="Grid"
                 >
-                  {updateAllLoading ? "Updating..." : `Update All (${updatesAvailableCount})`}
+                  <Icon name="grid" size={16} /> Grid
                 </button>
-              )}
+                <button
+                  type="button"
+                  className={view === "table" ? "active" : ""}
+                  aria-pressed={view === "table"}
+                  onClick={() => setView("table")}
+                  title="Table"
+                >
+                  <Icon name="list" size={16} /> Table
+                </button>
+              </div>
+            )}
 
-              <button className="primary-button compact" type="button" onClick={onCreateApp}>
-                Create App
+            {onBrowseTemplates && (
+              <button className="secondary-button" type="button" onClick={onBrowseTemplates}>
+                <Icon name="template" size={16} /> Templates
               </button>
-            </>
-          }
-        />
+            )}
+
+            {onUpdateAll && updatesAvailableCount > 0 && (
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => onUpdateAll(typedManaged)}
+                disabled={updateAllLoading}
+              >
+                <Icon name="refresh" size={16} />{" "}
+                {updateAllLoading ? "Updating..." : `Update All (${updatesAvailableCount})`}
+              </button>
+            )}
+
+            <button className="primary-button" type="button" onClick={onCreateApp}>
+              <Icon name="plus" size={16} /> Create App
+            </button>
+          </div>
+        </header>
 
         {hasAnyApp && (
           <>
             <div className="apps-controlbar">
             <div className="apps-filter-row">
-              <input
-                className="apps-filter-search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search by name or image..."
-                aria-label="Search apps"
-              />
+              <div className="apps-search">
+                <Icon name="search" size={16} className="apps-search-icon" />
+                <input
+                  className="apps-filter-search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search apps by name or image…"
+                  aria-label="Search apps"
+                />
+              </div>
               <select
                 className="apps-filter-sort"
                 value={sortKey}
@@ -489,13 +517,13 @@ export default function AppsPage({
             onToggleAllVisible={toggleAllVisible}
           />
         ) : (
-          <div className="container-grid">
+          <div className="apps-board">
             {filteredManagedContainers.map((container) => {
               const appName = container.labels["com.deployment-platform.app-name"];
               const storedApp = appName ? storedAppsByName.get(appName) : undefined;
 
               return (
-                <AppCard
+                <AppTile
                   key={container.id}
                   container={container}
                   storedApp={storedApp}

@@ -10,7 +10,7 @@ import Icon from "../components/Icon";
 import SectionHeader from "../components/SectionHeader";
 import StatCard from "../components/StatCard";
 import StatusBadge from "../components/StatusBadge";
-import AppCard from "../components/AppCard";
+import AppTile from "../components/AppTile";
 import Tabs from "../components/Tabs";
 import type { ContainerSummary, StoredApp } from "../types/api";
 
@@ -214,10 +214,43 @@ function Harness() {
         </div>
       </Section>
 
-      <Section label="Application cards (grid)">
-        <div className="container-grid">
+      <Section label="Apps hero (redesigned header)">
+        <header className="apps-hero">
+          <div className="apps-hero-left">
+            <span className="apps-hero-icon" aria-hidden="true">
+              <Icon name="apps" size={24} />
+            </span>
+            <div className="apps-hero-headings">
+              <p className="eyebrow">Applications</p>
+              <h2 className="apps-hero-title">All Managed Apps</h2>
+              <p className="apps-hero-sub">
+                <strong>28</strong> apps
+                <span className="apps-hero-sep" aria-hidden="true">•</span>
+                <span className="apps-hero-stat running">21 running</span>
+                <span className="apps-hero-sep" aria-hidden="true">•</span>
+                <span className="apps-hero-stat stopped">7 stopped</span>
+              </p>
+            </div>
+          </div>
+          <div className="apps-hero-actions">
+            <div className="view-toggle" role="group" aria-label="Layout">
+              <button className="active" type="button"><Icon name="grid" size={16} /> Grid</button>
+              <button type="button"><Icon name="list" size={16} /> Table</button>
+            </div>
+            <button className="secondary-button"><Icon name="template" size={16} /> Templates</button>
+            <button className="primary-button"><Icon name="plus" size={16} /> Create App</button>
+          </div>
+        </header>
+        <div className="apps-search" style={{ maxWidth: 420 }}>
+          <Icon name="search" size={16} className="apps-search-icon" />
+          <input className="apps-filter-search" placeholder="Search apps by name or image…" />
+        </div>
+      </Section>
+
+      <Section label="App tiles (redesigned board)">
+        <div className="apps-board">
           {cards.map(({ c, a }) => (
-            <AppCard
+            <AppTile
               key={a.id}
               container={c}
               storedApp={a}

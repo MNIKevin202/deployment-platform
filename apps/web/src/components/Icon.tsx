@@ -54,7 +54,9 @@ export type IconName =
   | "eye"
   | "calendar"
   | "bolt"
-  | "folder";
+  | "folder"
+  | "more"
+  | "chevron-down";
 
 const PATHS: Record<IconName, string> = {
   overview: "M3 12l9-9 9 9M5 10v10h14V10",
@@ -109,7 +111,9 @@ const PATHS: Record<IconName, string> = {
   eye: "M2.5 12s4-7 9.5-7 9.5 7 9.5 7-4 7-9.5 7-9.5-7-9.5-7zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
   calendar: "M5 5h14v15H5zM5 9.5h14M9 3v4M15 3v4",
   bolt: "M13 2L4 14h6l-1 8 9-12h-6z",
-  folder: "M3 6h6l2 2h10v11H3z"
+  folder: "M3 6h6l2 2h10v11H3z",
+  more: "M12 6.5h.01M12 12h.01M12 17.5h.01",
+  "chevron-down": "M6 9l6 6 6-6"
 };
 
 interface IconProps {
