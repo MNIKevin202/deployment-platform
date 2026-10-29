@@ -2552,8 +2552,8 @@ code {
 /* ---------- Create App Wizard ---------- */
 
 .wizard-modal {
-  width: min(760px, 100%);
-  max-height: 88vh;
+  width: min(960px, 100%);
+  max-height: 90vh;
   display: flex;
   flex-direction: column;
 }
@@ -2565,9 +2565,11 @@ code {
 .wizard-steps {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 14px 22px;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 22px;
   border-bottom: 1px solid var(--color-border-soft);
+  background: var(--color-surface);
   flex: 0 0 auto;
 }
 
@@ -2614,10 +2616,18 @@ code {
 .wizard-body {
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: 22px;
+  padding: 30px 32px;
   display: grid;
-  gap: 18px;
+  gap: 20px;
   align-content: start;
+}
+
+/* On the wider modal, keep the field column at a comfortable reading width and
+   centre it so the wizard feels spacious rather than stretched edge to edge. */
+.wizard-body > * {
+  width: 100%;
+  max-width: 760px;
+  margin-inline: auto;
 }
 
 .wizard-body label {
@@ -4997,7 +5007,7 @@ code {
 }
 
 /* ---- Enhanced metric / stat cards ---- */
-.metrics-grid { grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 12px; }
+.metrics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 12px; }
 
 .stat-card {
   position: relative;
@@ -5156,6 +5166,9 @@ code {
   .health-hero-actions .primary-button,
   .health-hero-actions .secondary-button { flex: 1; justify-content: center; }
   .metrics-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  /* Stack section headers so the title and its actions don't crowd on phones. */
+  .section-heading { flex-direction: column; align-items: stretch; gap: 14px; }
+  .section-heading-actions { justify-content: flex-start; flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) {
   .stat-card, .stat-card:hover { transition: none; transform: none; }
